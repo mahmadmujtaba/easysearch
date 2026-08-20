@@ -80,6 +80,7 @@ fn main() {
                 include_hidden: hidden,
                 full_path: path,
                 content,
+                category: everything_core::Category::All,
                 limit,
             };
             match engine.search(&q) {
