@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two-line rows are no longer cropped with larger fonts.
 - CLI: construct `Query` with the new `category` field (default `All`).
 
+### Changed
+
+- **X button now quits** the app by default; “close to tray” is an opt-in
+  setting (Settings dialog) that hides the window to the tray instead.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

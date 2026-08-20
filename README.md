@@ -127,9 +127,11 @@ export -n WAYLAND_DISPLAY; everything-gui # force X11 (or: env -u WAYLAND_DISPLA
 ## System tray
 
 The app shows a tray icon (StatusNotifierItem over D-Bus) with an Open/Quit
-menu; left-click toggles the window and closing the window hides it to the
-tray. Works on KDE/Qt natively and on GTK desktops that host SNI (GNOME with
-the AppIndicator extension, XFCE, Cinnamon, MATE).
+menu and a “Recent searches” submenu; left-click toggles the window. By
+default the **X button quits** the app; enable *Settings → “Keep running in
+tray when the window is closed”* to hide to the tray instead (then only
+“Quit” exits). Works on KDE/Qt natively and on GTK desktops that host SNI
+(GNOME with the AppIndicator extension, XFCE, Cinnamon, MATE).
 
 ## Realtime & watch limits
 

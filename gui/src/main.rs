@@ -95,9 +95,14 @@ fn main() -> eframe::Result {
 
 /// Persistent GUI preferences (`~/.config/everything-linux/gui.json`).
 #[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 struct GuiPrefs {
+    /// None = follow the system theme.
     dark: Option<bool>,
     show_preview: bool,
+    /// X button hides to the tray instead of quitting (opt-in).
+    close_to_tray: bool,
+    /// Most recent first.
     history: Vec<String>,
 }
 
@@ -670,15 +675,15 @@ impl eframe::App for App {
             }
         }
 
-        // Close button hides to the tray; only Quit actually exits.
+        // Close button: default = quit the app. With "close to tray" enabled
+        // (opt-in setting) the window hides instead; only Quit then exits.
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.tray_quit {
-                // allow the close to proceed
-            } else {
+            if self.prefs.close_to_tray && !self.tray_quit {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 self.window_visible = false;
             }
+            // else: let the close proceed and the app exit.
         }
 
         self.menu_bar(ctx);
@@ -788,7 +793,20 @@ impl App {
                     self.apply_style(ctx);
                     self.prefs.save();
                 });
-                if ui.checkbox(&mut self.prefs.show_preview, "Preview pane").changed() {
+                if ui
+                    .checkbox(&mut self.prefs.show_preview, "Preview pane")
+                    .changed()
+                {
+                    self.prefs.save();
+                }
+                if ui
+                    .checkbox(
+                        &mut self.prefs.close_to_tray,
+                        "Keep running in tray when the window is closed",
+                    )
+                    .on_hover_text("Off (default): the X button quits the app.")
+                    .changed()
+                {
                     self.prefs.save();
                 }
                 ui.add_space(8.0);
