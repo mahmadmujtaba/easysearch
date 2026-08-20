@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "everything"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "everything-core",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "everything-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "globset",
  "grep-matcher",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "everything-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dark-light",
  "eframe",

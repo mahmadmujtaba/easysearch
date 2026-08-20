@@ -4,7 +4,7 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-20
 
 ### Added
 
@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with click-to-sort), full keyboard navigation (↑/↓/PgUp/PgDn, Enter to open,
   Esc to clear, Ctrl+F to focus search), a resizable file **preview pane**, and
   a polished search bar with mode hints and an indexing spinner.
+- **Makefile**: `make` runs the full pipeline (dev build + tests + production
+  build); `make build`/`make dev` and `make release`/`make prod` for dev vs
+  production builds, plus `test`, `check`, `clippy`, `fmt`, `run`, `install`,
+  `clean`, `help`.
 
 ## [0.1.0] - 2026-08-20
 
@@ -82,4 +86,5 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.2.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.2.0
 [0.1.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.1.0
