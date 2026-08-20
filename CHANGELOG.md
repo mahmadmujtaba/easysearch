@@ -4,6 +4,16 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Results table: rows now sense mouse clicks (selection + double-click to open)
+  instead of keyboard-only navigation; header sorting applies immediately to
+  the current results; row height raised (52 px) with tighter cell spacing so
+  two-line rows are no longer cropped with larger fonts.
+- CLI: construct `Query` with the new `category` field (default `All`).
+
 ## [0.3.0] - 2026-08-20
 
 ### Added
