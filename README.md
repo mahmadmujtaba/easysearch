@@ -124,6 +124,13 @@ everything-gui                            # auto: Wayland, else X11
 export -n WAYLAND_DISPLAY; everything-gui # force X11 (or: env -u WAYLAND_DISPLAY)
 ```
 
+## System tray
+
+The app shows a tray icon (StatusNotifierItem over D-Bus) with an Open/Quit
+menu; left-click toggles the window and closing the window hides it to the
+tray. Works on KDE/Qt natively and on GTK desktops that host SNI (GNOME with
+the AppIndicator extension, XFCE, Cinnamon, MATE).
+
 ## Realtime & watch limits
 
 The index is updated by `inotify`. The kernel caps watches per user

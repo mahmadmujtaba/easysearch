@@ -15,6 +15,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod tray;
+
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
 
@@ -191,6 +193,13 @@ struct App {
     search_was_focused: bool,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
+    tray_rx: Option<mpsc::Receiver<tray::TrayMsg>>,
+    // Held for its lifetime: dropping the handle unregisters the tray item.
+    #[allow(dead_code)]
+    tray_handle: Option<ksni::blocking::Handle<tray::AppTray>>,
+    tray_quit: bool,
+    /// Our own view of window visibility (egui 0.31 exposes no readback).
+    window_visible: bool,
 }
 
 impl App {
@@ -216,6 +225,13 @@ impl App {
         };
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = engine.status_snapshot();
+        let (tray_rx, tray_handle) = match tray::spawn_tray("Everything for Linux") {
+            Ok((rx, handle)) => (Some(rx), Some(handle)),
+            Err(e) => {
+                eprintln!("system tray unavailable: {e}");
+                (None, None)
+            }
+        };
 
         let mut app = App {
             engine,
@@ -247,6 +263,10 @@ impl App {
             search_was_focused: false,
             ui_font,
             mono_font,
+            tray_rx,
+            tray_handle,
+            tray_quit: false,
+            window_visible: true,
         };
         app.apply_style(&cc.egui_ctx);
         app.send_query();
@@ -582,6 +602,44 @@ impl eframe::App for App {
         }
 
         ctx.request_repaint_after(Duration::from_millis(250));
+
+        // Tray messages: toggle/open the window, or quit for real.
+        if let Some(rx) = &self.tray_rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    tray::TrayMsg::Open => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.window_visible = true;
+                    }
+                    tray::TrayMsg::Toggle => {
+                        if self.window_visible {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            self.window_visible = false;
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            self.window_visible = true;
+                        }
+                    }
+                    tray::TrayMsg::Quit => {
+                        self.tray_quit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+
+        // Close button hides to the tray; only Quit actually exits.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.tray_quit {
+                // allow the close to proceed
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.window_visible = false;
+            }
+        }
 
         self.top_bar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));

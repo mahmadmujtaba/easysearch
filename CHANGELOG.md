@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **System tray icon** (StatusNotifierItem via `ksni`/`zbus`, pure Rust):
+  works on KDE/Qt natively and on GTK desktops that host SNI (GNOME +
+  AppIndicator, XFCE, Cinnamon, MATE). Includes a programmatically drawn
+  lightning-bolt icon, an Open/Quit menu, left-click to toggle the window,
+  and close-to-tray behavior (only “Quit” exits the app).
+
 ### Fixed
 
 - Results table: rows now sense mouse clicks (selection + double-click to open)
