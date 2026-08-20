@@ -52,6 +52,12 @@ Binaries land in `target/release/everything` and `target/release/everything-gui`
 ./target/release/everything status                      # index state
 ```
 
+The GUI is a three-pane **Pro-Search** layout: a category sidebar (Recent,
+Images, Docs, Code, Archives, Audio, Video, Large files), a floating search bar
+with in-bar `.*`/`Aa` toggles and an options menu (`≡`), a results table with
+file-type badges, clickable breadcrumbs and hover actions, and a preview pane
+with image thumbnails and quick actions (Open / Copy Path / Terminal).
+
 Query semantics (Everything-style):
 
 - space-separated terms are **ANDed**; `!term` **excludes**

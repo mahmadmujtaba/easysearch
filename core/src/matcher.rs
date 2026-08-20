@@ -9,6 +9,26 @@ use globset::{GlobBuilder, GlobMatcher};
 use regex::{Regex, RegexBuilder};
 use std::path::Path;
 
+/// Result categories for the sidebar quick filters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Category {
+    All,
+    Recent { max_age_secs: i64 },
+    Images,
+    Docs,
+    Code,
+    Archives,
+    Audio,
+    Video,
+    Large { min_bytes: u64 },
+}
+
+impl Default for Category {
+    fn default() -> Self {
+        Category::All
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Query {
     /// Raw query string (whitespace-separated terms; `!term` excludes).
@@ -21,6 +41,8 @@ pub struct Query {
     pub full_path: bool,
     /// Optional content pattern (regex, searched inside files).
     pub content: Option<String>,
+    /// Sidebar category filter (see [`Category`]).
+    pub category: Category,
     pub limit: usize,
 }
 
@@ -33,8 +55,66 @@ impl Default for Query {
             include_hidden: false,
             full_path: false,
             content: None,
+            category: Category::All,
             limit: 1000,
         }
+    }
+}
+
+/// True if `path`/`meta` matches the category filter.
+pub fn matches_category(cat: &Category, path: &Path, meta: &crate::overlay::Meta) -> bool {
+    let ext = |path: &Path| -> Option<String> {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+    };
+    let in_set = |path: &Path, set: &[&str]| -> bool {
+        ext(path).is_some_and(|e| set.contains(&e.as_str()))
+    };
+    match cat {
+        Category::All => true,
+        Category::Recent { max_age_secs } => {
+            if meta.mtime <= 0 {
+                return false;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            now - meta.mtime <= *max_age_secs
+        }
+        Category::Images => in_set(
+            path,
+            &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "ico"],
+        ),
+        Category::Docs => in_set(
+            path,
+            &[
+                "pdf", "doc", "docx", "odt", "rtf", "txt", "md", "log", "csv", "xls",
+                "xlsx", "ods", "ppt", "pptx", "odp", "epub", "tex",
+            ],
+        ),
+        Category::Code => in_set(
+            path,
+            &[
+                "rs", "py", "js", "ts", "go", "c", "cpp", "h", "hpp", "java", "rb",
+                "sh", "toml", "json", "yaml", "yml", "html", "css", "sql", "php",
+                "lua", "zig", "ex", "exs", "kt", "swift", "v", "nix", "ps1", "bat",
+            ],
+        ),
+        Category::Archives => in_set(
+            path,
+            &["zip", "tar", "gz", "xz", "bz2", "7z", "rar", "zst", "deb", "rpm"],
+        ),
+        Category::Audio => in_set(
+            path,
+            &["mp3", "wav", "flac", "ogg", "m4a", "aac", "opus", "mid"],
+        ),
+        Category::Video => in_set(
+            path,
+            &["mp4", "mkv", "avi", "mov", "webm", "flv", "mpg", "mpeg", "wmv"],
+        ),
+        Category::Large { min_bytes } => !meta.is_dir && meta.size >= *min_bytes,
     }
 }
 
@@ -62,6 +142,7 @@ pub struct CompiledQuery {
     pub include_hidden: bool,
     pub full_path: bool,
     pub content: Option<String>,
+    pub category: Category,
     pub limit: usize,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
@@ -94,6 +175,7 @@ impl CompiledQuery {
             include_hidden: q.include_hidden,
             full_path: q.full_path,
             content: q.content.clone(),
+            category: q.category,
             limit: q.limit.max(1),
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
@@ -201,5 +283,40 @@ mod tests {
         assert!(is_hidden(Path::new("/home/u/.config/x")));
         assert!(is_hidden(Path::new("/home/u/.git/config")));
         assert!(!is_hidden(Path::new("/home/u/docs")));
+    }
+
+    #[test]
+    fn category_matching() {
+        use crate::overlay::Meta;
+        let m = |size: u64, mtime: i64, is_dir: bool| Meta { size, mtime, is_dir };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(matches_category(&Category::Images, Path::new("/x/photo.PNG"), &m(0, 0, false)));
+        assert!(!matches_category(&Category::Images, Path::new("/x/photo.pdf"), &m(0, 0, false)));
+        assert!(matches_category(
+            &Category::Large { min_bytes: 1024 },
+            Path::new("/x/big.bin"),
+            &m(2048, 0, false)
+        ));
+        assert!(!matches_category(
+            &Category::Large { min_bytes: 1024 },
+            Path::new("/x/small.txt"),
+            &m(512, 0, false)
+        ));
+        assert!(matches_category(
+            &Category::Recent { max_age_secs: 3600 },
+            Path::new("/x/n.txt"),
+            &m(1, now - 60, false)
+        ));
+        assert!(!matches_category(
+            &Category::Recent { max_age_secs: 3600 },
+            Path::new("/x/o.txt"),
+            &m(1, now - 7200, false)
+        ));
+        assert!(matches_category(&Category::Code, Path::new("/x/main.rs"), &m(1, 0, false)));
+        assert!(!matches_category(&Category::Code, Path::new("/x/main.md"), &m(1, 0, false)));
+        assert!(matches_category(&Category::Docs, Path::new("/x/note.md"), &m(1, 0, false)));
     }
 }

@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::content::{search_contents, ContentPattern};
 use crate::content_index::{spawn_extractor, ContentIndex, ExtractQueue};
 use crate::disk_index::{DiskIndex, INDEX_FILE};
-use crate::matcher::{is_hidden, CompiledQuery, Query};
+use crate::matcher::{is_hidden, matches_category, CompiledQuery, Query};
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use crate::walker::{walk_root_apply, walk_root_collect};
@@ -378,6 +378,9 @@ impl Engine {
             if cq.has_name_filter && !cq.name_matches(p) {
                 return None;
             }
+            if !matches_category(&cq.category, p, &meta) {
+                return None;
+            }
             Some((p.to_path_buf(), meta))
         };
 
@@ -391,7 +394,15 @@ impl Engine {
             } else {
                 // content-only: every indexed file
                 self.collect(
-                    &|p, meta| (!meta.is_dir).then(|| (p.to_path_buf(), meta)),
+                    &|p, meta| {
+                        if meta.is_dir {
+                            return None;
+                        }
+                        if !matches_category(&cq.category, p, &meta) {
+                            return None;
+                        }
+                        Some((p.to_path_buf(), meta))
+                    },
                     cap,
                 )
                 .into_iter()

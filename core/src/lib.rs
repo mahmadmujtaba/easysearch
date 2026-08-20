@@ -21,4 +21,4 @@ pub mod watcher;
 
 pub use config::Config;
 pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
-pub use matcher::{CompiledQuery, Query};
+pub use matcher::{Category, CompiledQuery, Query};

@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pro-Search layout** (`everything-gui`): three-pane design — category
+  sidebar, floating search bar, results table, and a live preview pane.
+  Tokyo Night palette (`#1a1b26` bg, `#7aa2f7` accent).
+- **Sidebar categories** (engine-backed `Category` filter): Recent (7 days),
+  Images, Docs, Code, Archives, Audio, Video, and Large files (> 1 GiB).
+- **Floating search bar** with in-bar toggles (`.*` regex, `Aa` case) and an
+  options menu (`≡`): content match, hidden files, full-path, preview pane,
+  theme, and recent searches.
+- **Result rows**: file-type badges (colored dots), clickable breadcrumbs
+  (`Home › Pictures › Screenshots`), an accent left-bar on the selected row,
+  and hover-revealed actions (open folder, copy path, open terminal).
+- **Preview pane**: image thumbnails, file-type label, and quick actions
+  (Open, Copy Path, Terminal-in-folder).
+- **Empty states**: search tips and clickable recent searches when idle.
+- **Live-index indicator**: a pulsing “Indexing…” dot or a green “⚡ Live”
+  badge in the status bar.
+
 ### Changed
 
 - **Wayland-first display**: the GUI registers the `everything-linux` app id
