@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Menu bar** (File / Edit / View / Settings / Help): File → new search,
+  reload index, quit; Edit → search toggles + clear history; View → preview
+  pane + theme (system/dark/light); Settings → settings dialog (theme, max
+  results, preview, open config file, reset GUI settings); Help → About and
+  keyboard-shortcuts dialogs.
+- **Search history in the tray**: the tray menu now has a “Recent searches”
+  submenu (last 12 queries) that re-runs a search on click; history is shared
+  with the GUI and stays in sync.
 - **System tray icon** (StatusNotifierItem via `ksni`/`zbus`, pure Rust):
   works on KDE/Qt natively and on GTK desktops that host SNI (GNOME +
   AppIndicator, XFCE, Cinnamon, MATE). Includes a programmatically drawn

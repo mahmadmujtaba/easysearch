@@ -6,16 +6,19 @@
 //! system dependencies beyond the session D-Bus.
 
 use ksni::blocking::TrayMethods;
-use ksni::menu::StandardItem;
+use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, ToolTip, Tray};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TrayMsg {
     /// Left-click on the icon: show/hide the window.
     Toggle,
     /// Menu item "Open": show and focus the window.
     Open,
+    /// Re-run a query picked from the tray's "Recent searches" submenu.
+    Search(String),
     /// Menu item "Quit": close the app for real.
     Quit,
 }
@@ -23,6 +26,8 @@ pub enum TrayMsg {
 pub struct AppTray {
     pub tx: Sender<TrayMsg>,
     pub title: String,
+    /// Shared snapshot of recent searches (mirrored from the GUI prefs).
+    pub history: Arc<Mutex<Vec<String>>>,
 }
 
 impl Tray for AppTray {
@@ -49,23 +54,57 @@ impl Tray for AppTray {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let title = self.title.clone();
-        vec![
+        let history: Vec<String> = self.history.lock().map(|h| h.clone()).unwrap_or_default();
+        let mut items = vec![
             MenuItem::Standard(StandardItem {
                 label: format!("Open {title}"),
-                activate: Box::new(|t| {
+                activate: Box::new(|t: &mut Self| {
                     let _ = t.tx.send(TrayMsg::Open);
                 }),
                 ..Default::default()
             }),
             MenuItem::Separator,
-            MenuItem::Standard(StandardItem {
-                label: "Quit".into(),
-                activate: Box::new(|t| {
-                    let _ = t.tx.send(TrayMsg::Quit);
-                }),
+        ];
+
+        if history.is_empty() {
+            items.push(MenuItem::Standard(StandardItem {
+                label: "Recent searches".into(),
+                enabled: false,
                 ..Default::default()
+            }));
+        } else {
+            let mut children: Vec<MenuItem<Self>> = Vec::new();
+            for q in history.iter().take(12) {
+                let q_owned = q.clone();
+                let label = if q_owned.chars().count() > 48 {
+                    format!("{}…", q_owned.chars().take(48).collect::<String>())
+                } else {
+                    q_owned.clone()
+                };
+                children.push(MenuItem::Standard(StandardItem {
+                    label,
+                    activate: Box::new(move |t: &mut Self| {
+                        let _ = t.tx.send(TrayMsg::Search(q_owned.clone()));
+                    }),
+                    ..Default::default()
+                }));
+            }
+            items.push(MenuItem::SubMenu(SubMenu {
+                label: "Recent searches".into(),
+                submenu: children,
+                ..Default::default()
+            }));
+        }
+
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Standard(StandardItem {
+            label: "Quit".into(),
+            activate: Box::new(|t: &mut Self| {
+                let _ = t.tx.send(TrayMsg::Quit);
             }),
-        ]
+            ..Default::default()
+        }));
+        items
     }
 
     /// Left-click on the icon toggles the main window.
@@ -78,12 +117,17 @@ impl Tray for AppTray {
 /// and the handle that keeps the service registered (drop it to unregister).
 pub fn spawn_tray(
     title: &str,
+    history: Arc<Mutex<Vec<String>>>,
 ) -> Result<(
     std::sync::mpsc::Receiver<TrayMsg>,
     ksni::blocking::Handle<AppTray>,
 ), ksni::Error> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let tray = AppTray { tx, title: title.to_string() };
+    let tray = AppTray {
+        tx,
+        title: title.to_string(),
+        history,
+    };
     let handle = tray.spawn()?;
     Ok((rx, handle))
 }

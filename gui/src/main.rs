@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod tray;
@@ -200,6 +200,11 @@ struct App {
     tray_quit: bool,
     /// Our own view of window visibility (egui 0.31 exposes no readback).
     window_visible: bool,
+    /// Recent searches shared with the tray menu.
+    history_shared: Arc<Mutex<Vec<String>>>,
+    show_about: bool,
+    show_settings: bool,
+    show_shortcuts: bool,
 }
 
 impl App {
@@ -225,13 +230,15 @@ impl App {
         };
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = engine.status_snapshot();
-        let (tray_rx, tray_handle) = match tray::spawn_tray("Everything for Linux") {
-            Ok((rx, handle)) => (Some(rx), Some(handle)),
-            Err(e) => {
-                eprintln!("system tray unavailable: {e}");
-                (None, None)
-            }
-        };
+        let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
+        let (tray_rx, tray_handle) =
+            match tray::spawn_tray("Everything for Linux", Arc::clone(&history_shared)) {
+                Ok((rx, handle)) => (Some(rx), Some(handle)),
+                Err(e) => {
+                    eprintln!("system tray unavailable: {e}");
+                    (None, None)
+                }
+            };
 
         let mut app = App {
             engine,
@@ -267,6 +274,10 @@ impl App {
             tray_handle,
             tray_quit: false,
             window_visible: true,
+            history_shared,
+            show_about: false,
+            show_settings: false,
+            show_shortcuts: false,
         };
         app.apply_style(&cc.egui_ctx);
         app.send_query();
@@ -387,6 +398,26 @@ impl App {
         if let Some(s) = self.sort {
             sort_results(&mut self.results, s);
         }
+    }
+
+    /// Mirror the persisted history into the shared tray snapshot.
+    fn sync_history(&mut self) {
+        if let Ok(mut h) = self.history_shared.lock() {
+            h.clone_from(&self.prefs.history);
+        }
+    }
+
+    /// Run a query (from the tray's recent-searches menu).
+    fn run_query(&mut self, q: &str) {
+        let q = q.trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        self.query = q;
+        self.last_edit = Instant::now();
+        self.history_idx = None;
+        self.prefs.commit_query(&self.query);
+        self.sync_history();
     }
 
     fn open(path: &Path) {
@@ -544,6 +575,7 @@ impl eframe::App for App {
         if self.search_was_focused && !search_focused && !self.query.is_empty() && !self.pending {
             let q = self.query.clone();
             self.prefs.commit_query(&q);
+            self.sync_history();
         }
         self.search_was_focused = search_focused;
 
@@ -603,29 +635,37 @@ impl eframe::App for App {
 
         ctx.request_repaint_after(Duration::from_millis(250));
 
-        // Tray messages: toggle/open the window, or quit for real.
+        // Tray messages: toggle/open the window, run a search, or quit.
+        let mut tray_msgs = Vec::new();
         if let Some(rx) = &self.tray_rx {
             while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    tray::TrayMsg::Open => {
+                tray_msgs.push(msg);
+            }
+        }
+        for msg in tray_msgs {
+            match msg {
+                tray::TrayMsg::Open => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    self.window_visible = true;
+                }
+                tray::TrayMsg::Toggle => {
+                    if self.window_visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.window_visible = false;
+                    } else {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         self.window_visible = true;
                     }
-                    tray::TrayMsg::Toggle => {
-                        if self.window_visible {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            self.window_visible = false;
-                        } else {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                            self.window_visible = true;
-                        }
-                    }
-                    tray::TrayMsg::Quit => {
-                        self.tray_quit = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                }
+                tray::TrayMsg::Search(q) => {
+                    self.run_query(&q);
+                    self.send_query();
+                }
+                tray::TrayMsg::Quit => {
+                    self.tray_quit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         }
@@ -641,6 +681,7 @@ impl eframe::App for App {
             }
         }
 
+        self.menu_bar(ctx);
         self.top_bar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
         self.sidebar(ctx);
@@ -653,10 +694,260 @@ impl eframe::App for App {
                 .show(ctx, |ui| self.preview_panel(ui));
         }
         egui::CentralPanel::default().show(ctx, |ui| self.results_table(ui));
+
+        if self.show_about {
+            self.about_dialog(ctx);
+        }
+        if self.show_settings {
+            self.settings_dialog(ctx);
+        }
+        if self.show_shortcuts {
+            self.shortcuts_dialog(ctx);
+        }
     }
 }
 
 impl App {
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        let (files, dirs) = self.engine.counts();
+        egui::Window::new("About")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new("⚡ Everything for Linux").size(20.0).strong());
+                    ui.label(
+                        egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            .color(self.fg_dim()),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Realtime filename & content search for Linux — Everything-style, \
+                         low-memory (mmap index), Wayland-first.",
+                    )
+                    .small(),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Index: {files} files · {dirs} dirs · {}",
+                        if self.status.base_entries > 0 {
+                            "mmap-backed"
+                        } else {
+                            "in-memory"
+                        }
+                    ))
+                    .small()
+                    .color(self.fg_dim()),
+                );
+                ui.label(
+                    egui::RichText::new("License: MIT · Rust + egui + ripgrep engine")
+                        .small()
+                        .color(self.fg_dim()),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Shortcuts").clicked() {
+                        self.show_shortcuts = true;
+                        self.show_about = false;
+                    }
+                    if ui.button("Close").clicked() {
+                        self.show_about = false;
+                    }
+                });
+            });
+    }
+
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Appearance").strong());
+                ui.radio(self.prefs.dark.is_none(), "Follow system theme").clicked().then(|| {
+                    self.prefs.dark = None;
+                    self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
+                    self.apply_style(ctx);
+                    self.prefs.save();
+                });
+                ui.radio(self.prefs.dark == Some(true), "Dark").clicked().then(|| {
+                    self.prefs.dark = Some(true);
+                    self.dark = true;
+                    self.apply_style(ctx);
+                    self.prefs.save();
+                });
+                ui.radio(self.prefs.dark == Some(false), "Light").clicked().then(|| {
+                    self.prefs.dark = Some(false);
+                    self.dark = false;
+                    self.apply_style(ctx);
+                    self.prefs.save();
+                });
+                if ui.checkbox(&mut self.prefs.show_preview, "Preview pane").changed() {
+                    self.prefs.save();
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Search").strong());
+                if ui
+                    .add(egui::Slider::new(&mut self.limit, 100..=2000).text("Max results"))
+                    .changed()
+                {
+                    self.send_query();
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Configuration").strong());
+                let config_path = everything_core::Config::default_path();
+                ui.label(
+                    egui::RichText::new(config_path.display().to_string())
+                        .small()
+                        .monospace()
+                        .color(self.fg_dim()),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Open config file").clicked() {
+                        let _ = Command::new("xdg-open").arg(&config_path).spawn();
+                    }
+                    if ui.button("Reset GUI settings").clicked() {
+                        self.prefs = GuiPrefs::default();
+                        self.prefs.save();
+                        self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
+                        self.apply_style(ctx);
+                        self.sync_history();
+                    }
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        self.show_settings = false;
+                    }
+                });
+            });
+    }
+
+    fn shortcuts_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Keyboard shortcuts")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                let rows = [
+                    ("↑ / ↓ / PgUp / PgDn", "Navigate results"),
+                    ("Enter", "Open the selected file"),
+                    ("Double-click", "Open a result"),
+                    ("Esc", "Clear the search"),
+                    ("Ctrl+F", "Focus the search box"),
+                    ("↑ / ↓ (empty search)", "Cycle search history"),
+                    ("Click column headers", "Sort results"),
+                ];
+                ui.add_space(4.0);
+                for (key, what) in rows {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(key).monospace().strong());
+                        ui.label(egui::RichText::new(what).color(self.fg_dim()));
+                    });
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        self.show_shortcuts = false;
+                    }
+                });
+            });
+    }
+}
+
+impl App {
+    /// Application menu bar (File / Edit / View / Settings / Help).
+    fn menu_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("menubar")
+            .exact_height(26.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New search").clicked() {
+                            ctx.memory_mut(|m| m.request_focus(search_id()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Reload index").on_hover_text("Rebuild the index from disk").clicked() {
+                            self.engine.rebuild();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Quit").clicked() {
+                            self.tray_quit = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Edit", |ui| {
+                        let changed = ui.checkbox(&mut self.content_mode, "Match contents").changed()
+                            | ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
+                            | ui.checkbox(&mut self.case_sensitive, "Case-sensitive").changed()
+                            | ui.checkbox(&mut self.hidden, "Hidden files").changed()
+                            | ui.checkbox(&mut self.full_path, "Full path match").changed();
+                        if changed {
+                            self.last_edit = Instant::now();
+                        }
+                        ui.separator();
+                        if ui.button("Clear search history").clicked() {
+                            self.prefs.clear_history();
+                            self.sync_history();
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        if ui.checkbox(&mut self.prefs.show_preview, "Preview pane").changed() {
+                            self.prefs.save();
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Theme").small());
+                        if ui
+                            .radio(self.prefs.dark.is_none(), "Follow system")
+                            .clicked()
+                        {
+                            self.prefs.dark = None;
+                            self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
+                            self.apply_style(ctx);
+                            self.prefs.save();
+                        }
+                        if ui.radio(self.prefs.dark == Some(true), "Dark").clicked() {
+                            self.prefs.dark = Some(true);
+                            self.dark = true;
+                            self.apply_style(ctx);
+                            self.prefs.save();
+                        }
+                        if ui.radio(self.prefs.dark == Some(false), "Light").clicked() {
+                            self.prefs.dark = Some(false);
+                            self.dark = false;
+                            self.apply_style(ctx);
+                            self.prefs.save();
+                        }
+                    });
+                    ui.menu_button("Settings", |ui| {
+                        if ui.button("Settings…").clicked() {
+                            self.show_settings = true;
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("About").clicked() {
+                            self.show_about = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Keyboard shortcuts").clicked() {
+                            self.show_shortcuts = true;
+                            ui.close_menu();
+                        }
+                    });
+                });
+            });
+    }
+
     /// Floating search bar with in-bar toggles and the options menu.
     fn top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("search").show(ctx, |ui| {
@@ -697,6 +988,7 @@ impl App {
                         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             let q = self.query.clone();
                             self.prefs.commit_query(&q);
+                            self.sync_history();
                             self.history_idx = None;
                             if let Some(first) = self.results.first() {
                                 App::open(&first.path);
@@ -729,9 +1021,7 @@ impl App {
                             }
                             for q in &history {
                                 if ui.button(q).clicked() {
-                                    self.query = q.clone();
-                                    self.last_edit = Instant::now();
-                                    self.history_idx = None;
+                                    self.run_query(q);
                                     ui.close_menu();
                                 }
                             }
@@ -739,6 +1029,7 @@ impl App {
                                 ui.separator();
                                 if ui.button("Clear history").clicked() {
                                     self.prefs.clear_history();
+                                    self.sync_history();
                                     ui.close_menu();
                                 }
                             }
@@ -1040,9 +1331,7 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     for q in history.iter().take(8) {
                         if ui.button(q.clone()).clicked() {
-                            self.query = q.clone();
-                            self.last_edit = Instant::now();
-                            self.history_idx = None;
+                            self.run_query(q);
                         }
                     }
                 });
