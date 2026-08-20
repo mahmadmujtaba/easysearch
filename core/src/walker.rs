@@ -42,7 +42,14 @@ pub fn walk_root_collect(
     respect_ignore: bool,
 ) -> Vec<(PathBuf, Meta)> {
     let out = Arc::new(Mutex::new(Vec::new()));
-    walk_impl(root, roots, queue, status, respect_ignore, Sink::Collect(Arc::clone(&out)));
+    walk_impl(
+        root,
+        roots,
+        queue,
+        status,
+        respect_ignore,
+        Sink::Collect(Arc::clone(&out)),
+    );
     match Arc::try_unwrap(out) {
         Ok(m) => m.into_inner().unwrap_or_default(),
         Err(_) => Vec::new(),
@@ -58,7 +65,14 @@ pub fn walk_root_apply(
     status: &Arc<RwLock<Status>>,
     respect_ignore: bool,
 ) {
-    walk_impl(root, roots, queue, status, respect_ignore, Sink::Apply(Arc::clone(overlay)));
+    walk_impl(
+        root,
+        roots,
+        queue,
+        status,
+        respect_ignore,
+        Sink::Apply(Arc::clone(overlay)),
+    );
 }
 
 fn walk_impl(
@@ -119,7 +133,11 @@ fn walk_impl(
             let path = entry.path();
             if roots.is_excluded(path) {
                 let is_dir = entry.file_type().map_or(false, |t| t.is_dir());
-                return if is_dir { WalkState::Skip } else { WalkState::Continue };
+                return if is_dir {
+                    WalkState::Skip
+                } else {
+                    WalkState::Continue
+                };
             }
             let meta = match entry.metadata() {
                 Ok(m) => m,

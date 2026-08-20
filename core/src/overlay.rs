@@ -69,7 +69,11 @@ mod tests {
     fn f(path: &str) -> (PathBuf, Meta) {
         (
             PathBuf::from(path),
-            Meta { size: 1, mtime: 0, is_dir: false },
+            Meta {
+                size: 1,
+                mtime: 0,
+                is_dir: false,
+            },
         )
     }
 

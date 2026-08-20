@@ -10,7 +10,9 @@ use crate::engine::Status;
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use crate::walker::walk_root_apply;
-use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
@@ -89,9 +91,9 @@ fn handle_event(
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
             add_path(&path, overlay, roots, queue, status, respect_ignore)
         }
-        EventKind::Modify(notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_)) => {
-            refresh_meta(&path, overlay, cache, queue)
-        }
+        EventKind::Modify(
+            notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_),
+        ) => refresh_meta(&path, overlay, cache, queue),
         _ => {}
     }
 }

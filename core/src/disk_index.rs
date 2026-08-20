@@ -49,7 +49,10 @@ impl DiskIndex {
         let file = File::open(path)?;
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         if mmap.len() < HEADER_SIZE || &mmap[0..8] != MAGIC {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "bad index header"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bad index header",
+            ));
         }
         let entry_count = u64_at(&mmap, 8) as usize;
         let files = u64_at(&mmap, 16);
@@ -57,14 +60,24 @@ impl DiskIndex {
         let blob_len = u64_at(&mmap, 32) as usize;
         let blob_start = HEADER_SIZE + entry_count * RECORD_SIZE;
         if mmap.len() < blob_start + blob_len {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "index truncated"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "index truncated",
+            ));
         }
         let mut by_hash = HashMap::with_capacity(entry_count);
         for i in 0..entry_count {
             let bytes = path_bytes(&mmap, blob_start, i);
             by_hash.insert(path_hash(bytes), i as u32);
         }
-        Ok(DiskIndex { mmap, entry_count, files, dirs, blob_start, by_hash })
+        Ok(DiskIndex {
+            mmap,
+            entry_count,
+            files,
+            dirs,
+            blob_start,
+            by_hash,
+        })
     }
 
     /// Serialize `entries` and atomically write them to `path` (temp + rename),
@@ -72,11 +85,7 @@ impl DiskIndex {
     pub fn write_and_load(path: &Path, entries: &[(PathBuf, Meta)]) -> io::Result<DiskIndex> {
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(
-            "{}.tmp.{}",
-            INDEX_FILE,
-            std::process::id()
-        ));
+        let tmp = dir.join(format!("{}.tmp.{}", INDEX_FILE, std::process::id()));
 
         let mut files = 0u64;
         let mut dirs = 0u64;
@@ -223,7 +232,11 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
 
     fn meta(is_dir: bool) -> Meta {
-        Meta { size: 7, mtime: 1234, is_dir }
+        Meta {
+            size: 7,
+            mtime: 1234,
+            is_dir,
+        }
     }
 
     fn write_temp(entries: &[(PathBuf, Meta)]) -> (std::path::PathBuf, DiskIndex) {

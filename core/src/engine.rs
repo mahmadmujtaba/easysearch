@@ -48,7 +48,11 @@ pub enum State {
 #[derive(Clone, Debug)]
 pub enum ContentIndexStatus {
     Disabled,
-    Enabled { entries: usize, bytes: u64, pending: usize },
+    Enabled {
+        entries: usize,
+        bytes: u64,
+        pending: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -161,7 +165,8 @@ impl Engine {
                 .spawn(move || {
                     status.write().unwrap().state = State::Indexing;
                     if persist {
-                        let entries = build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                        let entries =
+                            build_entries(&roots, queue.as_ref(), &status, respect_ignore);
                         match DiskIndex::write_and_load(&index_path, &entries) {
                             Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
                             Err(e) => eprintln!("initial index build failed: {e}"),
@@ -361,7 +366,11 @@ impl Engine {
         let want_content = cq.content.is_some();
         self.maybe_compact();
 
-        let cap = if want_content { limit.max(CONTENT_FANOUT_CAP) } else { limit };
+        let cap = if want_content {
+            limit.max(CONTENT_FANOUT_CAP)
+        } else {
+            limit
+        };
         let name_filter = |p: &Path, meta: Meta| -> Option<(PathBuf, Meta)> {
             if !cq.include_hidden && is_hidden(p) {
                 return None;
@@ -389,8 +398,13 @@ impl Engine {
                 .map(|(p, _)| p)
                 .collect()
             };
-            let matched =
-                search_contents(&candidates, &pattern, limit, &self.cache, self.queue.as_deref());
+            let matched = search_contents(
+                &candidates,
+                &pattern,
+                limit,
+                &self.cache,
+                self.queue.as_deref(),
+            );
             let truncated = matched.len() >= limit;
             (
                 matched.into_iter().map(|p| self.row_for(&p)).collect(),
@@ -486,7 +500,9 @@ impl Engine {
         if ov.is_removed(path) {
             return Meta::default();
         }
-        base.as_deref().and_then(|b| b.meta_of(path)).unwrap_or_default()
+        base.as_deref()
+            .and_then(|b| b.meta_of(path))
+            .unwrap_or_default()
     }
 
     /// (files, dirs) — base plus overlay deltas.
@@ -531,7 +547,13 @@ fn build_entries(
 ) -> Vec<(PathBuf, Meta)> {
     let mut out = Vec::new();
     for root in &roots.roots {
-        out.extend(walk_root_collect(root, roots, queue, status, respect_ignore));
+        out.extend(walk_root_collect(
+            root,
+            roots,
+            queue,
+            status,
+            respect_ignore,
+        ));
     }
     out
 }
@@ -556,10 +578,7 @@ fn rebuild_once(
         Ok(idx) => {
             let idx = Arc::new(idx);
             *base.write().unwrap() = Some(Arc::clone(&idx));
-            overlay
-                .write()
-                .unwrap()
-                .prune_against(|p| idx.contains(p));
+            overlay.write().unwrap().prune_against(|p| idx.contains(p));
         }
         Err(e) => eprintln!("index rebuild failed: {e}"),
     }

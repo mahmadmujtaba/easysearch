@@ -11,7 +11,9 @@
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
-use everything_core::{ContentIndexStatus, Engine, Query, ResultRow, SearchResponse, State, Status};
+use everything_core::{
+    ContentIndexStatus, Engine, Query, ResultRow, SearchResponse, State, Status,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,12 +34,22 @@ const DIM_LIGHT: egui::Color32 = egui::Color32::from_rgb(100, 108, 124);
 
 /// Font families to try for the UI (first one found on the system wins).
 const UI_FONT_PREFERENCE: &[&str] = &[
-    "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans",
-    "Roboto", "Fira Sans",
+    "Noto Sans",
+    "Cantarell",
+    "Ubuntu",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Roboto",
+    "Fira Sans",
 ];
 const MONO_FONT_PREFERENCE: &[&str] = &[
-    "JetBrains Mono", "Fira Code", "Fira Mono", "DejaVu Sans Mono",
-    "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono",
+    "JetBrains Mono",
+    "Fira Code",
+    "Fira Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Noto Sans Mono",
+    "Ubuntu Mono",
 ];
 
 enum UiMsg {
@@ -234,7 +246,11 @@ impl App {
 
     fn apply_style(&self, ctx: &egui::Context) {
         // --- visuals (dark / light) ---
-        let mut visuals = if self.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+        let mut visuals = if self.dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
         visuals.selection.bg_fill = ACCENT;
         visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
         visuals.hyperlink_color = ACCENT;
@@ -625,7 +641,8 @@ impl App {
                 ui.checkbox(&mut self.full_path, "Full path")
                     .on_hover_text("Match the whole path, not just the name");
                 ui.separator();
-                if ui.checkbox(&mut self.prefs.show_preview, "👁 Preview")
+                if ui
+                    .checkbox(&mut self.prefs.show_preview, "👁 Preview")
                     .on_hover_text("Show a preview of the selected file")
                     .changed()
                 {
@@ -678,8 +695,10 @@ impl App {
                     ui.label(egui::RichText::new("No results").size(22.0).strong());
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("Try fewer terms, a different pattern, or tick “Match contents”")
-                            .color(self.fg_dim()),
+                        egui::RichText::new(
+                            "Try fewer terms, a different pattern, or tick “Match contents”",
+                        )
+                        .color(self.fg_dim()),
                     );
                 } else if self.query.is_empty() && self.status.state != State::Live {
                     ui.spinner();
@@ -717,20 +736,25 @@ impl App {
         table
             .header(30.0, |mut header| {
                 header.col(|ui| {
-                    if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked() {
+                    if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked()
+                    {
                         self.sort = cycle_sort(self.sort, Sort::Name(true));
                     }
                 });
                 header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Size", self.sort, |s| matches!(s, Sort::Size(_))).clicked() {
+                        if sort_button(ui, "Size", self.sort, |s| matches!(s, Sort::Size(_)))
+                            .clicked()
+                        {
                             self.sort = cycle_sort(self.sort, Sort::Size(true));
                         }
                     });
                 });
                 header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Modified", self.sort, |s| matches!(s, Sort::Mtime(_))).clicked() {
+                        if sort_button(ui, "Modified", self.sort, |s| matches!(s, Sort::Mtime(_)))
+                            .clicked()
+                        {
                             self.sort = cycle_sort(self.sort, Sort::Mtime(true));
                         }
                     });
@@ -823,18 +847,28 @@ impl App {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(format!("{} {}", icon_for(&pv.path, pv.is_dir), name)).strong());
+        ui.label(
+            egui::RichText::new(format!("{} {}", icon_for(&pv.path, pv.is_dir), name)).strong(),
+        );
         ui.label(
             egui::RichText::new(format!(
                 "{} · {}",
                 pv.path.display(),
-                if pv.is_dir { "directory".to_string() } else { human_size(pv.size) }
+                if pv.is_dir {
+                    "directory".to_string()
+                } else {
+                    human_size(pv.size)
+                }
             ))
             .small()
             .monospace()
             .color(self.fg_dim()),
         );
-        ui.label(egui::RichText::new(human_time(pv.mtime)).small().color(self.fg_dim()));
+        ui.label(
+            egui::RichText::new(human_time(pv.mtime))
+                .small()
+                .color(self.fg_dim()),
+        );
         ui.separator();
 
         if pv.is_dir {
@@ -857,11 +891,13 @@ impl App {
             .stick_to_bottom(false)
             .show(ui, |ui| {
                 ui.label(
-                    egui::RichText::new(&pv.text).monospace().color(if self.dark {
-                        egui::Color32::from_rgb(200, 208, 218)
-                    } else {
-                        egui::Color32::from_rgb(30, 34, 42)
-                    }),
+                    egui::RichText::new(&pv.text)
+                        .monospace()
+                        .color(if self.dark {
+                            egui::Color32::from_rgb(200, 208, 218)
+                        } else {
+                            egui::Color32::from_rgb(30, 34, 42)
+                        }),
                 );
             });
     }
@@ -920,7 +956,11 @@ fn sort_button(
     let mark = match current {
         Some(s) if is_active(s) => match s {
             Sort::Name(asc) | Sort::Size(asc) | Sort::Mtime(asc) => {
-                if asc { " ▲" } else { " ▼" }
+                if asc {
+                    " ▲"
+                } else {
+                    " ▼"
+                }
             }
         },
         _ => "",
@@ -966,14 +1006,30 @@ fn sort_results(results: &mut [ResultRow], sort: Sort) {
                     .unwrap_or(b.path.as_os_str())
                     .to_string_lossy()
                     .to_lowercase();
-                if asc { ka.cmp(&kb) } else { kb.cmp(&ka) }
+                if asc {
+                    ka.cmp(&kb)
+                } else {
+                    kb.cmp(&ka)
+                }
             });
         }
         Sort::Size(asc) => {
-            results.sort_by(|a, b| if asc { a.size.cmp(&b.size) } else { b.size.cmp(&a.size) });
+            results.sort_by(|a, b| {
+                if asc {
+                    a.size.cmp(&b.size)
+                } else {
+                    b.size.cmp(&a.size)
+                }
+            });
         }
         Sort::Mtime(asc) => {
-            results.sort_by(|a, b| if asc { a.mtime.cmp(&b.mtime) } else { b.mtime.cmp(&a.mtime) });
+            results.sort_by(|a, b| {
+                if asc {
+                    a.mtime.cmp(&b.mtime)
+                } else {
+                    b.mtime.cmp(&a.mtime)
+                }
+            });
         }
     }
 }
@@ -995,9 +1051,11 @@ fn icon_for(path: &Path, is_dir: bool) -> &'static str {
         Some("doc" | "docx" | "odt" | "rtf") => "📝",
         Some("xls" | "xlsx" | "csv" | "ods") => "📊",
         Some("ppt" | "pptx" | "odp") => "📽️",
-        Some("rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "hpp" | "java" | "rb"
-        | "sh" | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php" | "lua"
-        | "zig" | "ex" | "exs" | "kt" | "swift") => "💻",
+        Some(
+            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "hpp" | "java" | "rb" | "sh"
+            | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php" | "lua" | "zig"
+            | "ex" | "exs" | "kt" | "swift",
+        ) => "💻",
         Some("txt" | "md" | "log" | "conf" | "ini" | "cfg" | "env") => "📄",
         Some("exe" | "bin" | "so" | "appimage") => "⚙️",
         _ => "📄",

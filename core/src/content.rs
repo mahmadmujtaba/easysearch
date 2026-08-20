@@ -29,8 +29,7 @@ impl ContentPattern {
     pub fn new(pattern: &str) -> Result<ContentPattern, String> {
         let matcher =
             RegexMatcher::new(pattern).map_err(|e| format!("invalid content pattern: {e}"))?;
-        let plain = Regex::new(pattern)
-            .map_err(|e| format!("invalid content pattern: {e}"))?;
+        let plain = Regex::new(pattern).map_err(|e| format!("invalid content pattern: {e}"))?;
         Ok(ContentPattern { matcher, plain })
     }
 
@@ -53,7 +52,11 @@ pub fn search_contents(
     // Fast path: everything already cached in the content index.
     let mut hits: Vec<PathBuf> = paths
         .par_iter()
-        .filter(|p| cache.get_with(p, |t| pattern.matches_cached(t)).unwrap_or(false))
+        .filter(|p| {
+            cache
+                .get_with(p, |t| pattern.matches_cached(t))
+                .unwrap_or(false)
+        })
         .cloned()
         .collect();
     if hits.len() >= limit {

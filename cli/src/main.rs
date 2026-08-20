@@ -59,7 +59,16 @@ fn main() {
     let mut engine = Engine::new(config);
 
     match cli.command {
-        Command::Search { query, regex, content, case, hidden, path, limit, no_wait } => {
+        Command::Search {
+            query,
+            regex,
+            content,
+            case,
+            hidden,
+            path,
+            limit,
+            no_wait,
+        } => {
             engine.start();
             if !no_wait {
                 engine.wait_live(Duration::from_secs(120));
@@ -101,20 +110,36 @@ fn main() {
             println!("files:          {files}");
             println!("dirs:           {dirs}");
             if s.base_entries > 0 {
-                println!("index:          mmap-backed ({} entries, {} files / {} dirs in base)",
-                    s.base_entries, s.base_files, s.base_dirs);
+                println!(
+                    "index:          mmap-backed ({} entries, {} files / {} dirs in base)",
+                    s.base_entries, s.base_files, s.base_dirs
+                );
             } else {
                 println!("index:          in-memory (RAM-only mode)");
             }
             println!("overlay:        {} pending change(s)", s.overlay_pending);
-            println!("watcher:        {}", if s.degraded { "degraded (periodic rebuild)" } else { "live (inotify)" });
+            println!(
+                "watcher:        {}",
+                if s.degraded {
+                    "degraded (periodic rebuild)"
+                } else {
+                    "live (inotify)"
+                }
+            );
             println!("skipped dirs:   {}", s.skipped);
             match &s.content_index {
                 everything_core::ContentIndexStatus::Disabled => {
                     println!("content index:  disabled")
                 }
-                everything_core::ContentIndexStatus::Enabled { entries, bytes, pending } => {
-                    println!("content index:  enabled ({entries} files, {} MiB, {pending} pending)", bytes / (1024 * 1024));
+                everything_core::ContentIndexStatus::Enabled {
+                    entries,
+                    bytes,
+                    pending,
+                } => {
+                    println!(
+                        "content index:  enabled ({entries} files, {} MiB, {pending} pending)",
+                        bytes / (1024 * 1024)
+                    );
                 }
             }
             if s.state != State::Live {

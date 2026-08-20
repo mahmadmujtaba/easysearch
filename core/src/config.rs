@@ -23,14 +23,42 @@ pub(crate) fn xdg_config_dir() -> PathBuf {
 /// effective even if the toggles are changed.
 pub const DEFAULT_EXCLUDED_FSTYPES: &[&str] = &[
     // pseudo / kernel
-    "proc", "sysfs", "devpts", "devtmpfs", "securityfs", "debugfs", "tracefs",
-    "pstore", "bpf", "cgroup", "cgroup2", "mqueue", "hugetlbfs", "configfs",
-    "fusectl", "efivarfs", "ramfs", "binfmt_misc", "rpc_pipefs", "autofs",
+    "proc",
+    "sysfs",
+    "devpts",
+    "devtmpfs",
+    "securityfs",
+    "debugfs",
+    "tracefs",
+    "pstore",
+    "bpf",
+    "cgroup",
+    "cgroup2",
+    "mqueue",
+    "hugetlbfs",
+    "configfs",
+    "fusectl",
+    "efivarfs",
+    "ramfs",
+    "binfmt_misc",
+    "rpc_pipefs",
+    "autofs",
     // overlays / special
-    "overlay", "squashfs", "iso9660",
+    "overlay",
+    "squashfs",
+    "iso9660",
     // network
-    "nfs", "nfs4", "smbfs", "cifs", "sshfs", "fuse.sshfs", "fuse.rclone",
-    "fuse.s3fs", "fuse.smb", "gvfsd-fuse", "9p",
+    "nfs",
+    "nfs4",
+    "smbfs",
+    "cifs",
+    "sshfs",
+    "fuse.sshfs",
+    "fuse.rclone",
+    "fuse.s3fs",
+    "fuse.smb",
+    "gvfsd-fuse",
+    "9p",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

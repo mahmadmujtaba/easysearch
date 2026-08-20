@@ -123,7 +123,11 @@ fn compile_term(tok: &str, regex_mode: bool, case_insensitive: bool) -> Result<T
         // Everything-style: a term without glob metacharacters is a substring
         // match ("draft" matches "draft.pdf"), so wrap it in `*...*`.
         let has_metachar = tok.contains(['*', '?', '[']);
-        let pattern = if has_metachar { tok.to_string() } else { format!("*{tok}*") };
+        let pattern = if has_metachar {
+            tok.to_string()
+        } else {
+            format!("*{tok}*")
+        };
         GlobBuilder::new(&pattern)
             .case_insensitive(case_insensitive)
             .literal_separator(false)

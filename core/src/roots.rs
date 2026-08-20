@@ -36,7 +36,10 @@ impl RootSet {
             // fstype (e.g. explicitly indexing /tmp on tmpfs). Excluded
             // mounts that merely contain a root (like /tmp containing the
             // root /tmp/xxx) must not veto the walk either.
-            if roots.iter().any(|r| r == &m.point || r.starts_with(&m.point)) {
+            if roots
+                .iter()
+                .any(|r| r == &m.point || r.starts_with(&m.point))
+            {
                 continue;
             }
             let type_excluded = excluded_fstypes.iter().any(|t| t == &m.fstype);
@@ -68,8 +71,16 @@ impl RootSet {
 fn is_network_fstype(fstype: &str) -> bool {
     matches!(
         fstype,
-        "nfs" | "nfs4" | "smbfs" | "cifs" | "sshfs" | "fuse.sshfs" | "fuse.rclone"
-            | "fuse.s3fs" | "fuse.smb" | "9p"
+        "nfs"
+            | "nfs4"
+            | "smbfs"
+            | "cifs"
+            | "sshfs"
+            | "fuse.sshfs"
+            | "fuse.rclone"
+            | "fuse.s3fs"
+            | "fuse.smb"
+            | "9p"
     )
 }
 
@@ -80,7 +91,10 @@ fn is_removable(device: &str) -> bool {
         Some(d) => d,
         None => return false,
     };
-    let base: String = dev.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let base: String = dev
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
     if base.is_empty() {
         return false;
     }

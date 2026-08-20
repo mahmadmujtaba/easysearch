@@ -26,7 +26,13 @@ pub struct ExtractQueue {
 impl ExtractQueue {
     pub fn new() -> (ExtractQueue, Receiver<PathBuf>) {
         let (tx, rx) = mpsc::channel();
-        (ExtractQueue { tx, pending: AtomicUsize::new(0) }, rx)
+        (
+            ExtractQueue {
+                tx,
+                pending: AtomicUsize::new(0),
+            },
+            rx,
+        )
     }
 
     pub fn send(&self, path: PathBuf) {
@@ -62,7 +68,10 @@ impl ContentIndex {
     }
 
     pub fn contains(&self, path: &Path) -> bool {
-        self.cache.read().map(|g| g.contains_key(path)).unwrap_or(false)
+        self.cache
+            .read()
+            .map(|g| g.contains_key(path))
+            .unwrap_or(false)
     }
 
     /// Run `f` over the cached text for `path`, if present.
@@ -94,7 +103,8 @@ impl ContentIndex {
         }
         cache.insert(path.clone(), text);
         order.push_back(path);
-        self.total_bytes.store(total.saturating_add(bytes), Ordering::Relaxed);
+        self.total_bytes
+            .store(total.saturating_add(bytes), Ordering::Relaxed);
     }
 
     /// Remove one path (and any descendants) from the cache.

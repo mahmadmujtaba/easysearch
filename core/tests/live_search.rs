@@ -16,10 +16,7 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new(tag: &str) -> TestDir {
-        let dir = std::env::temp_dir().join(format!(
-            "everything-it-{tag}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("everything-it-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TestDir(dir)
@@ -47,11 +44,7 @@ fn test_engine(root: &std::path::Path) -> Engine {
     let mut cfg = Config::default();
     cfg.roots = vec![root.to_string_lossy().into_owned()];
     // Isolated on-disk index cache (no pollution of ~/.cache, no cross-test races).
-    cfg.disk_index_dir = Some(
-        root.join(".cache-dir")
-            .to_string_lossy()
-            .into_owned(),
-    );
+    cfg.disk_index_dir = Some(root.join(".cache-dir").to_string_lossy().into_owned());
     let mut engine = Engine::new(cfg);
     engine.start();
     assert!(
@@ -76,9 +69,15 @@ fn name_regex_content_and_realtime() {
 
     // --- glob name search
     let resp = engine
-        .search(&Query { name: "*.pdf".into(), ..Query::default() })
+        .search(&Query {
+            name: "*.pdf".into(),
+            ..Query::default()
+        })
         .unwrap();
-    assert!(resp.results.iter().any(|r| r.path.ends_with("report_2026.pdf")));
+    assert!(resp
+        .results
+        .iter()
+        .any(|r| r.path.ends_with("report_2026.pdf")));
 
     // --- regex name search
     let resp = engine
@@ -88,11 +87,17 @@ fn name_regex_content_and_realtime() {
             ..Query::default()
         })
         .unwrap();
-    assert!(resp.results.iter().any(|r| r.path.ends_with("report_2026.pdf")));
+    assert!(resp
+        .results
+        .iter()
+        .any(|r| r.path.ends_with("report_2026.pdf")));
 
     // --- Everything-style AND + exclude
     let resp = engine
-        .search(&Query { name: "invoice txt".into(), ..Query::default() })
+        .search(&Query {
+            name: "invoice txt".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert_eq!(resp.results.len(), 1);
 
@@ -111,7 +116,10 @@ fn name_regex_content_and_realtime() {
     std::fs::write(&new_path, "fresh content here").unwrap();
     assert!(
         wait_until(Duration::from_secs(5), || engine
-            .search(&Query { name: "brand_new*".into(), ..Query::default() })
+            .search(&Query {
+                name: "brand_new*".into(),
+                ..Query::default()
+            })
             .unwrap()
             .results
             .iter()
@@ -139,7 +147,10 @@ fn name_regex_content_and_realtime() {
     std::fs::remove_file(&new_path).unwrap();
     assert!(
         wait_until(Duration::from_secs(5), || !engine
-            .search(&Query { name: "brand_new*".into(), ..Query::default() })
+            .search(&Query {
+                name: "brand_new*".into(),
+                ..Query::default()
+            })
             .unwrap()
             .results
             .iter()
@@ -163,7 +174,10 @@ fn name_regex_content_and_realtime() {
         "hidden file was not indexed"
     );
     let resp = engine
-        .search(&Query { name: "secret".into(), ..Query::default() })
+        .search(&Query {
+            name: "secret".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert!(!resp.results.iter().any(|r| r.path.ends_with(".secret.txt")));
 }
@@ -182,7 +196,10 @@ fn newly_created_directory_is_indexed_live() {
 
     assert!(
         wait_until(Duration::from_secs(5), || engine
-            .search(&Query { name: "inside*".into(), ..Query::default() })
+            .search(&Query {
+                name: "inside*".into(),
+                ..Query::default()
+            })
             .unwrap()
             .results
             .iter()
@@ -203,7 +220,10 @@ fn gitignore_is_respected() {
     let engine = test_engine(&root);
 
     let resp = engine
-        .search(&Query { name: "*".into(), ..Query::default() })
+        .search(&Query {
+            name: "*".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert!(
         resp.results.iter().any(|r| r.path.ends_with("keep.txt")),
@@ -248,11 +268,17 @@ fn disk_index_is_reused_across_restarts() {
 
     // Searchable from cache (before the background revalidation even lands).
     let resp = e2
-        .search(&Query { name: "alpha*".into(), ..Query::default() })
+        .search(&Query {
+            name: "alpha*".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert!(resp.results.iter().any(|r| r.path.ends_with("alpha.txt")));
     let resp = e2
-        .search(&Query { name: "beta*".into(), ..Query::default() })
+        .search(&Query {
+            name: "beta*".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert!(resp.results.iter().any(|r| r.path.ends_with("beta.md")));
 }
@@ -271,7 +297,10 @@ fn ram_mode_still_works() {
     assert!(engine.wait_live(Duration::from_secs(30)));
 
     let resp = engine
-        .search(&Query { name: "mem*".into(), ..Query::default() })
+        .search(&Query {
+            name: "mem*".into(),
+            ..Query::default()
+        })
         .unwrap();
     assert!(resp.results.iter().any(|r| r.path.ends_with("mem.txt")));
 
@@ -279,7 +308,10 @@ fn ram_mode_still_works() {
     std::fs::write(root.join("new_ram.txt"), "x").unwrap();
     assert!(
         wait_until(Duration::from_secs(5), || engine
-            .search(&Query { name: "new_ram*".into(), ..Query::default() })
+            .search(&Query {
+                name: "new_ram*".into(),
+                ..Query::default()
+            })
             .unwrap()
             .results
             .iter()
