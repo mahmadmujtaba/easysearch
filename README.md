@@ -71,6 +71,9 @@ Query semantics (Everything-style):
   "exclude_removable": true,
   "exclude_network": true,
   "respect_ignore_files": true,
+  "persist_index": true,
+  "disk_index_dir": null,
+  "overlay_compaction_threshold": 8192,
   "exclude_fstypes": [],
   "content_index_enabled": false,
   "content_index_max_file_bytes": 8388608,
@@ -82,6 +85,12 @@ Query semantics (Everything-style):
 
 - **roots**: empty = `$HOME` of the user running the program. Add paths to
   index more (e.g. `["/home/me", "/srv/data"]`).
+- **persist_index**: `true` (default) keeps the index on disk (memory-mapped)
+  with only recent changes in RAM; `false` keeps the whole index in memory.
+- **disk_index_dir**: where the mapped index lives (default
+  `~/.cache/everything-linux`).
+- **overlay_compaction_threshold**: how many pending changes trigger a
+  background compaction (default 8192).
 - **content_index_enabled**: `true` enables the background content cache
   (bounded, LRU; keeps repeated content queries fast).
 - A global ignore file at `~/.config/everything-linux/ignore` adds extra
@@ -98,7 +107,7 @@ searched tree is honored.
 
 The index is updated by `inotify`. The kernel caps watches per user
 (`fs.inotify.max_user_watches`, default 123,040 on Debian 13). If a tree is too
-large, the app automatically falls back to **degraded mode** (periodic rescan,
+large, the app automatically falls back to **degraded mode** (periodic rebuild,
 visible in the status bar). You can raise the cap:
 
 ```sh
@@ -106,12 +115,31 @@ sudo sysctl fs.inotify.max_user_watches=1048576   # persists until reboot
 # make permanent: echo 'fs.inotify.max_user_watches=1048576' | sudo tee /etc/sysctl.d/90-inotify.conf
 ```
 
+## Low-memory index (how it stays small)
+
+The index is designed to keep RAM low by using the filesystem:
+
+- The bulk of the index (paths + metadata) is serialized into a compact binary
+  file at `~/.cache/everything-linux/index-v1.bin` and **memory-mapped** —
+  cold pages cost zero RSS and are evicted by the kernel under pressure; warm
+  pages live in the reclaimable page cache.
+- Only a small **change overlay** (recent creates/edits/deletes from the
+  watcher) and a compact hash table (~4 MB) stay resident. Queries scan the
+  mapped file zero-copy.
+- When the overlay grows (default 8192 entries), it is **compacted** into the
+  file in the background. Startup is instant: the previous index is mapped on
+  launch while a background rebuild re-validates it.
+
+Measured on a real `$HOME` (≈137k files): headless engine idle ≈ **15 MiB**
+(was ≈ 80 MiB with the original in-RAM index); warm start ~0.6 s; filename
+query < 1 ms. The GUI adds the native window/GL stack (~55 MiB on this box).
+
 ## Footprint (budget)
 
-- binaries < 10 MB (stripped, LTO)
-- idle RAM ≈ 8 MB + ~150–250 B per indexed path (no GC)
+- binaries < 10 MB (stripped, LTO; GUI ≈ 12 MB)
+- idle RAM ≈ 15 MiB headless; index on disk (mmap), overlay in RAM
 - idle CPU ≈ 0 % (event-driven)
 - filename query at 1M entries < 50 ms; content queries stream results
 
 See [`docs/scope.md`](docs/scope.md) for the full scope, design rationale, and
-the realtime/freshness guarantees.
+realtime/freshness guarantees.

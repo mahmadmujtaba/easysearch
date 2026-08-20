@@ -166,6 +166,7 @@ impl Engine {
                             Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
                             Err(e) => eprintln!("initial index build failed: {e}"),
                         }
+                        trim_allocator();
                     } else {
                         for root in &roots.roots {
                             walk_root_apply(
@@ -562,5 +563,18 @@ fn rebuild_once(
         }
         Err(e) => eprintln!("index rebuild failed: {e}"),
     }
+    // The walk's transient allocations were freed above; hand the pages back
+    // to the kernel instead of leaving them in glibc's arenas.
+    trim_allocator();
     rebuilding.store(false, Ordering::SeqCst);
+}
+
+/// Return freed-but-cached allocator pages to the kernel (glibc only).
+fn trim_allocator() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    let _ = ();
 }

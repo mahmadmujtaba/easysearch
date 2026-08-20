@@ -71,16 +71,17 @@ repeated content queries, and is kept fresh by the same event pipeline.
 ┌───────────────────────────  single process, one binary family  ───────────────────────────┐
 │                                                                                             │
 │   core/  (library crate: all search logic)                                                  │
-│   ├── indexer ── ignore::WalkParallel (cold walk) ──▶ in-memory path index (RAM)            │
+│   ├── indexer ── ignore::WalkParallel (cold walk) ──▶ on-disk index (mmap base)              │
 │   │      ▲                                                     │                             │
 │   │      └── notify crate (inotify) ◀── kernel events          │  create/delete/rename/edit │
 │   │                                  (create/delete/rename/edit) ▼                           │
+│   │                                       small in-memory change overlay (compacted in bg)   │
 │   ├── matcher ── globset (pattern mode) + regex crate (regex mode) over indexed paths       │
 │   ├── content  ── grep-searcher + grep-regex + ignore (ripgrep engine, in-process)          │
 │   │                 └─ preprocessor hook (docx extraction)                                   │
 │   ├── content_index (OPTIONAL, default off) ── background extractor + RAM text cache        │
 │   │                 (bounded, LRU; kept fresh by the same watcher events)                    │
-│   └── events   ── channel: watcher → index (single source of truth, lock-free reads)        │
+│   └── queries  ── mmap base scan (zero-copy) ∪ overlay deltas                                │
 │                                                                                             │
 │   gui/  (eframe/egui — native, no web tech) ── links core ──▶ zero-IPC, instant search      │
 │   cli/  (clap)                              ── links core ──▶ scripted search / status       │
@@ -115,6 +116,7 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | Realtime events | **`notify`** crate (inotify on Linux; ReadDirectoryChangesW / FSEvents elsewhere) | `inotifywait` subprocess (rejected: external dep, no cross-platform) |
 | Parallel search fan-out | **`rayon`** | hand-rolled threads |
 | Content text cache (optional) | in-RAM `HashMap` + byte-cap LRU (no DB) | SQLite/FTS (rejected: heavier, phase 3 if ever) |
+| Index persistence (low-RAM) | **`memmap2`** (mmap base index) + custom binary format | SQLite (rejected: heavier), full-RAM (rejected: 80 MiB) |
 | GUI | **`eframe`/`egui`** (immediate-mode, native, Win/Linux/macOS) | Slint, iced, gtk4-rs (all viable; egui = minimal deps + instant re-render per keystroke) |
 | CLI | **`clap`** | hand-rolled parser |
 | Optional daemon HTTP | **`tiny_http`** (small, stdlib-ish) | axum (heavier) |
@@ -271,19 +273,27 @@ The GUI and CLI do **not** use this by default (they link `core/` directly).
 | Metric | Target |
 |---|---|
 | Binary size (stripped, `lto`+`strip`) | **< 10 MB** per binary |
-| Backend idle RSS (no GC, no runtime) | **≈ 8 MB + ~150–250 B per indexed path** |
+| Idle RSS, headless engine | **≈ 15 MiB** with the disk-backed index |
+| Index storage | **on disk** (memory-mapped; kernel page cache, reclaimable) |
+| Resident index structures | ≈ 4 MB hash table + small change overlay |
 | Backend idle CPU | **≈ 0 %** (event-driven; no polling loops) |
 | Cold index, 1M files | < 30 s; searchable from first second |
+| Warm start (cache present) | **< 1 s** to first search |
 | Filename query latency (1M entries) | < 50 ms |
 | Content query (typical tree) | first result < 2 s; results streamed, cancellable |
-| Typical `/home` (≈300k files) | ≈ 60–90 MB total RSS |
 | Content index (when **enabled**) | + extracted text only (≤ 256 MB cap, LRU); **0 MB / 0 CPU when off** |
 
-**Measured (MVP, Debian 13, real `$HOME`, 137k files):** CLI binary 3.3 MB, GUI
-12 MB; idle RSS ≈ 79 MiB for the CLI engine (≈ 0.5 KB/path; path storage is
-currently duplicated between the entry `Vec` and the lookup `HashMap` — path
-interning is a planned optimization); GUI ≈ 173 MiB incl. GL context; filename
-query < 1 ms engine time at 137k entries; content query ≈ 23 ms over 137k files.
+**Memory architecture (v0.1.0):** the index bulk lives in a memory-mapped file
+(`~/.cache/everything-linux/index-v1.bin`); the watcher writes only a small
+in-memory overlay of recent changes, compacted into the file in the background.
+RAM-only mode (`persist_index: false`) keeps everything in memory. `malloc_trim`
+returns walk-transient pages to the kernel after each build.
+
+**Measured (v0.1.0, Debian 13, real `$HOME`, ≈137k files):** CLI binary 3.3 MB,
+GUI 12 MB; headless engine idle ≈ 15 MiB (vs ≈ 80 MiB before the disk-backed
+index); warm start 0.6 s; filename query < 1 ms engine time; content query
+≈ 23 ms. GUI ≈ 151 MiB incl. the Mesa GL stack (≈ 55 MiB) and the 23 MiB mmap
+index; remaining anonymous memory is egui UI state + allocator arena residual.
 
 ## 10. GUI (egui) Specification
 
