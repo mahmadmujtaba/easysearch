@@ -24,6 +24,7 @@ pub fn start_watcher(
     cache: Arc<ContentIndex>,
     queue: Option<Arc<ExtractQueue>>,
     status: Arc<RwLock<Status>>,
+    respect_ignore: bool,
     on_error: Arc<dyn Fn() + Send + Sync>,
 ) -> JoinHandle<()> {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
@@ -39,9 +40,20 @@ pub fn start_watcher(
     std::thread::Builder::new()
         .name("watcher".into())
         .spawn(move || {
+            // Keep the watcher alive for the lifetime of this thread: dropping
+            // it removes the inotify watches and no further events arrive.
+            let _keep_alive = watcher;
             for res in rx {
                 match res {
-                    Ok(event) => handle_event(&event, &index, &roots_set, &cache, queue.as_deref(), &status),
+                    Ok(event) => handle_event(
+                        &event,
+                        &index,
+                        &roots_set,
+                        &cache,
+                        queue.as_ref(),
+                        &status,
+                        respect_ignore,
+                    ),
                     Err(e) => {
                         eprintln!("watcher error: {e}");
                         on_error();
@@ -54,11 +66,12 @@ pub fn start_watcher(
 
 fn handle_event(
     event: &Event,
-    index: &RwLock<Index>,
-    roots: &RootSet,
+    index: &Arc<RwLock<Index>>,
+    roots: &Arc<RootSet>,
     cache: &ContentIndex,
-    queue: Option<&ExtractQueue>,
-    status: &RwLock<Status>,
+    queue: Option<&Arc<ExtractQueue>>,
+    status: &Arc<RwLock<Status>>,
+    respect_ignore: bool,
 ) {
     let Some(path) = event.paths.first().cloned() else {
         return;
@@ -67,13 +80,13 @@ fn handle_event(
         return;
     }
     match event.kind {
-        EventKind::Create(_) => add_path(&path, index, roots, queue, status),
+        EventKind::Create(_) => add_path(&path, index, roots, queue, status, respect_ignore),
         EventKind::Remove(_) => remove_path(&path, index, cache),
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
             remove_path(&path, index, cache)
         }
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
-            add_path(&path, index, roots, queue, status)
+            add_path(&path, index, roots, queue, status, respect_ignore)
         }
         EventKind::Modify(notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_)) => {
             refresh_meta(&path, index, cache, queue)
@@ -89,10 +102,11 @@ fn remove_path(path: &Path, index: &RwLock<Index>, cache: &ContentIndex) {
 
 fn add_path(
     path: &Path,
-    index: &RwLock<Index>,
-    roots: &RootSet,
-    queue: Option<&ExtractQueue>,
-    status: &RwLock<Status>,
+    index: &Arc<RwLock<Index>>,
+    roots: &Arc<RootSet>,
+    queue: Option<&Arc<ExtractQueue>>,
+    status: &Arc<RwLock<Status>>,
+    respect_ignore: bool,
 ) {
     if roots.is_excluded(path) {
         return;
@@ -116,13 +130,13 @@ fn add_path(
     if is_dir {
         // A new directory may already contain files that predate the watch:
         // index its subtree immediately.
-        walk_root(path, index, roots, queue, status);
+        walk_root(path, index, roots, queue, status, respect_ignore);
     } else if let Some(q) = queue {
         q.send(path.to_path_buf());
     }
 }
 
-fn refresh_meta(path: &Path, index: &RwLock<Index>, cache: &ContentIndex, queue: Option<&ExtractQueue>) {
+fn refresh_meta(path: &Path, index: &Arc<RwLock<Index>>, cache: &ContentIndex, queue: Option<&Arc<ExtractQueue>>) {
     // Content changed (or metadata): update size/mtime and invalidate the
     // content cache so the next query reads live data (or re-extracts).
     cache.remove(path);

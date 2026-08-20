@@ -117,11 +117,12 @@ impl Engine {
         let status = Arc::clone(&self.status);
         let roots = Arc::clone(&self.roots);
         let queue = self.queue.clone();
+        let respect_ignore = self.config.respect_ignore_files;
         let walk_handle = std::thread::Builder::new()
             .name("index-walk".into())
             .spawn(move || {
                 for root in &roots.roots {
-                    walk_root(root, &index, &roots, queue.as_deref(), &status);
+                    walk_root(root, &index, &roots, queue.as_ref(), &status, respect_ignore);
                 }
                 status.write().unwrap().state = State::Live;
             })
@@ -146,6 +147,7 @@ impl Engine {
             let roots = Arc::clone(&self.roots);
             let queue = self.queue.clone();
             let started = Arc::clone(&started);
+            let respect_ignore = self.config.respect_ignore_files;
             Arc::new(move || {
                 status.write().unwrap().degraded = true;
                 let mut already = started.lock().unwrap();
@@ -170,12 +172,16 @@ impl Engine {
                                 root,
                                 &index,
                                 &roots,
-                                queue.as_deref(),
+                                queue.as_ref(),
                                 &status,
                                 Arc::clone(&seen),
+                                respect_ignore,
                             );
                         }
-                        let seen = seen.into_inner().unwrap();
+                        let seen = Arc::try_unwrap(seen)
+                            .expect("seen has extra refs")
+                            .into_inner()
+                            .unwrap();
                         index.write().unwrap().retain_known(&seen);
                     })
                     .expect("failed to spawn rescan thread");
@@ -189,6 +195,7 @@ impl Engine {
             cache,
             queue,
             status,
+            self.config.respect_ignore_files,
             on_error,
         );
         drop(handle); // detached: the thread runs until process exit

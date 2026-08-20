@@ -212,13 +212,17 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.hidden, "Hidden files");
                 ui.checkbox(&mut self.full_path, "Full path");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(format!(
+                    let count = format!(
                         "{} result(s){}{}",
                         self.results.len(),
                         if self.truncated { "+" } else { "" },
-                        if self.elapsed_ms > 0 { format!(" · {} ms", self.elapsed_ms) } else { String::new() }
-                    ))
-                    .weak();
+                        if self.elapsed_ms > 0 {
+                            format!(" · {} ms", self.elapsed_ms)
+                        } else {
+                            String::new()
+                        }
+                    );
+                    ui.label(egui::RichText::new(count).weak());
                 });
             });
             ui.add_space(6.0);

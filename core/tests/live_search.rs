@@ -4,7 +4,33 @@
 //! deleted on disk shows up in the *next query* within ~1 s.
 
 use everything_core::{Config, Engine, Query};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+/// A dedicated test directory under the system temp dir.
+///
+/// Note: NOT dot-prefixed (unlike `tempfile`'s `.tmpXXXX` names) — hidden-path
+/// filtering is part of the default query behavior and would hide all
+/// fixtures otherwise.
+struct TestDir(PathBuf);
+
+impl TestDir {
+    fn new(tag: &str) -> TestDir {
+        let dir = std::env::temp_dir().join(format!(
+            "everything-it-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TestDir(dir)
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
@@ -31,8 +57,8 @@ fn test_engine(root: &std::path::Path) -> Engine {
 
 #[test]
 fn name_regex_content_and_realtime() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let dir = TestDir::new("main");
+    let root = dir.0.clone();
 
     // Seed the tree before the engine starts.
     std::fs::write(root.join("report_2026.pdf"), "annual report body").unwrap();
@@ -40,7 +66,7 @@ fn name_regex_content_and_realtime() {
     std::fs::create_dir_all(root.join("sub/deep")).unwrap();
     std::fs::write(root.join("sub/deep/notes.md"), "# Notes\nTODO: refactor").unwrap();
 
-    let engine = test_engine(root);
+    let engine = test_engine(&root);
 
     // --- glob name search
     let resp = engine
@@ -60,7 +86,7 @@ fn name_regex_content_and_realtime() {
 
     // --- Everything-style AND + exclude
     let resp = engine
-        .search(&Query { name: "invoice q3".into(), ..Query::default() })
+        .search(&Query { name: "invoice txt".into(), ..Query::default() })
         .unwrap();
     assert_eq!(resp.results.len(), 1);
 
@@ -120,7 +146,7 @@ fn name_regex_content_and_realtime() {
     assert!(
         wait_until(Duration::from_secs(5), || engine
             .search(&Query {
-                name: "secret*".into(),
+                name: "secret".into(),
                 include_hidden: true,
                 ..Query::default()
             })
@@ -131,17 +157,17 @@ fn name_regex_content_and_realtime() {
         "hidden file was not indexed"
     );
     let resp = engine
-        .search(&Query { name: "secret*".into(), ..Query::default() })
+        .search(&Query { name: "secret".into(), ..Query::default() })
         .unwrap();
     assert!(!resp.results.iter().any(|r| r.path.ends_with(".secret.txt")));
 }
 
 #[test]
 fn newly_created_directory_is_indexed_live() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let dir = TestDir::new("newdir");
+    let root = dir.0.clone();
     std::fs::write(root.join("existing.txt"), "x").unwrap();
-    let engine = test_engine(root);
+    let engine = test_engine(&root);
 
     // Create a new directory with a file inside it after start.
     let new_dir = root.join("freshdir");
@@ -156,5 +182,29 @@ fn newly_created_directory_is_indexed_live() {
             .iter()
             .any(|r| r.path.ends_with("inside.txt"))),
         "file inside a newly created directory was not indexed"
+    );
+}
+
+#[test]
+fn gitignore_is_respected() {
+    let dir = TestDir::new("gitignore");
+    let root = dir.0.clone();
+    std::fs::write(root.join("keep.txt"), "keep me").unwrap();
+    std::fs::create_dir_all(root.join("node_modules")).unwrap();
+    std::fs::write(root.join("node_modules/dep.js"), "dep").unwrap();
+    std::fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+
+    let engine = test_engine(&root);
+
+    let resp = engine
+        .search(&Query { name: "*".into(), ..Query::default() })
+        .unwrap();
+    assert!(
+        resp.results.iter().any(|r| r.path.ends_with("keep.txt")),
+        "keep.txt should be indexed"
+    );
+    assert!(
+        !resp.results.iter().any(|r| r.path.ends_with("dep.js")),
+        "node_modules/ should be excluded by .gitignore"
     );
 }

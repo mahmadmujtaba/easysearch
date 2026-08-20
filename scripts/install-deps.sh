@@ -71,6 +71,14 @@ rustflags = [
 ]
 EOF
 
+echo "==> 4/4 ~/.gitignore (non-essential folders excluded from indexing)"
+if [ ! -f "$HOME/.gitignore" ]; then
+  cp "$PROJECT_DIR/.gitignore" "$HOME/.gitignore"
+  echo "    installed $HOME/.gitignore"
+else
+  echo "    $HOME/.gitignore already exists (leaving it untouched)"
+fi
+
 echo ""
 echo "Done. Build with:"
 echo "    cd \"$PROJECT_DIR\" && cargo build --release"

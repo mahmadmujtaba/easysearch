@@ -17,5 +17,5 @@ pub mod walker;
 pub mod watcher;
 
 pub use config::Config;
-pub use engine::{Engine, ResultRow, SearchResponse, State, Status};
+pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
 pub use matcher::{CompiledQuery, Query};

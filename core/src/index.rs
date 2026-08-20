@@ -189,9 +189,12 @@ mod tests {
     fn subtree_removal() {
         let mut idx = Index::new();
         idx.upsert(f("/root").0.clone(), Meta { size: 0, mtime: 0, is_dir: true });
-        idx.upsert(f("/root/x.txt"));
-        idx.upsert(f("/root/deep/y.txt"));
-        idx.upsert(f("/root2/z.txt"));
+        let (p, m) = f("/root/x.txt");
+        idx.upsert(p, m);
+        let (p, m) = f("/root/deep/y.txt");
+        idx.upsert(p, m);
+        let (p, m) = f("/root2/z.txt");
+        idx.upsert(p, m);
         idx.remove_subtree(Path::new("/root"));
         assert_eq!(idx.len(), 1);
         assert_eq!(idx.files, 1); // only /root2/z.txt remains
@@ -201,9 +204,10 @@ mod tests {
     #[test]
     fn retain_known_drops_missing() {
         let mut idx = Index::new();
-        idx.upsert(f("/a.txt"));
-        idx.upsert(f("/b.txt"));
-        idx.upsert(f("/c.txt"));
+        for p in ["/a.txt", "/b.txt", "/c.txt"] {
+            let (path, meta) = f(p);
+            idx.upsert(path, meta);
+        }
         let mut seen = std::collections::HashSet::new();
         seen.insert(PathBuf::from("/a.txt"));
         seen.insert(PathBuf::from("/c.txt"));

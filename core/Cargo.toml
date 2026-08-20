@@ -16,6 +16,3 @@ grep-regex = "0.1"
 grep-matcher = "0.1"
 notify = "7"
 rayon = "1"
-
-[dev-dependencies]
-tempfile = "3"

@@ -220,6 +220,11 @@ One query box, three effective combinations:
 
 - **Default roots:** `$HOME` of the user who runs the program (user decision 2026-08-20).
   Additional roots configurable in `~/.config/everything-linux/config.json`.
+- **Ignore files:** `.gitignore` / `.ignore` files in the searched tree are honored
+  (gitignore syntax; `config.respect_ignore_files`, default on), plus a global ignore
+  file at `~/.config/everything-linux/ignore`. The shipped `.gitignore` excludes
+  `node_modules`, `target`, build dirs, caches, editor settings, and VCS internals
+  (copy it to `~/.gitignore` to apply to the default root).
 - **Never indexed (pseudo-FS / noise):** `/proc`, `/sys`, `/dev`, `/run`, `/tmp`.
 - **USB and external/removable mounts: excluded by default** (user decision 2026-08-20) —
   detection via `/proc/self/mounts` (mount type + source) plus the backing device's

@@ -24,10 +24,15 @@ pub unsafe fn extract_mut_ref<const N: usize, T>(s: &mut [T]) -> &mut [T; N] {
 }
 
 /// Borrow a fixed-size array reference from a slice: `array_ref![s, 0, 4]`.
+///
+/// `$start` is evaluated before `$arr` so that call sites like
+/// `array_ref![self.data, self.offset(x, y), N]` don't trip the borrow
+/// checker (the immutable `self` borrow ends before the slice borrow begins).
 #[macro_export]
 macro_rules! array_ref {
     ($arr:expr, $start:expr, $len:expr) => {{
-        let s = &$arr[$start..($start + $len)];
+        let start = $start;
+        let s = &$arr[start..(start + $len)];
         unsafe { $crate::extract_ref(s) }
     }};
 }
@@ -52,10 +57,13 @@ macro_rules! array_refs {
 }
 
 /// Mutably borrow a fixed-size array reference: `array_mut_ref![s, 0, 4]`.
+///
+/// `$start` is evaluated before `$arr` (see `array_ref!`).
 #[macro_export]
 macro_rules! array_mut_ref {
     ($arr:expr, $start:expr, $len:expr) => {{
-        let s = &mut $arr[$start..($start + $len)];
+        let start = $start;
+        let s = &mut $arr[start..(start + $len)];
         unsafe { $crate::extract_mut_ref(s) }
     }};
 }
