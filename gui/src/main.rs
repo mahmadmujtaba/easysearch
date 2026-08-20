@@ -195,6 +195,7 @@ impl App {
             None => !matches!(dark_light::detect(), dark_light::Mode::Light),
         };
         let (ui_font, mono_font) = load_system_fonts();
+        let status_snapshot = engine.status_snapshot();
 
         let mut app = App {
             engine,
@@ -210,7 +211,7 @@ impl App {
             truncated: false,
             error: None,
             elapsed_ms: 0,
-            status: engine.status_snapshot(),
+            status: status_snapshot,
             last_sent: String::new(),
             pending: false,
             last_edit: Instant::now(),
@@ -551,6 +552,7 @@ impl App {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("🔍").size(20.0));
+                let dim = self.fg_dim();
                 let hint = if self.content_mode {
                     "Search file contents (regex)…"
                 } else if self.regex_mode {
@@ -560,7 +562,7 @@ impl App {
                 };
                 let edit = egui::TextEdit::singleline(&mut self.query)
                     .id(search_id())
-                    .hint_text(egui::RichText::new(hint).color(self.fg_dim()))
+                    .hint_text(egui::RichText::new(hint).color(dim))
                     .font(egui::TextStyle::Heading)
                     .desired_width(f32::INFINITY)
                     .margin(egui::vec2(12.0, 9.0));

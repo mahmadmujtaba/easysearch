@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **System fonts**: the GUI now loads the desktop's UI and monospace fonts
+  (via `fontdb`; e.g. Noto Sans / DejaVu) with egui's fonts as fallback, and
+  font sizes were increased across the UI.
+- **Light & dark themes**: the app follows the system theme on first launch
+  (`dark-light`), with a persisted ☀️/🌙 toggle.
+- **Search history**: queries are remembered (Enter, or when the search box
+  loses focus) and persisted to `~/.config/everything-linux/gui.json`;
+  ↑/↓ in the empty search box cycles history, and the 🕘 button opens the
+  recent-search list (with “Clear history”).
 - **Reworked GUI** (`everything-gui`): dark/light themes with accent styling,
   file-type icons, a virtualized results table (name / size / modified columns
   with click-to-sort), full keyboard navigation (↑/↓/PgUp/PgDn, Enter to open,
