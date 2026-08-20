@@ -360,6 +360,15 @@ impl App {
         self.scroll_to = None;
     }
 
+    /// Cycle the sort for a column and re-sort the current results in place
+    /// (a header click must work without waiting for the next query response).
+    fn toggle_sort(&mut self, prefer: Sort) {
+        self.sort = cycle_sort(self.sort, prefer);
+        if let Some(s) = self.sort {
+            sort_results(&mut self.results, s);
+        }
+    }
+
     fn open(path: &Path) {
         let _ = Command::new("xdg-open").arg(path).spawn();
     }
@@ -772,6 +781,7 @@ impl App {
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            .sense(egui::Sense::click()) // rows must sense clicks, not just hover
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::remainder().clip(true))
             .column(Column::exact(92.0).at_least(70.0).clip(true))
@@ -782,23 +792,23 @@ impl App {
         }
 
         table
-            .header(30.0, |mut header| {
+            .header(32.0, |mut header| {
                 header.col(|ui| {
                     if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked() {
-                        self.sort = cycle_sort(self.sort, Sort::Name(true));
+                        self.toggle_sort(Sort::Name(true));
                     }
                 });
                 header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if sort_button(ui, "Size", self.sort, |s| matches!(s, Sort::Size(_))).clicked() {
-                            self.sort = cycle_sort(self.sort, Sort::Size(true));
+                            self.toggle_sort(Sort::Size(true));
                         }
                     });
                 });
                 header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if sort_button(ui, "Modified", self.sort, |s| matches!(s, Sort::Mtime(_))).clicked() {
-                            self.sort = cycle_sort(self.sort, Sort::Mtime(true));
+                            self.toggle_sort(Sort::Mtime(true));
                         }
                     });
                 });
@@ -807,7 +817,7 @@ impl App {
             .body(|body| {
                 let rows = self.results.len();
                 let selected = self.selected;
-                body.rows(44.0, rows, |mut row| {
+                body.rows(52.0, rows, |mut row| {
                     let i = row.index();
                     row.set_selected(i == selected);
                     let r = &self.results[i];
@@ -823,7 +833,7 @@ impl App {
                         row_y = Some(rect.y_range());
                         if i == selected {
                             let (bar, _) =
-                                ui.allocate_exact_size(egui::vec2(3.0, 44.0), egui::Sense::hover());
+                                ui.allocate_exact_size(egui::vec2(3.0, 52.0), egui::Sense::hover());
                             ui.painter().rect_filled(bar, 0.0, ACCENT);
                         }
                         ui.horizontal(|ui| {
@@ -831,6 +841,7 @@ impl App {
                             let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot.center(), 3.5, badge_color(&r.path, r.is_dir));
                             ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 let name = r
                                     .path
                                     .file_name()
