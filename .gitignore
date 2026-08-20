@@ -1,0 +1,47 @@
+# Everything for Linux — non-essential folders skipped when indexing/searching.
+#
+# This file uses gitignore syntax (patterns apply to every directory below this
+# one). The engine honors `.ignore`/`.gitignore` files in the searched tree.
+#
+# To apply the same exclusions to your whole home directory (the default search
+# root), copy this file to ~/.ignore:
+#
+#     cp .ignore ~/.ignore
+
+# VCS internals (never useful to search)
+.git/
+.svn/
+.hg/
+
+# Language/ecosystem build & dependency dirs (high file counts, no search value)
+node_modules/
+target/
+build/
+dist/
+out/
+bin/
+obj/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+
+# Caches and ephemeral state
+.cache/
+.Trash/
+
+# Editor/IDE settings
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini

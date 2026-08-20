@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["core", "cli", "gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# `arrayref` (pulled in by eframe → winit → sctk-adwaita → tiny-skia) had all
+# its usable versions yanked from crates.io; the vendored shim in
+# vendor/arrayref restores resolution. See vendor/arrayref/README note in the
+# source file.
+[patch.crates-io]
+arrayref = { path = "vendor/arrayref" }
