@@ -1,14 +1,15 @@
-//! Realtime watcher: kernel filesystem events → index updates.
+//! Realtime watcher: kernel filesystem events → overlay updates.
 //!
 //! Runs the `notify` event loop on a dedicated thread. Every event mutates
-//! the shared index immediately (< 1 s target); degraded mode is triggered
-//! when the kernel reports errors (typically exhausted watch limits).
+//! the small in-memory change overlay immediately (< 1 s target); degraded
+//! mode is triggered when the kernel reports errors (typically exhausted
+//! watch limits) and falls back to periodic full rebuilds.
 
 use crate::content_index::{ContentIndex, ExtractQueue};
 use crate::engine::Status;
-use crate::index::{Index, Meta};
+use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
-use crate::walker::walk_root;
+use crate::walker::walk_root_apply;
 use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
@@ -16,10 +17,10 @@ use std::thread::JoinHandle;
 
 /// Spawn the watcher thread. `on_error` is invoked when the kernel reports a
 /// watcher error (e.g. exhausted watch limits); the engine uses it to switch
-/// to degraded mode with periodic rescans.
+/// to degraded mode with periodic rebuilds.
 pub fn start_watcher(
     roots: Vec<PathBuf>,
-    index: Arc<RwLock<Index>>,
+    overlay: Arc<RwLock<Overlay>>,
     roots_set: Arc<RootSet>,
     cache: Arc<ContentIndex>,
     queue: Option<Arc<ExtractQueue>>,
@@ -47,7 +48,7 @@ pub fn start_watcher(
                 match res {
                     Ok(event) => handle_event(
                         &event,
-                        &index,
+                        &overlay,
                         &roots_set,
                         &cache,
                         queue.as_ref(),
@@ -66,7 +67,7 @@ pub fn start_watcher(
 
 fn handle_event(
     event: &Event,
-    index: &Arc<RwLock<Index>>,
+    overlay: &Arc<RwLock<Overlay>>,
     roots: &Arc<RootSet>,
     cache: &ContentIndex,
     queue: Option<&Arc<ExtractQueue>>,
@@ -80,29 +81,29 @@ fn handle_event(
         return;
     }
     match event.kind {
-        EventKind::Create(_) => add_path(&path, index, roots, queue, status, respect_ignore),
-        EventKind::Remove(_) => remove_path(&path, index, cache),
+        EventKind::Create(_) => add_path(&path, overlay, roots, queue, status, respect_ignore),
+        EventKind::Remove(_) => remove_path(&path, overlay, cache),
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
-            remove_path(&path, index, cache)
+            remove_path(&path, overlay, cache)
         }
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
-            add_path(&path, index, roots, queue, status, respect_ignore)
+            add_path(&path, overlay, roots, queue, status, respect_ignore)
         }
         EventKind::Modify(notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_)) => {
-            refresh_meta(&path, index, cache, queue)
+            refresh_meta(&path, overlay, cache, queue)
         }
         _ => {}
     }
 }
 
-fn remove_path(path: &Path, index: &RwLock<Index>, cache: &ContentIndex) {
-    index.write().unwrap().remove_subtree(path);
+fn remove_path(path: &Path, overlay: &Arc<RwLock<Overlay>>, cache: &ContentIndex) {
+    overlay.write().unwrap().remove(path);
     cache.remove(path);
 }
 
 fn add_path(
     path: &Path,
-    index: &Arc<RwLock<Index>>,
+    overlay: &Arc<RwLock<Overlay>>,
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
@@ -126,17 +127,22 @@ fn add_path(
             .unwrap_or(0),
         is_dir,
     };
-    index.write().unwrap().upsert(path.to_path_buf(), emeta);
+    overlay.write().unwrap().upsert(path.to_path_buf(), emeta);
     if is_dir {
         // A new directory may already contain files that predate the watch:
-        // index its subtree immediately.
-        walk_root(path, index, roots, queue, status, respect_ignore);
+        // index its subtree immediately (into the overlay).
+        walk_root_apply(path, overlay, roots, queue, status, respect_ignore);
     } else if let Some(q) = queue {
         q.send(path.to_path_buf());
     }
 }
 
-fn refresh_meta(path: &Path, index: &Arc<RwLock<Index>>, cache: &ContentIndex, queue: Option<&Arc<ExtractQueue>>) {
+fn refresh_meta(
+    path: &Path,
+    overlay: &Arc<RwLock<Overlay>>,
+    cache: &ContentIndex,
+    queue: Option<&Arc<ExtractQueue>>,
+) {
     // Content changed (or metadata): update size/mtime and invalidate the
     // content cache so the next query reads live data (or re-extracts).
     cache.remove(path);
@@ -152,15 +158,23 @@ fn refresh_meta(path: &Path, index: &Arc<RwLock<Index>>, cache: &ContentIndex, q
                     .unwrap_or(0),
                 is_dir: false,
             };
-            index.write().unwrap().upsert(path.to_path_buf(), emeta);
+            overlay.write().unwrap().upsert(path.to_path_buf(), emeta);
             if let Some(q) = queue {
                 q.send(path.to_path_buf());
             }
         }
         Ok(m) if m.is_dir() => {
-            // A dir's metadata changed; just refresh the entry.
-            let emeta = Meta { size: 0, mtime: m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0), is_dir: true };
-            index.write().unwrap().upsert(path.to_path_buf(), emeta);
+            let emeta = Meta {
+                size: 0,
+                mtime: m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+                is_dir: true,
+            };
+            overlay.write().unwrap().upsert(path.to_path_buf(), emeta);
         }
         _ => {}
     }

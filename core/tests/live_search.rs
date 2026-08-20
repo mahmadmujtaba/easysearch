@@ -46,6 +46,12 @@ fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
 fn test_engine(root: &std::path::Path) -> Engine {
     let mut cfg = Config::default();
     cfg.roots = vec![root.to_string_lossy().into_owned()];
+    // Isolated on-disk index cache (no pollution of ~/.cache, no cross-test races).
+    cfg.disk_index_dir = Some(
+        root.join(".cache-dir")
+            .to_string_lossy()
+            .into_owned(),
+    );
     let mut engine = Engine::new(cfg);
     engine.start();
     assert!(
@@ -206,5 +212,78 @@ fn gitignore_is_respected() {
     assert!(
         !resp.results.iter().any(|r| r.path.ends_with("dep.js")),
         "node_modules/ should be excluded by .gitignore"
+    );
+}
+
+#[test]
+fn disk_index_is_reused_across_restarts() {
+    // First run builds the on-disk index; a second engine on the same cache
+    // dir must serve from it immediately (base present, then revalidated).
+    let dir = TestDir::new("reuse");
+    let root = dir.0.clone();
+    std::fs::write(root.join("alpha.txt"), "a").unwrap();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/beta.md"), "b").unwrap();
+
+    let mut cfg = Config::default();
+    cfg.roots = vec![root.to_string_lossy().into_owned()];
+    let cache_dir = root.join(".cache-dir").to_string_lossy().into_owned();
+    cfg.disk_index_dir = Some(cache_dir.clone());
+
+    let mut e1 = Engine::new(cfg.clone());
+    e1.start();
+    assert!(e1.wait_live(Duration::from_secs(30)));
+    drop(e1);
+
+    // Second engine: cache exists → base loads immediately.
+    let mut e2 = Engine::new(cfg);
+    let snap = e2.status_snapshot();
+    assert!(
+        snap.base_entries >= 3,
+        "expected cached base entries, got {}",
+        snap.base_entries
+    );
+    e2.start();
+    assert!(e2.wait_live(Duration::from_secs(30)));
+
+    // Searchable from cache (before the background revalidation even lands).
+    let resp = e2
+        .search(&Query { name: "alpha*".into(), ..Query::default() })
+        .unwrap();
+    assert!(resp.results.iter().any(|r| r.path.ends_with("alpha.txt")));
+    let resp = e2
+        .search(&Query { name: "beta*".into(), ..Query::default() })
+        .unwrap();
+    assert!(resp.results.iter().any(|r| r.path.ends_with("beta.md")));
+}
+
+#[test]
+fn ram_mode_still_works() {
+    let dir = TestDir::new("ram");
+    let root = dir.0.clone();
+    std::fs::write(root.join("mem.txt"), "ram resident").unwrap();
+
+    let mut cfg = Config::default();
+    cfg.roots = vec![root.to_string_lossy().into_owned()];
+    cfg.persist_index = false; // pure in-memory mode
+    let mut engine = Engine::new(cfg);
+    engine.start();
+    assert!(engine.wait_live(Duration::from_secs(30)));
+
+    let resp = engine
+        .search(&Query { name: "mem*".into(), ..Query::default() })
+        .unwrap();
+    assert!(resp.results.iter().any(|r| r.path.ends_with("mem.txt")));
+
+    // Realtime still works in RAM mode.
+    std::fs::write(root.join("new_ram.txt"), "x").unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || engine
+            .search(&Query { name: "new_ram*".into(), ..Query::default() })
+            .unwrap()
+            .results
+            .iter()
+            .any(|r| r.path.ends_with("new_ram.txt"))),
+        "realtime create not picked up in RAM mode"
     );
 }

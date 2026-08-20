@@ -1,18 +1,23 @@
-//! Engine: owns the shared index, watcher, walker and content cache, and
-//! answers queries. GUI and CLI link this directly (zero IPC).
+//! Engine: owns the disk-backed base index, the in-memory change overlay, the
+//! watcher, the content cache — and answers queries. GUI and CLI link this
+//! directly (zero IPC).
+//!
+//! Memory model: the bulk of the index lives in a memory-mapped file (kernel
+//! page cache, reclaimable, ~zero RSS when cold); only the small hash table
+//! and the recent-change overlay are always resident. See docs/scope.md §9.
 
 use crate::config::Config;
 use crate::content::{search_contents, ContentPattern};
 use crate::content_index::{spawn_extractor, ContentIndex, ExtractQueue};
-use crate::index::{Index, Meta};
+use crate::disk_index::{DiskIndex, INDEX_FILE};
 use crate::matcher::{is_hidden, CompiledQuery, Query};
+use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
-use crate::walker::{walk_root, walk_root_into};
+use crate::walker::{walk_root_apply, walk_root_collect};
 use crate::watcher;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 /// One result row for the UI / CLI.
@@ -29,7 +34,7 @@ pub struct SearchResponse {
     pub results: Vec<ResultRow>,
     pub truncated: bool,
     pub elapsed_ms: u64,
-    /// Number of indexed files at query time.
+    /// Number of indexed files at query time (best effort).
     pub indexed: u64,
 }
 
@@ -52,6 +57,12 @@ pub struct Status {
     pub degraded: bool,
     pub skipped: u64,
     pub content_index: ContentIndexStatus,
+    /// Pending overlay changes (awaiting compaction into the disk index).
+    pub overlay_pending: usize,
+    /// Entries in the disk-backed base (0 in RAM-only mode).
+    pub base_entries: usize,
+    pub base_files: u64,
+    pub base_dirs: u64,
 }
 
 /// Upper bound on how many name-matched candidates a content query will fan
@@ -60,12 +71,15 @@ const CONTENT_FANOUT_CAP: usize = 50_000;
 
 pub struct Engine {
     config: Config,
-    index: Arc<RwLock<Index>>,
+    base: Arc<RwLock<Option<Arc<DiskIndex>>>>,
+    overlay: Arc<RwLock<Overlay>>,
     status: Arc<RwLock<Status>>,
     roots: Arc<RootSet>,
     cache: Arc<ContentIndex>,
     queue: Option<Arc<ExtractQueue>>,
     pending: Arc<AtomicUsize>,
+    rebuilding: Arc<AtomicBool>,
+    index_path: PathBuf,
 }
 
 impl Engine {
@@ -76,6 +90,10 @@ impl Engine {
             degraded: false,
             skipped: 0,
             content_index: ContentIndexStatus::Disabled,
+            overlay_pending: 0,
+            base_entries: 0,
+            base_files: 0,
+            base_dirs: 0,
         }));
         let cache = Arc::new(ContentIndex::new(
             config.content_index_enabled,
@@ -90,99 +108,146 @@ impl Engine {
         } else {
             None
         };
+
+        let base = Arc::new(RwLock::new(None));
+        let index_path = if config.persist_index {
+            config.disk_index_dir().join(INDEX_FILE)
+        } else {
+            PathBuf::new()
+        };
+        if config.persist_index {
+            // Serve from yesterday's index immediately; a background rebuild
+            // re-validates it against the live filesystem.
+            match DiskIndex::load(&index_path) {
+                Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
+                Err(_) => {} // no cache yet / stale: build at startup
+            }
+        }
+
         Engine {
             config,
-            index: Arc::new(RwLock::new(Index::new())),
+            base,
+            overlay: Arc::new(RwLock::new(Overlay::new())),
             status,
             roots,
             cache,
             queue,
             pending,
+            rebuilding: Arc::new(AtomicBool::new(false)),
+            index_path,
         }
     }
 
-    /// Start the cold walk and the realtime watcher.
+    /// Start the watcher and the initial index build.
     pub fn start(&mut self) {
-        self.start_walk();
         self.start_watcher();
-    }
 
-    fn start_walk(&mut self) {
-        {
-            let mut s = self.status.write().unwrap();
-            s.state = State::Indexing;
-            s.skipped = 0;
+        let has_cache = self.config.persist_index && self.base.read().unwrap().is_some();
+        if has_cache {
+            // Searchable immediately; refresh the base in the background.
+            self.status.write().unwrap().state = State::Live;
+            self.spawn_rebuild();
+        } else {
+            let roots = Arc::clone(&self.roots);
+            let status = Arc::clone(&self.status);
+            let queue = self.queue.clone();
+            let overlay = Arc::clone(&self.overlay);
+            let base = Arc::clone(&self.base);
+            let respect_ignore = self.config.respect_ignore_files;
+            let persist = self.config.persist_index;
+            let index_path = self.index_path.clone();
+            std::thread::Builder::new()
+                .name("index-build".into())
+                .spawn(move || {
+                    status.write().unwrap().state = State::Indexing;
+                    if persist {
+                        let entries = build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                        match DiskIndex::write_and_load(&index_path, &entries) {
+                            Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
+                            Err(e) => eprintln!("initial index build failed: {e}"),
+                        }
+                    } else {
+                        for root in &roots.roots {
+                            walk_root_apply(
+                                root,
+                                &overlay,
+                                &roots,
+                                queue.as_ref(),
+                                &status,
+                                respect_ignore,
+                            );
+                        }
+                    }
+                    status.write().unwrap().state = State::Live;
+                })
+                .expect("failed to spawn index-build thread");
         }
-        let index = Arc::clone(&self.index);
-        let status = Arc::clone(&self.status);
-        let roots = Arc::clone(&self.roots);
-        let queue = self.queue.clone();
-        let respect_ignore = self.config.respect_ignore_files;
-        let walk_handle = std::thread::Builder::new()
-            .name("index-walk".into())
-            .spawn(move || {
-                for root in &roots.roots {
-                    walk_root(root, &index, &roots, queue.as_ref(), &status, respect_ignore);
-                }
-                status.write().unwrap().state = State::Live;
-            })
-            .expect("failed to spawn walk thread");
-        drop(walk_handle); // detached: the thread runs until process exit
     }
 
     fn start_watcher(&mut self) {
-        let index = Arc::clone(&self.index);
+        let overlay = Arc::clone(&self.overlay);
         let status = Arc::clone(&self.status);
         let roots = Arc::clone(&self.roots);
         let cache = Arc::clone(&self.cache);
         let queue = self.queue.clone();
         let secs = self.config.degraded_rescan_secs.max(5);
+        let respect_ignore = self.config.respect_ignore_files;
 
         // Degraded mode: the kernel watcher failed (usually exhausted watch
-        // limits). Switch to periodic full rescans of the roots.
-        let started = Arc::new(Mutex::new(false));
+        // limits). Fall back to periodic full rebuilds.
+        let started = Arc::new(AtomicBool::new(false));
         let on_error = {
-            let index = Arc::clone(&self.index);
             let status = Arc::clone(&self.status);
-            let roots = Arc::clone(&self.roots);
-            let queue = self.queue.clone();
             let started = Arc::clone(&started);
+            let index_path = self.index_path.clone();
+            let roots = Arc::clone(&self.roots);
+            let base = Arc::clone(&self.base);
+            let overlay = Arc::clone(&self.overlay);
+            let queue = self.queue.clone();
+            let rebuilding = Arc::clone(&self.rebuilding);
+            let persist = self.config.persist_index;
             let respect_ignore = self.config.respect_ignore_files;
             Arc::new(move || {
                 status.write().unwrap().degraded = true;
-                let mut already = started.lock().unwrap();
-                if *already {
+                if started.swap(true, Ordering::SeqCst) {
                     return;
                 }
-                *already = true;
-                drop(already);
                 // Clone into the rescan thread's environment (the outer
                 // closure is Fn and may be invoked repeatedly).
-                let index = Arc::clone(&index);
-                let status = Arc::clone(&status);
+                let index_path = index_path.clone();
                 let roots = Arc::clone(&roots);
+                let base = Arc::clone(&base);
+                let overlay = Arc::clone(&overlay);
                 let queue = queue.clone();
+                let rebuilding = Arc::clone(&rebuilding);
+                let status = Arc::clone(&status);
                 std::thread::Builder::new()
                     .name("rescan".into())
                     .spawn(move || loop {
                         std::thread::sleep(Duration::from_secs(secs));
-                        let seen = Arc::new(Mutex::new(HashSet::new()));
-                        for root in &roots.roots {
-                            walk_root_into(
-                                root,
-                                &index,
+                        if persist {
+                            rebuild_once(
+                                &index_path,
                                 &roots,
+                                &base,
+                                &overlay,
                                 queue.as_ref(),
+                                &rebuilding,
                                 &status,
-                                Arc::clone(&seen),
                                 respect_ignore,
                             );
+                        } else {
+                            for root in &roots.roots {
+                                walk_root_apply(
+                                    root,
+                                    &overlay,
+                                    &roots,
+                                    queue.as_ref(),
+                                    &status,
+                                    respect_ignore,
+                                );
+                            }
                         }
-                        let seen = Arc::try_unwrap(seen)
-                            .expect("seen has extra refs")
-                            .into_inner()
-                            .unwrap();
-                        index.write().unwrap().retain_known(&seen);
                     })
                     .expect("failed to spawn rescan thread");
             })
@@ -190,23 +255,62 @@ impl Engine {
 
         let handle = watcher::start_watcher(
             self.roots.roots.clone(),
-            index,
+            overlay,
             roots,
             cache,
             queue,
             status,
-            self.config.respect_ignore_files,
+            respect_ignore,
             on_error,
         );
         drop(handle); // detached: the thread runs until process exit
     }
 
-    /// A full rescan (e.g. after a system restore or if the index looks stale).
-    pub fn rebuild(&mut self) {
-        self.start_walk();
+    /// Trigger a background compaction/rebuild of the disk index.
+    pub fn rebuild(&self) {
+        if self.config.persist_index {
+            self.spawn_rebuild();
+        }
     }
 
-    /// Block until the initial walk finishes (bounded by `timeout`).
+    fn spawn_rebuild(&self) {
+        let roots = Arc::clone(&self.roots);
+        let status = Arc::clone(&self.status);
+        let base = Arc::clone(&self.base);
+        let overlay = Arc::clone(&self.overlay);
+        let queue = self.queue.clone();
+        let rebuilding = Arc::clone(&self.rebuilding);
+        let respect_ignore = self.config.respect_ignore_files;
+        let index_path = self.index_path.clone();
+        std::thread::Builder::new()
+            .name("index-rebuild".into())
+            .spawn(move || {
+                rebuild_once(
+                    &index_path,
+                    &roots,
+                    &base,
+                    &overlay,
+                    queue.as_ref(),
+                    &rebuilding,
+                    &status,
+                    respect_ignore,
+                );
+            })
+            .expect("failed to spawn rebuild thread");
+    }
+
+    /// Compaction trigger: fold a large change overlay back into the disk file.
+    fn maybe_compact(&self) {
+        if !self.config.persist_index || self.rebuilding.load(Ordering::Relaxed) {
+            return;
+        }
+        let pending = self.overlay.read().unwrap().pending_changes();
+        if pending > self.config.overlay_compaction_threshold {
+            self.spawn_rebuild();
+        }
+    }
+
+    /// Block until the initial build finishes (bounded by `timeout`).
     pub fn wait_live(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -232,54 +336,78 @@ impl Engine {
         } else {
             ContentIndexStatus::Disabled
         };
+        s.overlay_pending = self.overlay.read().unwrap().pending_changes();
+        match self.base.read().unwrap().as_deref() {
+            Some(b) => {
+                s.base_entries = b.len();
+                s.base_files = b.files();
+                s.base_dirs = b.dirs();
+            }
+            None => {
+                s.base_entries = 0;
+                s.base_files = 0;
+                s.base_dirs = 0;
+            }
+        }
         s
     }
 
-    /// Run one query against the live index.
+    /// Run one query against the live index (base + overlay).
     pub fn search(&self, q: &Query) -> Result<SearchResponse, String> {
         let t0 = Instant::now();
         let cq = CompiledQuery::compile(q)?;
         let limit = cq.limit;
         let want_content = cq.content.is_some();
+        self.maybe_compact();
 
-        // Phase 1: name matching against the in-memory index (fast).
-        let name_hits: Vec<PathBuf> = {
-            let idx = self.index.read().unwrap();
-            let cap = if want_content { limit.max(CONTENT_FANOUT_CAP) } else { limit };
-            let mut hits = Vec::new();
-            for e in idx.entries() {
-                if !cq.include_hidden && is_hidden(&e.path) {
-                    continue;
-                }
-                if cq.has_name_filter && !cq.name_matches(&e.path) {
-                    continue;
-                }
-                hits.push(e.path.clone());
-                if hits.len() >= cap {
-                    break;
-                }
+        let cap = if want_content { limit.max(CONTENT_FANOUT_CAP) } else { limit };
+        let name_filter = |p: &Path, meta: Meta| -> Option<(PathBuf, Meta)> {
+            if !cq.include_hidden && is_hidden(p) {
+                return None;
             }
-            hits
+            if cq.has_name_filter && !cq.name_matches(p) {
+                return None;
+            }
+            Some((p.to_path_buf(), meta))
         };
 
         let (results, truncated) = if want_content {
             let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""))?;
-            let paths: Vec<PathBuf> = if cq.has_name_filter {
-                name_hits
+            let candidates: Vec<PathBuf> = if cq.has_name_filter {
+                self.collect(&name_filter, cap)
+                    .into_iter()
+                    .map(|(p, _)| p)
+                    .collect()
             } else {
-                let idx = self.index.read().unwrap();
-                idx.file_paths()
+                // content-only: every indexed file
+                self.collect(
+                    &|p, meta| (!meta.is_dir).then(|| (p.to_path_buf(), meta)),
+                    cap,
+                )
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect()
             };
-            let matched = search_contents(&paths, &pattern, limit, &self.cache, self.queue.as_deref());
+            let matched =
+                search_contents(&candidates, &pattern, limit, &self.cache, self.queue.as_deref());
             let truncated = matched.len() >= limit;
             (
                 matched.into_iter().map(|p| self.row_for(&p)).collect(),
                 truncated,
             )
         } else {
-            let truncated = name_hits.len() >= limit;
+            let hits = self.collect(&name_filter, cap);
+            let truncated = hits.len() >= limit;
             (
-                name_hits.into_iter().take(limit).map(|p| self.row_for(&p)).collect(),
+                hits.into_iter()
+                    .take(limit)
+                    .map(|(p, m)| ResultRow {
+                        path: p,
+                        size: m.size,
+                        mtime: m.mtime,
+                        is_dir: m.is_dir,
+                    })
+                    .collect(),
                 truncated,
             )
         };
@@ -288,34 +416,151 @@ impl Engine {
             results,
             truncated,
             elapsed_ms: t0.elapsed().as_millis() as u64,
-            indexed: self.index.read().unwrap().files,
+            indexed: self.counts().0,
         })
     }
 
+    /// Iterate the base index (skipping overlay-removed paths, applying
+    /// overlay metadata) plus overlay-only additions, keeping entries for
+    /// which `f` returns `Some`. Bounded by `cap`.
+    fn collect<F>(&self, f: &F, cap: usize) -> Vec<(PathBuf, Meta)>
+    where
+        F: Fn(&Path, Meta) -> Option<(PathBuf, Meta)>,
+    {
+        let mut out: Vec<(PathBuf, Meta)> = Vec::new();
+        {
+            let base = self.base.read().unwrap();
+            let ov = self.overlay.read().unwrap();
+            if let Some(b) = base.as_deref() {
+                for i in 0..b.len() {
+                    let (cow, meta) = b.entry(i);
+                    let p = Path::new(cow.as_ref());
+                    if ov.is_removed(p) {
+                        continue;
+                    }
+                    let meta = ov.added.get(p).copied().unwrap_or(meta);
+                    if let Some(item) = f(p, meta) {
+                        out.push(item);
+                        if out.len() >= cap {
+                            return out;
+                        }
+                    }
+                }
+            }
+            for (path, meta) in ov.added.iter() {
+                if ov.removed.contains(path) {
+                    continue;
+                }
+                let in_base = base.as_deref().map_or(false, |b| b.contains(path));
+                if in_base {
+                    continue;
+                }
+                if let Some(item) = f(path, *meta) {
+                    out.push(item);
+                    if out.len() >= cap {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn row_for(&self, path: &Path) -> ResultRow {
-        let meta: Meta = self
-            .index
-            .read()
-            .unwrap()
-            .get(path)
-            .map(|e| e.meta)
-            .unwrap_or_default();
+        let m = self.meta_of(path);
         ResultRow {
             path: path.to_path_buf(),
-            size: meta.size,
-            mtime: meta.mtime,
-            is_dir: meta.is_dir,
+            size: m.size,
+            mtime: m.mtime,
+            is_dir: m.is_dir,
         }
     }
 
-    /// (files, dirs) counts for the status bar.
+    fn meta_of(&self, path: &Path) -> Meta {
+        let base = self.base.read().unwrap();
+        let ov = self.overlay.read().unwrap();
+        if let Some(m) = ov.added.get(path) {
+            return *m;
+        }
+        if ov.is_removed(path) {
+            return Meta::default();
+        }
+        base.as_deref().and_then(|b| b.meta_of(path)).unwrap_or_default()
+    }
+
+    /// (files, dirs) — base plus overlay deltas.
     pub fn counts(&self) -> (u64, u64) {
-        let idx = self.index.read().unwrap();
-        (idx.files, idx.dirs)
+        let base = self.base.read().unwrap();
+        let ov = self.overlay.read().unwrap();
+        let b = base.as_deref();
+        let (mut files, mut dirs) = b.map(|b| (b.files(), b.dirs())).unwrap_or((0, 0));
+        for (p, m) in &ov.added {
+            if b.map_or(true, |b| !b.contains(p)) {
+                if m.is_dir {
+                    dirs += 1;
+                } else {
+                    files += 1;
+                }
+            }
+        }
+        for p in &ov.removed {
+            if let Some(m) = b.and_then(|b| b.meta_of(p)) {
+                if m.is_dir {
+                    dirs = dirs.saturating_sub(1);
+                } else {
+                    files = files.saturating_sub(1);
+                }
+            }
+        }
+        (files, dirs)
     }
 
     #[allow(dead_code)]
     pub fn config(&self) -> &Config {
         &self.config
     }
+}
+
+/// Walk all roots and collect every entry (used to build the disk index).
+fn build_entries(
+    roots: &Arc<RootSet>,
+    queue: Option<&Arc<ExtractQueue>>,
+    status: &Arc<RwLock<Status>>,
+    respect_ignore: bool,
+) -> Vec<(PathBuf, Meta)> {
+    let mut out = Vec::new();
+    for root in &roots.roots {
+        out.extend(walk_root_collect(root, roots, queue, status, respect_ignore));
+    }
+    out
+}
+
+/// One background compaction: walk live, write the disk index, swap the base,
+/// and prune the overlay to true deltas.
+fn rebuild_once(
+    index_path: &Path,
+    roots: &Arc<RootSet>,
+    base: &RwLock<Option<Arc<DiskIndex>>>,
+    overlay: &RwLock<Overlay>,
+    queue: Option<&Arc<ExtractQueue>>,
+    rebuilding: &AtomicBool,
+    status: &Arc<RwLock<Status>>,
+    respect_ignore: bool,
+) {
+    if rebuilding.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let entries = build_entries(roots, queue, status, respect_ignore);
+    match DiskIndex::write_and_load(index_path, &entries) {
+        Ok(idx) => {
+            let idx = Arc::new(idx);
+            *base.write().unwrap() = Some(Arc::clone(&idx));
+            overlay
+                .write()
+                .unwrap()
+                .prune_against(|p| idx.contains(p));
+        }
+        Err(e) => eprintln!("index rebuild failed: {e}"),
+    }
+    rebuilding.store(false, Ordering::SeqCst);
 }

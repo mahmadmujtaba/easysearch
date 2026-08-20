@@ -279,6 +279,12 @@ The GUI and CLI do **not** use this by default (they link `core/` directly).
 | Typical `/home` (≈300k files) | ≈ 60–90 MB total RSS |
 | Content index (when **enabled**) | + extracted text only (≤ 256 MB cap, LRU); **0 MB / 0 CPU when off** |
 
+**Measured (MVP, Debian 13, real `$HOME`, 137k files):** CLI binary 3.3 MB, GUI
+12 MB; idle RSS ≈ 79 MiB for the CLI engine (≈ 0.5 KB/path; path storage is
+currently duplicated between the entry `Vec` and the lookup `HashMap` — path
+interning is a planned optimization); GUI ≈ 173 MiB incl. GL context; filename
+query < 1 ms engine time at 137k entries; content query ≈ 23 ms over 137k files.
+
 ## 10. GUI (egui) Specification
 
 - **Search box** (top, focus-on-start): type → debounced live results (Everything-style).

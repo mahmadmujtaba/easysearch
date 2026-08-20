@@ -6,6 +6,17 @@ use std::path::PathBuf;
 pub const CONFIG_DIR: &str = "everything-linux";
 pub const CONFIG_FILE: &str = "config.json";
 
+/// `$XDG_CONFIG_HOME` or `~/.config`.
+pub(crate) fn xdg_config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".config"))
+                .unwrap_or_else(|| PathBuf::from("."))
+        })
+}
+
 /// Filesystem types that are never indexed (pseudo-filesystems, network,
 /// overlays, ...). Network/tmpfs entries are listed here AND handled by the
 /// `exclude_*` toggles; keeping them in the default list makes the exclusions
@@ -35,6 +46,14 @@ pub struct Config {
     /// `~/.config/everything-linux/ignore`) while walking, so non-essential
     /// folders listed there are never indexed.
     pub respect_ignore_files: bool,
+    /// Keep the index on disk (memory-mapped) instead of entirely in RAM, and
+    /// keep only recent filesystem changes in memory. See docs/scope.md §9.
+    pub persist_index: bool,
+    /// Directory for the on-disk index (default: `$XDG_CACHE_HOME/everything-linux`).
+    pub disk_index_dir: Option<String>,
+    /// When the in-memory change overlay exceeds this many entries, it is
+    /// compacted into the on-disk index in the background.
+    pub overlay_compaction_threshold: usize,
     /// Extra filesystem types to exclude (union of DEFAULT_EXCLUDED_FSTYPES).
     pub exclude_fstypes: Vec<String>,
     /// Optional background content cache. Default off: content queries read
@@ -58,6 +77,9 @@ impl Default for Config {
             exclude_removable: true,
             exclude_network: true,
             respect_ignore_files: true,
+            persist_index: true,
+            disk_index_dir: None,
+            overlay_compaction_threshold: 8192,
             exclude_fstypes: Vec::new(),
             content_index_enabled: false,
             content_index_max_file_bytes: 8 * 1024 * 1024,
@@ -71,15 +93,28 @@ impl Default for Config {
 impl Config {
     /// Default location: `$XDG_CONFIG_HOME/everything-linux/config.json`.
     pub fn default_path() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
+        let base = xdg_config_dir();
+        base.join(CONFIG_DIR).join(CONFIG_FILE)
+    }
+
+    /// Default location of the on-disk index: `$XDG_CACHE_HOME/everything-linux`.
+    pub fn default_disk_index_dir() -> PathBuf {
+        let base = std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                let home = std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."));
-                home.join(".config")
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(".cache"))
+                    .unwrap_or_else(|| PathBuf::from("."))
             });
-        base.join(CONFIG_DIR).join(CONFIG_FILE)
+        base.join(CONFIG_DIR)
+    }
+
+    /// Effective on-disk index directory.
+    pub fn disk_index_dir(&self) -> PathBuf {
+        match &self.disk_index_dir {
+            Some(d) => PathBuf::from(d),
+            None => Self::default_disk_index_dir(),
+        }
     }
 
     /// Load config from the default path; returns defaults if absent or invalid.

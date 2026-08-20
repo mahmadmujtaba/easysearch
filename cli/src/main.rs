@@ -20,7 +20,9 @@ enum Command {
     /// Search filenames and/or file contents (realtime, live index)
     Search {
         /// Everything-style query: space-separated terms are ANDed,
-        /// `!term` excludes (e.g. "invoice 2026 *.pdf !draft")
+        /// `!term` excludes (e.g. "invoice 2026 *.pdf !draft").
+        /// Omit (or pass "") for content-only searches.
+        #[arg(default_value = "")]
         query: String,
         /// Treat query terms as regex instead of glob patterns
         #[arg(long)]
@@ -98,7 +100,14 @@ fn main() {
             println!("state:          {:?}", s.state);
             println!("files:          {files}");
             println!("dirs:           {dirs}");
-            println!("watcher:        {}", if s.degraded { "degraded (periodic rescan)" } else { "live (inotify)" });
+            if s.base_entries > 0 {
+                println!("index:          mmap-backed ({} entries, {} files / {} dirs in base)",
+                    s.base_entries, s.base_files, s.base_dirs);
+            } else {
+                println!("index:          in-memory (RAM-only mode)");
+            }
+            println!("overlay:        {} pending change(s)", s.overlay_pending);
+            println!("watcher:        {}", if s.degraded { "degraded (periodic rebuild)" } else { "live (inotify)" });
             println!("skipped dirs:   {}", s.skipped);
             match &s.content_index {
                 everything_core::ContentIndexStatus::Disabled => {

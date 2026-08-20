@@ -234,7 +234,14 @@ impl eframe::App for App {
                 let state = match self.status.state {
                     State::Starting => "starting…".to_string(),
                     State::Indexing => format!("indexing… {files} files"),
-                    State::Live => format!("{files} files · {dirs} dirs"),
+                    State::Live => {
+                        let mode = if self.status.base_entries > 0 {
+                            "mmap".to_string()
+                        } else {
+                            "ram".to_string()
+                        };
+                        format!("{files} files · {dirs} dirs · {mode}")
+                    }
                 };
                 let watcher = if self.status.degraded {
                     "⚠ periodic rescan (watch limit hit)".to_string()

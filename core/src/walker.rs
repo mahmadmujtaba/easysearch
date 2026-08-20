@@ -1,57 +1,73 @@
-//! Cold (and rescan) filesystem walk using ripgrep's `ignore` walker.
+//! Cold (and rebuild) filesystem walk using ripgrep's `ignore` walker.
 //!
-//! Results are batched and applied to the shared index under a short write
-//! lock, so queries can run while indexing is still in progress.
-//!
-//! When `respect_ignore` is set (config default), `.ignore`/`.gitignore` files
-//! in the searched tree are honored (gitignore syntax), plus a global ignore
-//! file at `~/.config/everything-linux/ignore`.
+//! Results are either collected (`walk_root_collect`, for building the
+//! on-disk index) or applied in batches to the change overlay
+//! (`walk_root_apply`, for RAM-only mode and watcher-driven subtree indexing).
+//! When `respect_ignore` is set, `.gitignore`/`.ignore` files in the searched
+//! tree are honored, plus a global ignore file at
+//! `~/.config/everything-linux/ignore`.
 
 use crate::content_index::ExtractQueue;
 use crate::engine::Status;
-use crate::index::{Index, Meta};
+use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use ignore::{WalkBuilder, WalkState};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 const BATCH: usize = 512;
 
-/// Walk `root` and add everything to `index`.
-pub fn walk_root(
-    root: &Path,
-    index: &Arc<RwLock<Index>>,
-    roots: &Arc<RootSet>,
-    queue: Option<&Arc<ExtractQueue>>,
-    status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
-) {
-    walk_impl(root, index, roots, queue, status, None, respect_ignore);
+enum Sink {
+    /// Collect everything (used to build the disk index).
+    Collect(Arc<Mutex<Vec<(PathBuf, Meta)>>>),
+    /// Apply to the change overlay (RAM-only mode / watcher subtrees).
+    Apply(Arc<RwLock<Overlay>>),
 }
 
-/// Walk `root`, adding entries to `index` and recording every seen path in
-/// `seen` (used by degraded-mode reconciliation).
-pub fn walk_root_into(
+impl Clone for Sink {
+    fn clone(&self) -> Sink {
+        match self {
+            Sink::Collect(v) => Sink::Collect(Arc::clone(v)),
+            Sink::Apply(o) => Sink::Apply(Arc::clone(o)),
+        }
+    }
+}
+
+/// Walk `root` and collect every entry.
+pub fn walk_root_collect(
     root: &Path,
-    index: &Arc<RwLock<Index>>,
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    seen: Arc<Mutex<HashSet<PathBuf>>>,
+    respect_ignore: bool,
+) -> Vec<(PathBuf, Meta)> {
+    let out = Arc::new(Mutex::new(Vec::new()));
+    walk_impl(root, roots, queue, status, respect_ignore, Sink::Collect(Arc::clone(&out)));
+    match Arc::try_unwrap(out) {
+        Ok(m) => m.into_inner().unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Walk `root` and apply every entry to the overlay.
+pub fn walk_root_apply(
+    root: &Path,
+    overlay: &Arc<RwLock<Overlay>>,
+    roots: &Arc<RootSet>,
+    queue: Option<&Arc<ExtractQueue>>,
+    status: &Arc<RwLock<Status>>,
     respect_ignore: bool,
 ) {
-    walk_impl(root, index, roots, queue, status, Some(seen), respect_ignore);
+    walk_impl(root, roots, queue, status, respect_ignore, Sink::Apply(Arc::clone(overlay)));
 }
 
 fn walk_impl(
     root: &Path,
-    index: &Arc<RwLock<Index>>,
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    seen: Option<Arc<Mutex<HashSet<PathBuf>>>>,
     respect_ignore: bool,
+    sink: Sink,
 ) {
     let mut builder = WalkBuilder::new(root);
     builder
@@ -63,8 +79,6 @@ fn walk_impl(
                 .unwrap_or(4),
         );
     if respect_ignore {
-        // Honor .ignore / .gitignore files everywhere (not only in git repos),
-        // including the global ignore file at ~/.config/everything-linux/ignore.
         builder
             .ignore(true)
             .git_ignore(true)
@@ -90,11 +104,10 @@ fn walk_impl(
 
     builder.build_parallel().run(|| {
         let batch = Arc::clone(&shared);
-        let seen = seen.clone();
-        let index = Arc::clone(index);
         let roots = Arc::clone(roots);
         let queue = queue.cloned();
         let status = Arc::clone(status);
+        let sink = sink.clone();
         Box::new(move |entry| {
             let entry = match entry {
                 Ok(e) => e,
@@ -132,11 +145,8 @@ fn walk_impl(
                 b.push((pb.clone(), emeta));
                 if b.len() >= BATCH {
                     let drained = std::mem::take(&mut *b);
-                    if let Some(seen) = seen.as_deref() {
-                        seen.lock().unwrap().extend(drained.iter().map(|(p, _)| p.clone()));
-                    }
                     drop(b);
-                    apply(&index, drained);
+                    flush(&sink, drained);
                 }
             }
             if let Some(q) = queue.as_deref() {
@@ -148,17 +158,28 @@ fn walk_impl(
         })
     });
 
-    // Final flush of any entries left in the shared batch.
+    // Final flush.
     {
         let mut guard = shared.lock().unwrap();
         if !guard.is_empty() {
             let drained = std::mem::take(&mut *guard);
-            if let Some(seen) = seen.as_deref() {
-                seen.lock().unwrap().extend(drained.iter().map(|(p, _)| p.clone()));
-            }
             drop(guard);
-            apply(index, drained);
+            flush(&sink, drained);
         }
+    }
+}
+
+fn flush(sink: &Sink, drained: Vec<(PathBuf, Meta)>) {
+    match sink {
+        Sink::Collect(out) => out.lock().unwrap().extend(drained),
+        Sink::Apply(overlay) => apply(overlay, drained),
+    }
+}
+
+fn apply(overlay: &Arc<RwLock<Overlay>>, batch: Vec<(PathBuf, Meta)>) {
+    let mut ov = overlay.write().unwrap();
+    for (path, meta) in batch {
+        ov.upsert(path, meta);
     }
 }
 
@@ -166,22 +187,9 @@ fn walk_impl(
 /// Patterns use gitignore syntax, matched relative to the working directory
 /// (or use `**/` prefixes to match anywhere).
 fn global_ignore_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join(".config"))
-                .unwrap_or_default()
-        });
+    let base = crate::config::xdg_config_dir();
     let path = base.join("everything-linux").join("ignore");
     path.is_file().then_some(path)
-}
-
-fn apply(index: &Arc<RwLock<Index>>, batch: Vec<(PathBuf, Meta)>) {
-    let mut idx = index.write().unwrap();
-    for (path, meta) in batch {
-        idx.upsert(path, meta);
-    }
 }
 
 fn bump_skipped(status: &Arc<RwLock<Status>>) {
