@@ -4,6 +4,15 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Wayland-first display**: the GUI registers the `everything-linux` app id
+  with the compositor (window icon / taskbar grouping). winit already prefers
+  native Wayland whenever `WAYLAND_DISPLAY` is set and falls back to X11;
+  forcing X11 is done via `env -u WAYLAND_DISPLAY everything-gui`.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added

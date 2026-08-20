@@ -297,6 +297,13 @@ index; remaining anonymous memory is egui UI state + allocator arena residual.
 
 ## 10. GUI (egui) Specification
 
+**Display backends: Wayland-first, X11 second.** The frontend registers the
+`everything-linux` app id with the compositor (Wayland desktop integration).
+winit's selection is built-in and already Wayland-first: `WAYLAND_DISPLAY` set
+→ native Wayland (preferred, since an X11 display can exist under Wayland via
+XWayland), only `DISPLAY` set → X11 fallback. Force X11 by launching with
+`WAYLAND_DISPLAY` unset (`env -u WAYLAND_DISPLAY everything-gui`).
+
 - **Search box** (top, focus-on-start): type → debounced live results (Everything-style).
 - **Toggle row:** regex | content | case-sensitive | hidden files | full-path match.
 - **Results list** (egui table/selectable rows): name, full path, size, mtime, type icon;

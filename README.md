@@ -103,6 +103,21 @@ Query semantics (Everything-style):
 dirs, caches, editor settings, VCS internals. Any `.gitignore`/`.ignore` in the
 searched tree is honored.
 
+## Display backends (Wayland-first, X11 second)
+
+The GUI is **Wayland-first**: winit connects to a native Wayland session
+whenever `WAYLAND_DISPLAY` is set (it prefers Wayland because an X11 display
+can exist under Wayland via XWayland) and automatically falls back to **X11**
+when only `DISPLAY` is present. The app id `everything-linux` is registered
+with the Wayland compositor for window icon / taskbar grouping.
+
+To force a backend:
+
+```sh
+everything-gui                            # auto: Wayland, else X11
+export -n WAYLAND_DISPLAY; everything-gui # force X11 (or: env -u WAYLAND_DISPLAY)
+```
+
 ## Realtime & watch limits
 
 The index is updated by `inotify`. The kernel caps watches per user

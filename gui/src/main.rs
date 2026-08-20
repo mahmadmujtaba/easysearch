@@ -69,6 +69,11 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Everything for Linux")
+            // Wayland-first: the app id is what the compositor uses for
+            // desktop integration (window icon, taskbar grouping). X11 is the
+            // fallback backend — winit picks it automatically when no Wayland
+            // session is available (or with WINIT_UNIX_BACKEND=x11).
+            .with_app_id("everything-linux")
             .with_inner_size([1120.0, 720.0])
             .with_min_inner_size([560.0, 360.0]),
         ..Default::default()

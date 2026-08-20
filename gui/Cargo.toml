@@ -11,6 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 everything-core = { path = "../core" }
+# Display backends: Wayland-first, X11 second. winit connects to Wayland
+# whenever WAYLAND_DISPLAY is set (it prefers Wayland because an X11 display
+# can exist under Wayland via XWayland) and falls back to X11 when only DISPLAY
+# is present. To force X11, launch with WAYLAND_DISPLAY unset:
+#   env -u WAYLAND_DISPLAY everything-gui
 eframe = { version = "0.31", features = ["persistence"] }
 egui_extras = "0.31"
 serde = { version = "1", features = ["derive"] }
