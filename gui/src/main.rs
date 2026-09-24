@@ -21,6 +21,8 @@ mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
+/// Selectable UI zoom levels (1.0 = 100%).
+const ZOOM_LEVELS: &[f32] = &[1.0, 1.1, 1.25];
 
 /// Complete colour scheme for one appearance mode.
 ///
@@ -230,7 +232,7 @@ fn main() -> eframe::Result {
 }
 
 /// Persistent GUI preferences (`~/.config/everything-linux/gui.json`).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct GuiPrefs {
     /// None = follow the system theme.
@@ -240,6 +242,23 @@ struct GuiPrefs {
     close_to_tray: bool,
     /// Most recent first.
     history: Vec<String>,
+    /// UI zoom factor (1.0 = 100%).
+    zoom: f32,
+    /// Include folders in search results.
+    include_dirs: bool,
+}
+
+impl Default for GuiPrefs {
+    fn default() -> Self {
+        GuiPrefs {
+            dark: None,
+            show_preview: false,
+            close_to_tray: false,
+            history: Vec::new(),
+            zoom: 1.0,
+            include_dirs: true,
+        }
+    }
 }
 
 impl GuiPrefs {
@@ -255,10 +274,20 @@ impl GuiPrefs {
     }
 
     fn load() -> GuiPrefs {
-        std::fs::read_to_string(Self::path())
+        let mut p: GuiPrefs = std::fs::read_to_string(Self::path())
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Snap a missing or invalid persisted zoom to the nearest level.
+        p.zoom = if p.zoom.is_finite() {
+            *ZOOM_LEVELS
+                .iter()
+                .min_by(|a, b| (p.zoom - **a).abs().total_cmp(&(p.zoom - **b).abs()))
+                .unwrap_or(&1.0)
+        } else {
+            1.0
+        };
+        p
     }
 
     fn save(&self) {
@@ -421,6 +450,7 @@ impl App {
             show_shortcuts: false,
         };
         app.apply_style(&cc.egui_ctx);
+        cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
         app.send_query();
         app
     }
@@ -559,6 +589,7 @@ impl App {
             full_path: self.full_path,
             content,
             category: self.category,
+            include_dirs: self.prefs.include_dirs,
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search(q));
@@ -1149,6 +1180,7 @@ impl eframe::App for App {
         self.menu_bar(ctx);
         self.top_bar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
+        self.bottom_controls(ctx);
         self.sidebar(ctx);
         if self.prefs.show_preview {
             self.refresh_preview(ctx);
@@ -1661,15 +1693,31 @@ impl App {
 
         let ctx = ui.ctx().clone();
         let t = self.theme();
+
+        // Column widths are recomputed from the available width every frame so
+        // the layout stays stable when the UI zoom (or the window) changes. The
+        // metadata columns keep a fixed size; the Name column takes the rest.
+        //
+        // This deliberately avoids `TableBuilder::resizable`, which caches each
+        // column's width in points after the first frame (including the
+        // `remainder` column) and then lays them out absolutely — so when zoom
+        // changed the available width, the total overflowed and the Size /
+        // Modified / Actions columns were pushed off-screen.
+        let spacing = ui.spacing().item_spacing.x;
+        let size_w = 92.0_f32;
+        let mod_w = 148.0_f32;
+        let act_w = 92.0_f32;
+        let fixed = size_w + mod_w + act_w + spacing * 3.0;
+        let name_w = (ui.available_width() - fixed - 2.0).max(80.0);
+
         let mut table = TableBuilder::new(ui)
             .striped(true)
-            .resizable(true)
             .sense(egui::Sense::click()) // rows must sense clicks, not just hover
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::remainder().clip(true))
-            .column(Column::exact(96.0).at_least(72.0).clip(true))
-            .column(Column::exact(150.0).at_least(110.0).clip(true))
-            .column(Column::exact(96.0).at_least(80.0).clip(true));
+            .column(Column::exact(name_w))
+            .column(Column::exact(size_w))
+            .column(Column::exact(mod_w))
+            .column(Column::exact(act_w));
         if let Some(target) = self.scroll_to.take() {
             table = table.scroll_to_row(target, Some(egui::Align::Center));
         }
@@ -2129,6 +2177,72 @@ impl App {
                 );
             });
         });
+    }
+
+    /// Bottom control strip: UI zoom, file-type filter, and folder toggle.
+    fn bottom_controls(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        egui::TopBottomPanel::bottom("controls")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(14, 6)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // --- zoom levels ------------------------------------------
+                    ui.label(egui::RichText::new("Zoom").size(12.0).color(t.faint));
+                    let current = ctx.zoom_factor();
+                    for level in ZOOM_LEVELS {
+                        let active = (current - level).abs() < 0.001;
+                        let label =
+                            egui::RichText::new(format!("{}%", (level * 100.0).round() as i32))
+                                .size(12.0);
+                        if ui.selectable_label(active, label).clicked() {
+                            ctx.set_zoom_factor(*level);
+                            self.prefs.zoom = *level;
+                            self.prefs.save();
+                        }
+                    }
+
+                    ui.separator();
+
+                    // --- file-type filter ------------------------------------
+                    ui.label(egui::RichText::new("Type").size(12.0).color(t.faint));
+                    let current = CATEGORIES
+                        .iter()
+                        .find(|(_, c)| *c == self.category)
+                        .map(|(l, _)| *l)
+                        .unwrap_or("All files");
+                    let mut chosen: Option<Category> = None;
+                    egui::ComboBox::from_id_salt("type_filter")
+                        .selected_text(egui::RichText::new(current).size(12.5))
+                        .width(150.0)
+                        .show_ui(ui, |ui| {
+                            for (label, cat) in CATEGORIES {
+                                if ui.selectable_label(self.category == *cat, *label).clicked() {
+                                    chosen = Some(*cat);
+                                }
+                            }
+                        });
+                    if let Some(c) = chosen {
+                        self.category = c;
+                        self.send_query();
+                    }
+
+                    ui.separator();
+
+                    // --- include folders --------------------------------------
+                    if ui
+                        .checkbox(&mut self.prefs.include_dirs, "Folders")
+                        .on_hover_text("Include folders in results")
+                        .changed()
+                    {
+                        self.prefs.save();
+                        self.send_query();
+                    }
+                });
+            });
     }
 }
 

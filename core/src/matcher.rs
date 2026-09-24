@@ -43,6 +43,8 @@ pub struct Query {
     pub content: Option<String>,
     /// Sidebar category filter (see [`Category`]).
     pub category: Category,
+    /// Include directories in results (`false` = files only).
+    pub include_dirs: bool,
     pub limit: usize,
 }
 
@@ -56,6 +58,7 @@ impl Default for Query {
             full_path: false,
             content: None,
             category: Category::All,
+            include_dirs: true,
             limit: 1000,
         }
     }
@@ -85,26 +88,30 @@ pub fn matches_category(cat: &Category, path: &Path, meta: &crate::overlay::Meta
         }
         Category::Images => in_set(
             path,
-            &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "ico"],
+            &[
+                "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "ico",
+            ],
         ),
         Category::Docs => in_set(
             path,
             &[
-                "pdf", "doc", "docx", "odt", "rtf", "txt", "md", "log", "csv", "xls",
-                "xlsx", "ods", "ppt", "pptx", "odp", "epub", "tex",
+                "pdf", "doc", "docx", "odt", "rtf", "txt", "md", "log", "csv", "xls", "xlsx",
+                "ods", "ppt", "pptx", "odp", "epub", "tex",
             ],
         ),
         Category::Code => in_set(
             path,
             &[
-                "rs", "py", "js", "ts", "go", "c", "cpp", "h", "hpp", "java", "rb",
-                "sh", "toml", "json", "yaml", "yml", "html", "css", "sql", "php",
-                "lua", "zig", "ex", "exs", "kt", "swift", "v", "nix", "ps1", "bat",
+                "rs", "py", "js", "ts", "go", "c", "cpp", "h", "hpp", "java", "rb", "sh", "toml",
+                "json", "yaml", "yml", "html", "css", "sql", "php", "lua", "zig", "ex", "exs",
+                "kt", "swift", "v", "nix", "ps1", "bat",
             ],
         ),
         Category::Archives => in_set(
             path,
-            &["zip", "tar", "gz", "xz", "bz2", "7z", "rar", "zst", "deb", "rpm"],
+            &[
+                "zip", "tar", "gz", "xz", "bz2", "7z", "rar", "zst", "deb", "rpm",
+            ],
         ),
         Category::Audio => in_set(
             path,
@@ -112,7 +119,9 @@ pub fn matches_category(cat: &Category, path: &Path, meta: &crate::overlay::Meta
         ),
         Category::Video => in_set(
             path,
-            &["mp4", "mkv", "avi", "mov", "webm", "flv", "mpg", "mpeg", "wmv"],
+            &[
+                "mp4", "mkv", "avi", "mov", "webm", "flv", "mpg", "mpeg", "wmv",
+            ],
         ),
         Category::Large { min_bytes } => !meta.is_dir && meta.size >= *min_bytes,
     }
@@ -143,6 +152,7 @@ pub struct CompiledQuery {
     pub full_path: bool,
     pub content: Option<String>,
     pub category: Category,
+    pub include_dirs: bool,
     pub limit: usize,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
@@ -176,6 +186,7 @@ impl CompiledQuery {
             full_path: q.full_path,
             content: q.content.clone(),
             category: q.category,
+            include_dirs: q.include_dirs,
             limit: q.limit.max(1),
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
@@ -288,13 +299,25 @@ mod tests {
     #[test]
     fn category_matching() {
         use crate::overlay::Meta;
-        let m = |size: u64, mtime: i64, is_dir: bool| Meta { size, mtime, is_dir };
+        let m = |size: u64, mtime: i64, is_dir: bool| Meta {
+            size,
+            mtime,
+            is_dir,
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        assert!(matches_category(&Category::Images, Path::new("/x/photo.PNG"), &m(0, 0, false)));
-        assert!(!matches_category(&Category::Images, Path::new("/x/photo.pdf"), &m(0, 0, false)));
+        assert!(matches_category(
+            &Category::Images,
+            Path::new("/x/photo.PNG"),
+            &m(0, 0, false)
+        ));
+        assert!(!matches_category(
+            &Category::Images,
+            Path::new("/x/photo.pdf"),
+            &m(0, 0, false)
+        ));
         assert!(matches_category(
             &Category::Large { min_bytes: 1024 },
             Path::new("/x/big.bin"),
@@ -315,8 +338,20 @@ mod tests {
             Path::new("/x/o.txt"),
             &m(1, now - 7200, false)
         ));
-        assert!(matches_category(&Category::Code, Path::new("/x/main.rs"), &m(1, 0, false)));
-        assert!(!matches_category(&Category::Code, Path::new("/x/main.md"), &m(1, 0, false)));
-        assert!(matches_category(&Category::Docs, Path::new("/x/note.md"), &m(1, 0, false)));
+        assert!(matches_category(
+            &Category::Code,
+            Path::new("/x/main.rs"),
+            &m(1, 0, false)
+        ));
+        assert!(!matches_category(
+            &Category::Code,
+            Path::new("/x/main.md"),
+            &m(1, 0, false)
+        ));
+        assert!(matches_category(
+            &Category::Docs,
+            Path::new("/x/note.md"),
+            &m(1, 0, false)
+        ));
     }
 }

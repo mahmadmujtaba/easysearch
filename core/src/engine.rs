@@ -375,6 +375,9 @@ impl Engine {
             limit
         };
         let name_filter = |p: &Path, meta: Meta| -> Option<(PathBuf, Meta)> {
+            if !q.include_dirs && meta.is_dir {
+                return None;
+            }
             if !cq.include_hidden && is_hidden(p) {
                 return None;
             }

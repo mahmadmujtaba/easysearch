@@ -4,6 +4,31 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-24
+
+### Added
+
+- **Bottom control strip**: a UI **zoom** selector with three levels (100% /
+  110% / 125%), a **file-type** dropdown (the same categories as the sidebar,
+  kept in sync whichever you use), and a **Folders** toggle that includes or
+  excludes directories from results. Zoom, the folder toggle and the type
+  choice persist in `gui.json`.
+- `Query::include_dirs` (default `true`), so directories can be excluded by the
+  engine rather than by trimming the result list — counts, limits and
+  truncation stay correct. The CLI passes the default, and an end-to-end test
+  covers both settings.
+
+### Fixed
+
+- **Result columns no longer break when the UI is zoomed.** `egui_extras` caches
+  every column's width — including a `remainder` column — as soon as `resizable`
+  is enabled, and then lays the columns out absolutely. Changing zoom changed the
+  available (logical) width, so the cached total overflowed and the Size /
+  Modified / Actions columns were pushed off-screen and clipped. Column widths
+  are now recomputed each frame from the available width: the metadata columns
+  keep a fixed size and the Name column takes the remainder, so the layout is
+  stable under zoom and window resizing.
+
 ## [0.5.0] - 2026-09-24
 
 ### Changed
@@ -205,6 +230,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.6.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.6.0
 [0.5.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.5.0
 [0.4.1]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.1
 [0.4.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.0

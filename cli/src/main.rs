@@ -81,6 +81,7 @@ fn main() {
                 full_path: path,
                 content,
                 category: everything_core::Category::All,
+                include_dirs: true,
                 limit,
             };
             match engine.search(&q) {

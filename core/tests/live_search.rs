@@ -319,3 +319,41 @@ fn ram_mode_still_works() {
         "realtime create not picked up in RAM mode"
     );
 }
+
+#[test]
+fn include_dirs_toggle_filters_folders() {
+    let dir = TestDir::new("dirs");
+    let root = dir.0.clone();
+
+    std::fs::create_dir_all(root.join("reports-2026")).unwrap();
+    std::fs::write(root.join("reports-2026.txt"), "x").unwrap();
+
+    let engine = test_engine(&root);
+
+    // Default: folders are part of the results.
+    let with = engine
+        .search(&Query {
+            name: "reports*".into(),
+            ..Query::default()
+        })
+        .unwrap();
+    assert!(
+        with.results.iter().any(|r| r.is_dir),
+        "folder should be included by default"
+    );
+    assert!(with.results.iter().any(|r| !r.is_dir));
+
+    // Opting out must drop the folder but keep the file.
+    let without = engine
+        .search(&Query {
+            name: "reports*".into(),
+            include_dirs: false,
+            ..Query::default()
+        })
+        .unwrap();
+    assert!(!without.results.is_empty(), "the file should still match");
+    assert!(
+        without.results.iter().all(|r| !r.is_dir),
+        "folders must be excluded when include_dirs is false"
+    );
+}
