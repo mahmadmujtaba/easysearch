@@ -5,7 +5,7 @@
 //! dead weight. Requests use `Connection: close`, so the body is read to EOF;
 //! `Transfer-Encoding: chunked` is decoded when the server uses it.
 
-use crate::api::{ErrorDto, Health, SearchResponseDto, StatusReport};
+use crate::api::{CountDto, ErrorDto, Health, SearchResponseDto, StatusReport};
 use crate::engine::{SearchResponse, Status};
 use crate::matcher::Query;
 use std::io::{Read, Write};
@@ -84,6 +84,15 @@ impl Remote {
 
     pub fn rebuild(&self) -> Result<(), String> {
         request(&self.addr, "POST", "/v1/rebuild", Some(b"{}")).map(|_| ())
+    }
+
+    /// Number of entries matching `q` (the daemon counts without shipping rows).
+    pub fn count(&self, q: &Query) -> Result<u64, String> {
+        let payload = serde_json::to_vec(q).map_err(|e| e.to_string())?;
+        let body = request(&self.addr, "POST", "/v1/count", Some(&payload))?;
+        let dto: CountDto =
+            serde_json::from_slice(&body).map_err(|e| format!("bad count response: {e}"))?;
+        Ok(dto.count)
     }
 
     /// Last polled status report (`None` until the first successful poll).

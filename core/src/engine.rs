@@ -7,10 +7,10 @@
 //! and the recent-change overlay are always resident. See docs/scope.md §9.
 
 use crate::config::Config;
-use crate::content::{search_contents, ContentPattern};
-use crate::content_index::{spawn_extractor, ContentIndex, ExtractQueue};
+use crate::content::{ContentPattern, search_contents};
+use crate::content_index::{ContentIndex, ExtractQueue, spawn_extractor};
 use crate::disk_index::{DiskIndex, INDEX_FILE};
-use crate::matcher::{is_hidden, matches_category, CompiledQuery, Query};
+use crate::matcher::{CompiledQuery, Query, is_hidden, matches_category};
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use crate::walker::{walk_root_apply, walk_root_collect};
@@ -249,29 +249,31 @@ impl Engine {
                 let status = Arc::clone(&status);
                 std::thread::Builder::new()
                     .name("rescan".into())
-                    .spawn(move || loop {
-                        std::thread::sleep(Duration::from_secs(secs));
-                        if persist {
-                            rebuild_once(
-                                &index_path,
-                                &roots,
-                                &base,
-                                &overlay,
-                                queue.as_ref(),
-                                &rebuilding,
-                                &status,
-                                respect_ignore,
-                            );
-                        } else {
-                            for root in &roots.roots {
-                                walk_root_apply(
-                                    root,
-                                    &overlay,
+                    .spawn(move || {
+                        loop {
+                            std::thread::sleep(Duration::from_secs(secs));
+                            if persist {
+                                rebuild_once(
+                                    &index_path,
                                     &roots,
+                                    &base,
+                                    &overlay,
                                     queue.as_ref(),
+                                    &rebuilding,
                                     &status,
                                     respect_ignore,
                                 );
+                            } else {
+                                for root in &roots.roots {
+                                    walk_root_apply(
+                                        root,
+                                        &overlay,
+                                        &roots,
+                                        queue.as_ref(),
+                                        &status,
+                                        respect_ignore,
+                                    );
+                                }
                             }
                         }
                     })
@@ -392,19 +394,7 @@ impl Engine {
             limit
         };
         let name_filter = |p: &Path, meta: Meta| -> Option<(PathBuf, Meta)> {
-            if !q.include_dirs && meta.is_dir {
-                return None;
-            }
-            if !cq.include_hidden && is_hidden(p) {
-                return None;
-            }
-            if cq.has_name_filter && !cq.name_matches(p) {
-                return None;
-            }
-            if !matches_category(&cq.category, p, &meta) {
-                return None;
-            }
-            Some((p.to_path_buf(), meta))
+            accepts(&cq, p, meta, false).then(|| (p.to_path_buf(), meta))
         };
 
         let (results, truncated) = if want_content {
@@ -417,15 +407,7 @@ impl Engine {
             } else {
                 // content-only: every indexed file
                 self.collect(
-                    &|p, meta| {
-                        if meta.is_dir {
-                            return None;
-                        }
-                        if !matches_category(&cq.category, p, &meta) {
-                            return None;
-                        }
-                        Some((p.to_path_buf(), meta))
-                    },
+                    &|p, meta| accepts(&cq, p, meta, true).then(|| (p.to_path_buf(), meta)),
                     cap,
                 )
                 .into_iter()
@@ -472,6 +454,47 @@ impl Engine {
     /// Iterate the base index (skipping overlay-removed paths, applying
     /// overlay metadata) plus overlay-only additions, keeping entries for
     /// which `f` returns `Some`. Bounded by `cap`.
+    /// Count entries matching `q` without materialising the rows.
+    ///
+    /// Used for the sidebar's per-category counts: same predicate as [`search`],
+    /// but it walks the mmap index without allocating a path per match.
+    ///
+    /// [`search`]: Engine::search
+    pub fn count(&self, q: &Query) -> Result<u64, String> {
+        let cq = CompiledQuery::compile(q)?;
+        let files_only = cq.content.is_some();
+        let mut n: u64 = 0;
+        {
+            let base = self.base.read().unwrap();
+            let ov = self.overlay.read().unwrap();
+            if let Some(b) = base.as_deref() {
+                for i in 0..b.len() {
+                    let (cow, meta) = b.entry(i);
+                    let p = Path::new(cow.as_ref());
+                    if ov.is_removed(p) {
+                        continue;
+                    }
+                    let meta = ov.added.get(p).copied().unwrap_or(meta);
+                    if accepts(&cq, p, meta, files_only) {
+                        n += 1;
+                    }
+                }
+            }
+            for (path, meta) in ov.added.iter() {
+                if ov.removed.contains(path) {
+                    continue;
+                }
+                if base.as_deref().map_or(false, |b| b.contains(path)) {
+                    continue;
+                }
+                if accepts(&cq, path, *meta, files_only) {
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
+    }
+
     fn collect<F>(&self, f: &F, cap: usize) -> Vec<(PathBuf, Meta)>
     where
         F: Fn(&Path, Meta) -> Option<(PathBuf, Meta)>,
@@ -573,6 +596,32 @@ impl Engine {
 }
 
 /// Walk all roots and collect every entry (used to build the disk index).
+/// The shared "does this entry match the query?" predicate, used by both
+/// [`Engine::search`] and [`Engine::count`] so the two can never disagree.
+///
+/// `files_only` forces directories out even when `include_dirs` is set (content
+/// search only ever looks inside files).
+fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
+    if meta.is_dir && (files_only || !cq.include_dirs) {
+        return false;
+    }
+    if !cq.include_hidden && is_hidden(p) {
+        return false;
+    }
+    if cq.has_name_filter && !cq.name_matches(p) {
+        return false;
+    }
+    if !matches_category(&cq.category, p, &meta) {
+        return false;
+    }
+    if let Some(prefix) = cq.under.as_deref() {
+        if !p.starts_with(prefix) {
+            return false;
+        }
+    }
+    true
+}
+
 fn build_entries(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,

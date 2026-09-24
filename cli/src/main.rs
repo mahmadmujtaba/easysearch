@@ -49,6 +49,9 @@ enum Command {
         /// Match against the full path instead of the basename
         #[arg(long)]
         path: bool,
+        /// Restrict results to this directory subtree
+        #[arg(long, value_name = "DIR")]
+        under: Option<String>,
         /// Maximum number of results
         #[arg(long, default_value_t = 100)]
         limit: usize,
@@ -78,6 +81,7 @@ fn main() {
             case,
             hidden,
             path,
+            under,
             limit,
             no_wait,
         } => {
@@ -93,6 +97,7 @@ fn main() {
                 content,
                 category: everything_core::Category::All,
                 include_dirs: true,
+                under,
                 limit,
             };
             match backend.search(&q) {

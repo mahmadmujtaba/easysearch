@@ -7,7 +7,8 @@
 //! GET  /v1/health   → {"ok":true,"version":..,"api":1,"uptime_secs":..}
 //! GET  /v1/status   → {"status":{..},"files":..,"dirs":..}
 //! POST /v1/search   → Query (JSON) → SearchResponse (JSON)
-//! GET  /v1/search?query=..&regex=1&content=..&limit=..&category=..
+//! GET  /v1/search?query=..&regex=1&content=..&limit=..&category=..&under=..
+//! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
 //!                              returned when it changes (or on timeout)
@@ -22,17 +23,16 @@
 //! buffers small writes so short SSE frames are never flushed.
 
 use everything_core::api::{
-    category_from_str, ErrorDto, Health, SearchResponseDto, StatusReport, API_VERSION,
+    API_VERSION, CountDto, ErrorDto, Health, SearchResponseDto, StatusReport, category_from_str,
 };
 use everything_core::remote::percent_decode;
 use everything_core::{Engine, Query};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-/// Cap on concurrently served requests (each request, including a long-lived
-/// `/v1/events` stream, holds one thread).
+/// Cap on concurrently served requests (each request holds one thread).
 const MAX_CONCURRENCY: usize = 32;
 
 pub struct Daemon {
@@ -101,10 +101,18 @@ impl Daemon {
                 Ok(q) => self.search_json(&q),
                 Err(e) => (400, err_json(&e)),
             },
-            (Method::Post, "/v1/search") => {
+            (Method::Post, "/v1/search") | (Method::Post, "/v1/count") => {
+                let count_only = path == "/v1/count";
                 let mut body = String::new();
                 match request.as_reader().read_to_string(&mut body) {
                     Ok(_) => match serde_json::from_str::<Query>(&body) {
+                        Ok(q) if count_only => match self.engine.count(&q) {
+                            Ok(count) => (
+                                200,
+                                serde_json::to_string(&CountDto { count }).unwrap_or_default(),
+                            ),
+                            Err(e) => (400, err_json(&e)),
+                        },
                         Ok(q) => self.search_json(&q),
                         Err(e) => (400, err_json(&format!("invalid query JSON: {e}"))),
                     },
@@ -229,6 +237,9 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
             "hidden" => q.include_hidden = truthy(&value),
             "path" | "full_path" => q.full_path = truthy(&value),
             "dirs" | "include_dirs" => q.include_dirs = truthy(&value),
+            "under" => {
+                q.under = if value.is_empty() { None } else { Some(value) };
+            }
             "limit" => {
                 q.limit = value
                     .parse()

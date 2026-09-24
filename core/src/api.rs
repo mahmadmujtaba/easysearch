@@ -93,6 +93,12 @@ pub struct ErrorDto {
     pub error: String,
 }
 
+/// Response of `POST /v1/count`: how many entries match, without shipping them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CountDto {
+    pub count: u64,
+}
+
 impl ErrorDto {
     pub fn new(msg: impl Into<String>) -> Self {
         ErrorDto { error: msg.into() }

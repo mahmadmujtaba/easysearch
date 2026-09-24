@@ -74,10 +74,11 @@ fn name_regex_content_and_realtime() {
             ..Query::default()
         })
         .unwrap();
-    assert!(resp
-        .results
-        .iter()
-        .any(|r| r.path.ends_with("report_2026.pdf")));
+    assert!(
+        resp.results
+            .iter()
+            .any(|r| r.path.ends_with("report_2026.pdf"))
+    );
 
     // --- regex name search
     let resp = engine
@@ -87,10 +88,11 @@ fn name_regex_content_and_realtime() {
             ..Query::default()
         })
         .unwrap();
-    assert!(resp
-        .results
-        .iter()
-        .any(|r| r.path.ends_with("report_2026.pdf")));
+    assert!(
+        resp.results
+            .iter()
+            .any(|r| r.path.ends_with("report_2026.pdf"))
+    );
 
     // --- Everything-style AND + exclude
     let resp = engine
@@ -320,6 +322,53 @@ fn ram_mode_still_works() {
     );
 }
 
+#[test]
+fn count_agrees_with_search_and_respects_under() {
+    let dir = TestDir::new("count");
+    let root = dir.0.clone();
+    std::fs::create_dir_all(root.join("a/sub")).unwrap();
+    std::fs::create_dir_all(root.join("b")).unwrap();
+    std::fs::write(root.join("a/one.txt"), "x").unwrap();
+    std::fs::write(root.join("a/sub/two.txt"), "x").unwrap();
+    std::fs::write(root.join("b/three.txt"), "x").unwrap();
+    std::fs::write(root.join("b/four.md"), "x").unwrap();
+
+    let engine = test_engine(&root);
+
+    // count() must agree with search() for the same query.
+    let q = Query {
+        name: "*.txt".into(),
+        ..Query::default()
+    };
+    let resp = engine.search(&q).unwrap();
+    assert_eq!(
+        engine.count(&q).unwrap() as usize,
+        resp.results.len(),
+        "count and search disagree"
+    );
+
+    // `under` restricts to one directory subtree.
+    let sub = root.join("b");
+    let q = Query {
+        name: "*.txt".into(),
+        under: Some(sub.to_string_lossy().into_owned()),
+        ..Query::default()
+    };
+    let resp = engine.search(&q).unwrap();
+    assert!(resp.results.iter().all(|r| r.path.starts_with(&sub)));
+    assert!(resp.results.iter().any(|r| r.path.ends_with("three.txt")));
+    assert!(!resp.results.iter().any(|r| r.path.ends_with("one.txt")));
+    assert_eq!(engine.count(&q).unwrap() as usize, resp.results.len());
+
+    // Folders can be excluded, and count() honours it too.
+    let q = Query {
+        include_dirs: false,
+        ..Query::default()
+    };
+    let resp = engine.search(&q).unwrap();
+    assert!(resp.results.iter().all(|r| !r.is_dir));
+    assert_eq!(engine.count(&q).unwrap(), 4, "four fixture files");
+}
 #[test]
 fn include_dirs_toggle_filters_folders() {
     let dir = TestDir::new("dirs");

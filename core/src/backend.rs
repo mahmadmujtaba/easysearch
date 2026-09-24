@@ -84,6 +84,15 @@ impl Backend {
         }
     }
 
+    /// Number of entries matching `q`, without shipping them (used for the
+    /// sidebar's per-category counts).
+    pub fn count(&self, q: &Query) -> Result<u64, String> {
+        match self {
+            Backend::Local(e) => e.count(q),
+            Backend::Remote(r) => r.count(q),
+        }
+    }
+
     /// Block until the index is live (bounded by `timeout`).
     pub fn wait_live(&self, timeout: Duration) -> bool {
         match self {

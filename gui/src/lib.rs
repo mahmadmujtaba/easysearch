@@ -118,11 +118,7 @@ impl Theme {
     };
 
     fn of(dark: bool) -> Theme {
-        if dark {
-            Self::DARK
-        } else {
-            Self::LIGHT
-        }
+        if dark { Self::DARK } else { Self::LIGHT }
     }
 
     /// Soft accent used behind selected rows and labels.
@@ -238,6 +234,8 @@ struct TabState {
     hidden: bool,
     full_path: bool,
     category: Category,
+    /// Location filter: only paths under this directory (`None` = everywhere).
+    under: Option<String>,
     results: Vec<ResultRow>,
     truncated: bool,
     error: Option<String>,
@@ -258,6 +256,7 @@ impl Default for TabState {
             hidden: false,
             full_path: false,
             category: Category::All,
+            under: None,
             results: Vec::new(),
             truncated: false,
             error: None,
@@ -280,6 +279,7 @@ impl TabState {
             hidden: p.hidden,
             full_path: p.full_path,
             category: category_at(p.category_index),
+            under: p.under.clone(),
             ..TabState::default()
         }
     }
@@ -293,6 +293,7 @@ impl TabState {
             hidden: self.hidden,
             full_path: self.full_path,
             category_index: category_index(&self.category),
+            under: self.under.clone(),
         }
     }
 }
@@ -309,6 +310,8 @@ struct TabPrefs {
     full_path: bool,
     /// Index into [`CATEGORIES`] — keeps `Category` out of the persisted format.
     category_index: usize,
+    /// Location filter (a directory path), persisted per tab.
+    under: Option<String>,
 }
 
 fn category_index(cat: &Category) -> usize {
@@ -330,6 +333,172 @@ fn tab_title(tab: &TabState) -> String {
         s.push('…');
     }
     s
+}
+
+/// A request to recompute the sidebar's per-category counts. The worker fills in
+/// `category` per row and forces `limit`; everything else comes from the tab.
+struct CountRequest {
+    base: Query,
+    /// Identity of the query these counts describe; stale replies are dropped.
+    key: String,
+}
+
+/// Per-category counts for one query, in [`CATEGORIES`] order.
+struct Counts {
+    key: String,
+    per_category: Vec<u64>,
+}
+
+/// Quick "search only here" locations for the sidebar.
+fn locations() -> Vec<(&'static str, PathBuf)> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let mut out = vec![("Home", home.clone())];
+    for (label, sub) in [
+        ("Desktop", "Desktop"),
+        ("Documents", "Documents"),
+        ("Downloads", "Downloads"),
+        ("Pictures", "Pictures"),
+        ("Music", "Music"),
+        ("Videos", "Videos"),
+        ("Workspace", "Workspace"),
+        ("Projects", "Projects"),
+    ] {
+        let path = home.join(sub);
+        if path.is_dir() {
+            out.push((label, path));
+        }
+    }
+    out
+}
+
+/// Short label for a location path (its last component).
+fn location_label(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+// --- system theme ---------------------------------------------------------
+
+/// Files whose modification indicates the desktop theme changed. KDE, GTK and
+/// XFCE rewrite these; GNOME keeps its settings in the `dconf` database.
+fn theme_watch_paths() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    [
+        ".config/kdeglobals",
+        ".config/gtk-3.0/settings.ini",
+        ".config/gtk-4.0/settings.ini",
+        ".config/dconf/user",
+        ".config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
+    ]
+    .iter()
+    .map(|p| home.join(p))
+    .collect()
+}
+
+/// Cheap hash of the watched theme files (a `stat` per file, no reads).
+fn theme_fingerprint() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in theme_watch_paths() {
+        match std::fs::metadata(&path) {
+            Ok(md) => {
+                let mtime = md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                mtime.hash(&mut hasher);
+                md.len().hash(&mut hasher);
+            }
+            Err(_) => 0u64.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+/// Is the desktop configured for a dark scheme?
+///
+/// `dark-light` covers the XDG portal and most desktops, but reports `Default`
+/// when it cannot tell — notably on KDE when the portal exposes no preference —
+/// so fall back to reading the desktops' own configuration files.
+fn detect_system_dark() -> bool {
+    match dark_light::detect() {
+        dark_light::Mode::Dark => true,
+        dark_light::Mode::Light => false,
+        dark_light::Mode::Default => kde_globals_is_dark()
+            .or_else(gtk_settings_is_dark)
+            .unwrap_or(true),
+    }
+}
+
+/// Decide from KDE's window background colour (`~/.config/kdeglobals`).
+fn kde_globals_is_dark() -> Option<bool> {
+    let home = std::env::var_os("HOME")?;
+    let text = std::fs::read_to_string(PathBuf::from(home).join(".config/kdeglobals")).ok()?;
+    kde_globals_dark_from(&text)
+}
+
+/// Parse the `[Colors:Window] BackgroundNormal` value out of a kdeglobals file.
+fn kde_globals_dark_from(text: &str) -> Option<bool> {
+    let mut in_window_section = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_window_section = line == "[Colors:Window]";
+            continue;
+        }
+        if in_window_section && let Some(value) = line.strip_prefix("BackgroundNormal=") {
+            let rgb: Vec<f32> = value
+                .split(',')
+                .filter_map(|c| c.trim().parse::<f32>().ok())
+                .collect();
+            if rgb.len() >= 3 {
+                // Rec. 601 luma, normalised to 0..=1.
+                let luma = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255.0;
+                return Some(luma < 0.5);
+            }
+        }
+    }
+    None
+}
+
+/// Decide from GTK's settings (`gtk-application-prefer-dark-theme` / theme name).
+fn gtk_settings_is_dark() -> Option<bool> {
+    let home = std::env::var_os("HOME")?;
+    for rel in [
+        ".config/gtk-4.0/settings.ini",
+        ".config/gtk-3.0/settings.ini",
+    ] {
+        let Ok(text) = std::fs::read_to_string(PathBuf::from(&home).join(rel)) else {
+            continue;
+        };
+        if let Some(dark) = gtk_settings_dark_from(&text) {
+            return Some(dark);
+        }
+    }
+    None
+}
+
+/// Parse a GTK `settings.ini` for a dark preference or a “dark” theme name.
+fn gtk_settings_dark_from(text: &str) -> Option<bool> {
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("gtk-application-prefer-dark-theme=") {
+            let v = v.trim();
+            return Some(v == "1" || v.eq_ignore_ascii_case("true"));
+        }
+        if let Some(v) = line.strip_prefix("gtk-theme-name=") {
+            return Some(v.to_ascii_lowercase().contains("dark"));
+        }
+    }
+    None
 }
 
 /// Run the GUI against an already-chosen search backend (blocks until exit).
@@ -391,6 +560,7 @@ fn daemon_from_env_or_args() -> Option<String> {
 struct GuiPrefs {
     /// None = follow the system theme.
     dark: Option<bool>,
+    /// Preview pane on by default (it can be turned off in Settings/View).
     show_preview: bool,
     /// X button hides to the tray instead of quitting (opt-in).
     close_to_tray: bool,
@@ -404,19 +574,22 @@ struct GuiPrefs {
     tabs: Vec<TabPrefs>,
     /// Index of the tab that was active when the app was last closed.
     active_tab: usize,
+    /// Whether the sidebar's TIPS cheat-sheet is expanded.
+    sidebar_tips: bool,
 }
 
 impl Default for GuiPrefs {
     fn default() -> Self {
         GuiPrefs {
             dark: None,
-            show_preview: false,
+            show_preview: true,
             close_to_tray: false,
             history: Vec::new(),
             zoom: 1.0,
             include_dirs: true,
             tabs: Vec::new(),
             active_tab: 0,
+            sidebar_tips: true,
         }
     }
 }
@@ -503,6 +676,8 @@ struct App {
     hidden: bool,
     full_path: bool,
     category: Category,
+    /// Location filter: only paths under this directory (`None` = everywhere).
+    under: Option<String>,
     limit: usize,
     results: Vec<ResultRow>,
     truncated: bool,
@@ -542,6 +717,19 @@ struct App {
     /// Set when a tab's state changed; persisted by a throttled background save.
     dirty: bool,
     last_save: Instant,
+    /// Per-category result counts for the sidebar facets (see `CountRequest`).
+    counts: Vec<u64>,
+    /// Query key the current `counts` were computed for.
+    counts_key: String,
+    counts_tx: mpsc::Sender<CountRequest>,
+    counts_rx: mpsc::Receiver<Counts>,
+    /// Throttle so typing does not trigger a facet recount per keystroke.
+    counts_at: Instant,
+    /// Fingerprint of the desktop theme files, to follow system theme changes.
+    theme_fp: u64,
+    theme_at: Instant,
+    /// When the theme was last re-detected (slow safety net).
+    theme_detect_at: Instant,
     /// Human label for the search backend ("in-process" or "daemon HOST:PORT").
     backend_label: String,
 }
@@ -574,7 +762,7 @@ impl App {
         let prefs = GuiPrefs::load();
         let dark = match prefs.dark {
             Some(d) => d,
-            None => !matches!(dark_light::detect(), dark_light::Mode::Light),
+            None => detect_system_dark(),
         };
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
@@ -599,6 +787,41 @@ impl App {
         let tabs: Vec<TabState> = tab_prefs.iter().map(TabState::from_prefs).collect();
         let start = tabs[active_tab].clone();
 
+        // Background worker: recompute the sidebar's per-category counts when
+        // asked (kept off the UI thread; coalesces bursts).
+        let (counts_tx, counts_rx) = mpsc::channel::<Counts>();
+        let (count_req_tx, count_req_rx) = mpsc::channel::<CountRequest>();
+        {
+            let backend = Arc::clone(&backend);
+            std::thread::Builder::new()
+                .name("facets".into())
+                .spawn(move || {
+                    while let Ok(mut req) = count_req_rx.recv() {
+                        // Coalesce: only the newest request matters.
+                        while let Ok(newer) = count_req_rx.try_recv() {
+                            req = newer;
+                        }
+                        let mut per_category = Vec::with_capacity(CATEGORIES.len());
+                        for (_, cat) in CATEGORIES {
+                            let mut q = req.base.clone();
+                            q.category = *cat;
+                            q.limit = 1;
+                            per_category.push(backend.count(&q).unwrap_or(0));
+                        }
+                        if counts_tx
+                            .send(Counts {
+                                key: req.key,
+                                per_category,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+                .expect("failed to spawn facet thread");
+        }
+
         let mut app = App {
             engine: backend,
             prefs,
@@ -609,6 +832,7 @@ impl App {
             hidden: start.hidden,
             full_path: start.full_path,
             category: start.category,
+            under: start.under,
             limit: 500,
             results: start.results,
             truncated: start.truncated,
@@ -642,6 +866,14 @@ impl App {
             dirty: false,
             last_save: Instant::now(),
             backend_label,
+            counts: Vec::new(),
+            counts_key: "\u{0}counts-pending".to_string(),
+            counts_tx: count_req_tx,
+            counts_rx,
+            counts_at: Instant::now(),
+            theme_fp: theme_fingerprint(),
+            theme_at: Instant::now(),
+            theme_detect_at: Instant::now(),
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
@@ -778,6 +1010,7 @@ impl App {
             hidden: self.hidden,
             full_path: self.full_path,
             category: self.category,
+            under: self.under.clone(),
             results: self.results.clone(),
             truncated: self.truncated,
             error: self.error.clone(),
@@ -799,6 +1032,7 @@ impl App {
         self.hidden = t.hidden;
         self.full_path = t.full_path;
         self.category = t.category;
+        self.under = t.under;
         self.results = t.results;
         self.truncated = t.truncated;
         self.error = t.error;
@@ -886,6 +1120,7 @@ impl App {
             content,
             category: self.category,
             include_dirs: self.prefs.include_dirs,
+            under: self.under.clone(),
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search {
@@ -898,6 +1133,15 @@ impl App {
         self.selected = 0;
         self.scroll_to = None;
         self.dirty = true;
+    }
+
+    /// Restrict (or un-restrict) the search to a directory and re-run it.
+    fn set_under(&mut self, under: Option<String>) {
+        if self.under == under {
+            return;
+        }
+        self.under = under;
+        self.send_query();
     }
 
     /// Cycle the sort for a column and re-sort the current results in place
@@ -1028,40 +1272,208 @@ fn search_id() -> egui::Id {
     egui::Id::new("search_input")
 }
 
-/// Full-width sidebar navigation row. Painted manually so the label is exactly
-/// vertically centred, independent of the font's own metrics.
+/// Full-width sidebar row: colour dot, label, optional right-aligned value, and
+/// an accent bar when selected. Painted manually so the text is centred
+/// regardless of which system font is in use.
 fn nav_item(
     ui: &mut egui::Ui,
     t: &Theme,
     dot: egui::Color32,
     label: &str,
+    right: Option<&str>,
     selected: bool,
 ) -> egui::Response {
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
     let radius = egui::CornerRadius::same(7);
     if selected {
         ui.painter().rect_filled(rect, radius, t.accent_soft());
         let bar = egui::Rect::from_min_size(
-            egui::pos2(rect.min.x + 1.0, rect.center().y - 8.0),
-            egui::vec2(3.0, 16.0),
+            egui::pos2(rect.min.x + 1.0, rect.center().y - 7.0),
+            egui::vec2(3.0, 14.0),
         );
         ui.painter()
             .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, radius, t.hover);
     }
-    let dot_x = rect.min.x + 16.0;
+
+    let dot_x = rect.min.x + 15.0;
     ui.painter()
         .circle_filled(egui::pos2(dot_x, rect.center().y), 3.5, dot);
-    ui.painter().text(
-        egui::pos2(dot_x + 13.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::new(13.5, egui::FontFamily::Proportional),
+
+    // Right-aligned value (e.g. a facet count) reserves its own space.
+    let value_font = egui::FontId::new(11.5, egui::FontFamily::Proportional);
+    let value_w = right
+        .map(|v| {
+            ui.painter()
+                .layout_no_wrap(v.to_string(), value_font.clone(), t.faint)
+                .size()
+                .x
+        })
+        .unwrap_or(0.0);
+    let label_left = dot_x + 12.0;
+    let label_right = rect.max.x - 10.0 - if right.is_some() { value_w + 8.0 } else { 0.0 };
+
+    let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
+    let available = (label_right - label_left).max(0.0);
+    let mut text = label.to_string();
+    let mut galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), font.clone(), t.text);
+    while galley.size().x > available && !text.is_empty() {
+        text.pop();
+        galley = ui
+            .painter()
+            .layout_no_wrap(format!("{text}…"), font.clone(), t.text);
+    }
+    ui.painter().galley(
+        egui::pos2(label_left, rect.center().y - galley.size().y * 0.5),
+        galley,
         t.text,
     );
+
+    if let Some(value) = right {
+        ui.painter().text(
+            egui::pos2(rect.max.x - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            value,
+            value_font,
+            if selected { t.accent } else { t.faint },
+        );
+    }
     resp
+}
+
+/// Small-caps style section heading for the sidebar.
+fn section_title(t: &Theme, title: &str) -> egui::RichText {
+    egui::RichText::new(title)
+        .size(10.5)
+        .strong()
+        .color(t.faint)
+}
+
+/// Group thousands: `85613` → `85,613`.
+fn human_count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Small rounded stat tile: a big value over a muted caption.
+fn mini_stat(ui: &mut egui::Ui, t: &Theme, caption: &str, value: &str, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 48.0), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(9);
+    ui.painter().rect_filled(rect, radius, t.card);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0_f32, t.stroke),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        egui::pos2(rect.min.x + 10.0, rect.min.y + 9.0),
+        egui::Align2::LEFT_TOP,
+        value,
+        egui::FontId::new(17.0, egui::FontFamily::Proportional),
+        t.text,
+    );
+    ui.painter().text(
+        egui::pos2(rect.min.x + 10.0, rect.max.y - 9.0),
+        egui::Align2::LEFT_BOTTOM,
+        caption,
+        egui::FontId::new(10.0, egui::FontFamily::Proportional),
+        t.faint,
+    );
+}
+
+/// A small pill chip, used for the sidebar's quick locations.
+fn chip(ui: &mut egui::Ui, t: &Theme, label: &str, active: bool) -> egui::Response {
+    let font = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        font,
+        if active { t.accent } else { t.text },
+    );
+    let pad = egui::vec2(9.0, 4.0);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::click());
+    let radius = egui::CornerRadius::same(7);
+    let (fill, stroke) = if active {
+        (t.accent_soft(), egui::Stroke::new(1.0_f32, t.accent))
+    } else if resp.hovered() {
+        (t.hover, egui::Stroke::new(1.0_f32, t.accent))
+    } else {
+        (t.card, egui::Stroke::new(1.0_f32, t.stroke))
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+    ui.painter().galley(
+        rect.min + pad,
+        galley,
+        if active { t.accent } else { t.text },
+    );
+    resp.on_hover_text(label)
+}
+
+/// A sidebar checkbox row (square box + label) for the search options.
+fn opt_check(ui: &mut egui::Ui, t: &Theme, value: &mut bool, label: &str) -> bool {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), t.hover);
+    }
+    let side = 15.0;
+    let bx = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 4.0, rect.center().y - side / 2.0),
+        egui::vec2(side, side),
+    );
+    let radius = egui::CornerRadius::same(4);
+    let stroke = if *value {
+        egui::Stroke::new(1.0_f32, t.accent)
+    } else {
+        egui::Stroke::new(1.0_f32, t.stroke)
+    };
+    if *value {
+        ui.painter().rect_filled(bx, radius, t.accent);
+        let c = bx.center();
+        let mark = egui::Stroke::new(1.8_f32, t.panel);
+        ui.painter().line_segment(
+            [egui::pos2(c.x - 3.5, c.y), egui::pos2(c.x - 1.0, c.y + 2.5)],
+            mark,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(c.x - 1.0, c.y + 2.5),
+                egui::pos2(c.x + 3.5, c.y - 2.5),
+            ],
+            mark,
+        );
+    } else {
+        ui.painter()
+            .rect_filled(bx, radius, egui::Color32::TRANSPARENT);
+    }
+    ui.painter()
+        .rect_stroke(bx, radius, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(
+        egui::pos2(bx.max.x + 9.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::new(12.5, egui::FontFamily::Proportional),
+        t.text,
+    );
+    if resp.clicked() {
+        *value = !*value;
+        return true;
+    }
+    false
 }
 
 /// One tab pill: title, and a “×” to close it. Returns `(switched, closed)`.
@@ -1460,6 +1872,60 @@ impl eframe::App for App {
         // the app keeps the open searches.
         if self.dirty && self.last_save.elapsed() >= Duration::from_secs(2) {
             self.save_prefs();
+        }
+
+        // Sidebar facets: apply the newest counts, and ask for a recount once the
+        // active query has settled (throttled, and coalesced in the worker).
+        while let Ok(counts) = self.counts_rx.try_recv() {
+            if counts.key == self.counts_key {
+                self.counts = counts.per_category;
+            }
+        }
+        if !self.pending
+            && self.last_sent != self.counts_key
+            && self.counts_at.elapsed() >= Duration::from_millis(500)
+        {
+            let base = Query {
+                name: if self.content_mode {
+                    String::new()
+                } else {
+                    self.last_sent.clone()
+                },
+                regex_mode: self.regex_mode,
+                case_sensitive: self.case_sensitive,
+                include_hidden: self.hidden,
+                full_path: self.full_path,
+                content: None,
+                category: Category::All,
+                include_dirs: self.prefs.include_dirs,
+                under: self.under.clone(),
+                limit: 1,
+            };
+            self.counts_key = self.last_sent.clone();
+            let _ = self.counts_tx.send(CountRequest {
+                base,
+                key: self.last_sent.clone(),
+            });
+            self.counts_at = Instant::now();
+        }
+
+        // "Follow system" tracks live theme changes: KDE/GTK/XFCE rewrite their
+        // config files when the user switches scheme, so poll a cheap fingerprint
+        // every second and re-detect when it moves. A slower unconditional check
+        // covers desktops that only report through the XDG portal.
+        if self.prefs.dark.is_none() && self.theme_at.elapsed() >= Duration::from_secs(1) {
+            self.theme_at = Instant::now();
+            let fingerprint = theme_fingerprint();
+            let due = self.theme_detect_at.elapsed() >= Duration::from_secs(15);
+            if fingerprint != self.theme_fp || due {
+                self.theme_fp = fingerprint;
+                self.theme_detect_at = Instant::now();
+                let dark = detect_system_dark();
+                if dark != self.dark {
+                    self.dark = dark;
+                    self.apply_style(ctx);
+                }
+            }
         }
 
         let search_focused = ctx.memory(|m| m.has_focus(search_id()));
@@ -2108,62 +2574,255 @@ impl App {
         let t = self.theme();
         egui::SidePanel::left("sidebar")
             .resizable(true)
-            .default_width(202.0)
-            .min_width(160.0)
-            .max_width(320.0)
+            .default_width(228.0)
+            .min_width(180.0)
+            .max_width(340.0)
             .frame(
                 egui::Frame::new()
                     .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(10, 12)),
+                    .inner_margin(egui::Margin::symmetric(12, 12)),
             )
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new("CATEGORIES")
-                        .size(11.0)
-                        .strong()
-                        .color(t.faint),
-                );
-                ui.add_space(8.0);
-
-                let mut chosen: Option<Category> = None;
-                for (label, cat) in CATEGORIES {
-                    let selected = self.category == *cat;
-                    if nav_item(ui, &t, category_color(&t, cat), label, selected).clicked() {
-                        chosen = Some(if selected { Category::All } else { *cat });
-                    }
-                }
-                if let Some(c) = chosen {
-                    self.category = c;
-                    self.send_query();
-                }
-
-                ui.add_space(16.0);
+                // Header and the two match tiles stay pinned; only the lists
+                // below scroll, so the brand and the numbers never scroll away.
+                self.sidebar_header(ui);
+                ui.add_space(10.0);
+                self.sidebar_stats(ui);
+                ui.add_space(10.0);
                 ui.separator();
-                ui.add_space(12.0);
+                ui.add_space(4.0);
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.sidebar_categories(ui, &t);
+
+                        ui.add_space(14.0);
+                        self.sidebar_locations(ui, &t);
+
+                        ui.add_space(14.0);
+                        self.sidebar_options(ui, &t);
+
+                        ui.add_space(14.0);
+                        self.sidebar_tips(ui, &t);
+                    });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new("TIPS")
-                        .size(11.0)
-                        .strong()
+                    egui::RichText::new(self.backend_label.clone())
+                        .size(10.5)
                         .color(t.faint),
                 );
-                ui.add_space(8.0);
-                for (token, meaning) in [
-                    ("*.pdf", "glob pattern"),
-                    ("a b", "both terms"),
-                    ("!draft", "exclude"),
-                    (".*", "regex mode"),
-                ] {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(token)
-                                .monospace()
-                                .size(11.5)
-                                .color(t.dim),
-                        );
-                        ui.label(egui::RichText::new(meaning).size(11.5).color(t.faint));
-                    });
-                }
             });
+    }
+
+    /// Brand + a live-index pill at the top of the sidebar.
+    fn sidebar_header(&self, ui: &mut egui::Ui) {
+        let t = self.theme();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("⚡").size(16.0).color(t.accent));
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("Everything")
+                    .size(14.5)
+                    .strong()
+                    .color(t.text),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.live_badge(ui);
+            });
+        });
+    }
+
+    /// “LIVE” / “INDEXING” pill; the dot pulses while the first pass runs.
+    fn live_badge(&self, ui: &mut egui::Ui) {
+        let t = self.theme();
+        let live = self.status.state == State::Live;
+        let color = if live { t.good } else { t.warn };
+        let pulse = if live {
+            1.0
+        } else {
+            ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32
+        };
+        let text = if live { "LIVE" } else { "INDEX" };
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::new(10.0, egui::FontFamily::Proportional),
+            color,
+        );
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(galley.size().x + 24.0, 18.0),
+            egui::Sense::hover(),
+        );
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(9), t.chip_fill(color));
+        ui.painter().circle_filled(
+            egui::pos2(rect.min.x + 9.0, rect.center().y),
+            3.5,
+            color.gamma_multiply(0.4 + 0.6 * pulse),
+        );
+        ui.painter().galley(
+            egui::pos2(rect.min.x + 17.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            color,
+        );
+        if !live {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Two tiles: matching files for the current query, and what is shown.
+    fn sidebar_stats(&self, ui: &mut egui::Ui) {
+        let t = self.theme();
+        let matches = self.counts.first().copied().unwrap_or(0);
+        let shown = self.results.len() as u64;
+        let indexed = self.engine.counts().0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
+            mini_stat(ui, &t, "matches", &human_count(matches), w);
+            mini_stat(ui, &t, "shown", &human_count(shown), w);
+        });
+        ui.add_space(7.0);
+        ui.label(
+            egui::RichText::new(format!("{} files indexed", human_count(indexed)))
+                .size(10.5)
+                .color(t.faint),
+        );
+    }
+
+    /// Category rows with live per-category result counts.
+    fn sidebar_categories(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "CATEGORIES"));
+        ui.add_space(6.0);
+        let mut chosen: Option<Category> = None;
+        for (i, (label, cat)) in CATEGORIES.iter().enumerate() {
+            let selected = self.category == *cat;
+            let count = self
+                .counts
+                .get(i)
+                .map(|c| human_count(*c))
+                .unwrap_or_else(|| "—".to_string());
+            if nav_item(ui, t, category_color(t, cat), label, Some(&count), selected).clicked() {
+                chosen = Some(if selected { Category::All } else { *cat });
+            }
+        }
+        if let Some(c) = chosen {
+            self.category = c;
+            self.send_query();
+        }
+    }
+
+    /// Quick “search only here” chips, plus a clear control when a filter is on.
+    fn sidebar_locations(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        let locs = locations();
+        let mut clear = false;
+        ui.horizontal(|ui| {
+            ui.label(section_title(t, "LOCATIONS"));
+            if self.under.is_some() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Clear").size(10.5).color(t.accent),
+                            )
+                            .frame(false),
+                        )
+                        .clicked()
+                    {
+                        clear = true;
+                    }
+                });
+            }
+        });
+        ui.add_space(6.0);
+        let mut pick: Option<Option<String>> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+            for (label, path) in &locs {
+                let s = path.to_string_lossy().into_owned();
+                let active = self.under.as_deref() == Some(s.as_str());
+                if chip(ui, t, label, active).clicked() {
+                    pick = Some(if active { None } else { Some(s) });
+                }
+            }
+        });
+        if let Some(sel) = pick {
+            self.set_under(sel);
+        }
+        // A filter that is not one of the quick locations (restored or custom).
+        if let Some(under) = self.under.clone()
+            && !locs.iter().any(|(_, p)| p.to_string_lossy() == under)
+        {
+            ui.add_space(7.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("▸").size(12.0).color(t.accent));
+                ui.label(
+                    egui::RichText::new(location_label(&under))
+                        .size(12.0)
+                        .color(t.text),
+                );
+            });
+        }
+        if clear {
+            self.set_under(None);
+        }
+    }
+
+    /// Search toggles, mirroring the in-bar options.
+    fn sidebar_options(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "SEARCH OPTIONS"));
+        ui.add_space(6.0);
+        let mut changed = false;
+        changed |= opt_check(ui, t, &mut self.content_mode, "Match contents");
+        changed |= opt_check(ui, t, &mut self.regex_mode, "Regex");
+        changed |= opt_check(ui, t, &mut self.case_sensitive, "Case-sensitive");
+        changed |= opt_check(ui, t, &mut self.hidden, "Hidden files");
+        changed |= opt_check(ui, t, &mut self.full_path, "Full-path match");
+        if changed {
+            self.send_query();
+        }
+    }
+
+    /// Collapsible cheat-sheet; its open state is persisted.
+    fn sidebar_tips(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        let open = self.prefs.sidebar_tips;
+        let arrow = if open { "▾" } else { "▸" };
+        let resp = ui.add(
+            egui::Button::new(
+                egui::RichText::new(format!("{arrow}  TIPS"))
+                    .size(10.5)
+                    .strong()
+                    .color(t.faint),
+            )
+            .frame(false),
+        );
+        if resp.clicked() {
+            self.prefs.sidebar_tips = !open;
+            self.prefs.save();
+        }
+        if open {
+            ui.add_space(6.0);
+            for (token, meaning) in [
+                ("*.pdf", "glob pattern"),
+                ("a b", "all terms"),
+                ("!draft", "exclude"),
+                ("^src/", "path prefix"),
+                (".*", "regex mode"),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(token)
+                            .monospace()
+                            .size(11.0)
+                            .color(t.dim),
+                    );
+                    ui.label(egui::RichText::new(meaning).size(11.0).color(t.faint));
+                });
+            }
+        }
     }
 
     fn results_table(&mut self, ui: &mut egui::Ui) {
@@ -2955,11 +3614,7 @@ fn sort_results(results: &mut [ResultRow], sort: Sort) {
                     .unwrap_or(b.path.as_os_str())
                     .to_string_lossy()
                     .to_lowercase();
-                if asc {
-                    ka.cmp(&kb)
-                } else {
-                    kb.cmp(&ka)
-                }
+                if asc { ka.cmp(&kb) } else { kb.cmp(&ka) }
             });
         }
         Sort::Size(asc) => {
@@ -3039,5 +3694,63 @@ mod tests {
         let title = tab_title(&tab);
         assert_eq!(title.chars().count(), 23); // 22 + ellipsis
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn human_count_groups_thousands() {
+        assert_eq!(human_count(0), "0");
+        assert_eq!(human_count(7), "7");
+        assert_eq!(human_count(999), "999");
+        assert_eq!(human_count(1_000), "1,000");
+        assert_eq!(human_count(85_613), "85,613");
+        assert_eq!(human_count(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn location_label_is_last_component() {
+        assert_eq!(location_label("/home/a/Documents"), "Documents");
+        assert_eq!(location_label("Documents"), "Documents");
+        assert_eq!(location_label("/"), "/");
+    }
+
+    #[test]
+    fn saved_tab_keeps_location_filter() {
+        let tab = TabState {
+            under: Some("/home/a/Downloads".into()),
+            ..TabState::default()
+        };
+        assert_eq!(
+            TabState::from_prefs(&tab.to_prefs()).under.as_deref(),
+            Some("/home/a/Downloads")
+        );
+    }
+
+    #[test]
+    fn kde_background_luma_decides_dark() {
+        let dark = "[General]\nDarkMode=true\n[Colors:Window]\nBackgroundNormal=32,35,38\n";
+        assert_eq!(kde_globals_dark_from(dark), Some(true));
+        let light = "[Colors:Window]\nBackgroundNormal=239,240,241\n";
+        assert_eq!(kde_globals_dark_from(light), Some(false));
+        // The colour from another section must not be mistaken for the window one.
+        let other = "[Colors:Button]\nBackgroundNormal=32,35,38\n";
+        assert_eq!(kde_globals_dark_from(other), None);
+        assert_eq!(kde_globals_dark_from(""), None);
+    }
+
+    #[test]
+    fn gtk_settings_decide_dark() {
+        assert_eq!(
+            gtk_settings_dark_from("[Settings]\ngtk-theme-name=Adwaita-dark\n"),
+            Some(true)
+        );
+        assert_eq!(
+            gtk_settings_dark_from("[Settings]\ngtk-theme-name=Breeze\n"),
+            Some(false)
+        );
+        assert_eq!(
+            gtk_settings_dark_from("gtk-application-prefer-dark-theme=1\n"),
+            Some(true)
+        );
+        assert_eq!(gtk_settings_dark_from("# nothing\n"), None);
     }
 }

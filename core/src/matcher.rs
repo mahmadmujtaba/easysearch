@@ -46,6 +46,9 @@ pub struct Query {
     pub category: Category,
     /// Include directories in results (`false` = files only).
     pub include_dirs: bool,
+    /// Restrict results to paths under this directory (the sidebar's Location
+    /// filter). `None` = no restriction.
+    pub under: Option<String>,
     pub limit: usize,
 }
 
@@ -60,6 +63,7 @@ impl Default for Query {
             content: None,
             category: Category::All,
             include_dirs: true,
+            under: None,
             limit: 1000,
         }
     }
@@ -154,6 +158,7 @@ pub struct CompiledQuery {
     pub content: Option<String>,
     pub category: Category,
     pub include_dirs: bool,
+    pub under: Option<String>,
     pub limit: usize,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
@@ -188,6 +193,7 @@ impl CompiledQuery {
             content: q.content.clone(),
             category: q.category,
             include_dirs: q.include_dirs,
+            under: q.under.clone(),
             limit: q.limit.max(1),
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
