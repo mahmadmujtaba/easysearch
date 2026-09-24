@@ -54,6 +54,10 @@ None of them need root. See [`docs/packaging.md`](docs/packaging.md) for what
 they install, the dependency-derivation details, the Flatpak sandbox notes, and
 which identifiers to change before publishing.
 
+> What is still outstanding — unverified package builds, placeholder
+> identifiers, known rough edges, measured footprint — is tracked in
+> [`docs/pending.md`](docs/pending.md).
+
 ## Usage
 
 ```sh
