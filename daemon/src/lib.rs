@@ -176,6 +176,25 @@ fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid header")
 }
 
+/// Bind `addr` and serve requests until the process exits.
+///
+/// Shared by the `everything-daemon` binary and the combined single-binary app
+/// (which re-executes itself in daemon mode).
+pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
+    let server = Server::http(addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
+    let bound = server
+        .server_addr()
+        .to_ip()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| addr.to_string());
+    eprintln!(
+        "everything-daemon {} — listening on http://{bound}",
+        env!("CARGO_PKG_VERSION")
+    );
+    Daemon::new(engine).serve_forever(Arc::new(server));
+    Ok(())
+}
+
 fn err_json(msg: &str) -> String {
     serde_json::to_string(&ErrorDto::new(msg)).unwrap_or_default()
 }

@@ -1332,6 +1332,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "everything-app"
+version = "0.8.0"
+dependencies = [
+ "everything-core",
+ "everything-daemon",
+ "everything-gui",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "everything-core"
 version = "0.8.0"
 dependencies = [

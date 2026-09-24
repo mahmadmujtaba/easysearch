@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Realtime file and content search for Linux (GUI)"
 
+[lib]
+name = "everything_gui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "everything-gui"
 path = "src/main.rs"

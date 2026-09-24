@@ -4,13 +4,15 @@
 //! Keeping the engine out of the GUI means the index keeps running (and other
 //! clients keep working: CLI, scripts, curl, any language) even if no GUI is
 //! running at all.
+//!
+//! End users normally don't need this binary: the combined `everything-linux`
+//! app starts a daemon by re-executing itself. This standalone binary is for
+//! running the engine on its own (servers, scripts, headless setups).
 
 use clap::Parser;
 use everything_core::{Config, Engine};
-use everything_daemon::Daemon;
 use std::sync::Arc;
 use std::time::Duration;
-use tiny_http::Server;
 
 #[derive(Parser)]
 #[command(
@@ -34,20 +36,6 @@ fn main() {
     engine.start();
     let engine = Arc::new(engine);
 
-    let server = match Server::http(cli.addr.as_str()) {
-        Ok(server) => Arc::new(server),
-        Err(e) => {
-            eprintln!("everything-daemon: cannot bind {}: {e}", cli.addr);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!(
-        "everything-daemon {} — listening on http://{}",
-        env!("CARGO_PKG_VERSION"),
-        cli.addr
-    );
-
     if !cli.quiet {
         // Announce readiness once the index is live (useful for scripts).
         let watcher = Arc::clone(&engine);
@@ -62,5 +50,8 @@ fn main() {
             .ok();
     }
 
-    Daemon::new(engine).serve_forever(server);
+    if let Err(e) = everything_daemon::run_forever(engine, &cli.addr) {
+        eprintln!("everything-daemon: {e}");
+        std::process::exit(1);
+    }
 }

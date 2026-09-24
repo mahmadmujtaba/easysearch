@@ -8,9 +8,11 @@
 #   make check      type-check without producing binaries
 #   make clippy     lint
 #   make fmt        format sources
-#   make run        run the production GUI
-#   make run-dev    run the dev GUI
-#   make daemon     run the search daemon (HTTP/JSON API on 127.0.0.1:5858)
+#   make run        build + run Everything for Linux (one binary: GUI + daemon)
+#   make run-dev    same, dev profile
+#   make run-gui    run just the GUI binary (dev tool)
+#   make daemon     run just the search daemon (HTTP/JSON API)
+#   make dist       copy the shareable single binary to dist/
 #   make install    copy release binaries to ~/.local/bin
 #   make clean      remove build artifacts
 #   make help       show this help
@@ -23,7 +25,7 @@ BIN_DIR    := target/release
 INSTALLDIR := $(HOME)/.local/bin
 
 .PHONY: all build dev release prod test test-release check clippy fmt \
-        run run-dev daemon install uninstall clean help
+        run run-dev run-gui daemon daemon-dev dist install uninstall clean help
 
 ## Default: dev build + tests + production build.
 all: build test release
@@ -56,13 +58,25 @@ clippy:
 fmt:
 	$(CARGO_BIN) fmt --all
 
-## Build and launch the production GUI.
+## Build and launch Everything for Linux. This one binary is both the GUI and
+## the search daemon: it starts a daemon (re-executing itself) and attaches.
 run: release
+	./$(BIN_DIR)/everything-linux
+
+## Same as `run`, dev profile.
+run-dev: build
+	./target/debug/everything-linux
+
+## Build and launch just the GUI binary (a development convenience).
+run-gui: release
 	./$(BIN_DIR)/everything-gui
 
-## Build and launch the dev GUI.
-run-dev: build
-	./target/debug/everything-gui
+## Copy the single shareable binary to dist/.
+dist: release
+	mkdir -p dist
+	install -m 0755 $(BIN_DIR)/everything-linux dist/everything-linux
+	@echo "Shareable binary: dist/everything-linux"
+	@ls -lh dist/everything-linux
 
 ## Build and launch the search daemon (GUI and CLI then attach to it).
 daemon: release
@@ -75,13 +89,14 @@ daemon-dev: build
 ## Install release binaries into ~/.local/bin.
 install: release
 	mkdir -p $(INSTALLDIR)
+	install -m 0755 $(BIN_DIR)/everything-linux $(INSTALLDIR)/everything-linux
 	install -m 0755 $(BIN_DIR)/everything $(INSTALLDIR)/everything
 	install -m 0755 $(BIN_DIR)/everything-gui $(INSTALLDIR)/everything-gui
 	install -m 0755 $(BIN_DIR)/everything-daemon $(INSTALLDIR)/everything-daemon
-	@echo "Installed: $(INSTALLDIR)/everything, $(INSTALLDIR)/everything-gui, $(INSTALLDIR)/everything-daemon"
+	@echo "Installed into $(INSTALLDIR): everything-linux, everything, everything-gui, everything-daemon"
 
 uninstall:
-	rm -f $(INSTALLDIR)/everything $(INSTALLDIR)/everything-gui $(INSTALLDIR)/everything-daemon
+	rm -f $(INSTALLDIR)/everything-linux $(INSTALLDIR)/everything $(INSTALLDIR)/everything-gui $(INSTALLDIR)/everything-daemon
 
 clean:
 	$(CARGO_BIN) clean
