@@ -7,10 +7,11 @@
 
 use globset::{GlobBuilder, GlobMatcher};
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Result categories for the sidebar quick filters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Category {
     All,
     Recent { max_age_secs: i64 },
@@ -29,7 +30,7 @@ impl Default for Category {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Query {
     /// Raw query string (whitespace-separated terms; `!term` excludes).
     pub name: String,

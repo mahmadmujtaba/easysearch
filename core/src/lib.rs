@@ -8,6 +8,8 @@
 //! - content search via the embedded ripgrep engine (`grep-searcher`),
 //! - an optional bounded in-RAM content cache for repeated queries.
 
+pub mod api;
+pub mod backend;
 pub mod config;
 pub mod content;
 pub mod content_index;
@@ -15,10 +17,13 @@ pub mod disk_index;
 pub mod engine;
 pub mod matcher;
 pub mod overlay;
+pub mod remote;
 pub mod roots;
 pub mod walker;
 pub mod watcher;
 
+pub use backend::Backend;
 pub use config::Config;
 pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
 pub use matcher::{Category, CompiledQuery, Query};
+pub use remote::Remote;

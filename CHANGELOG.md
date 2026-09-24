@@ -4,6 +4,41 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-24
+
+### Added
+
+- **The search engine is now its own process.** A new `everything-daemon`
+  binary owns the index, watcher and content cache and serves them over an
+  HTTP/JSON API on `127.0.0.1:5858` (localhost only, no authentication); see
+  `docs/api.md`. Endpoints: `GET /v1/health`, `GET /v1/status`,
+  `POST|GET /v1/search`, `POST /v1/rebuild`, and `GET /v1/watch` (long-poll).
+  Because the engine no longer lives inside the GUI, it keeps running — and other
+  clients keep working — when no GUI is running at all.
+- `everything-gui` is now a client: it attaches to a daemon (`--daemon ADDR`,
+  `EVERYTHING_DAEMON`, or auto-detected on the default address) and falls back to
+  an in-process engine when none is running, so it always works. The status bar
+  shows the active backend and flags an unreachable daemon in red.
+- `everything` (CLI) gained `--remote ADDR` to query a daemon instead of
+  indexing locally.
+- `core` gained `Backend` (in-process vs. daemon behind one interface), a
+  dependency-free HTTP/1.1 client (`core::remote`, std only, with chunked
+  decoding) and `core::api` wire types. `Query`, `Status` and related engine
+  types now derive serde.
+- `make daemon` / `make daemon-dev`; the daemon ships in `make install`.
+
+### Changed
+
+- `docs/scope.md` §8 documents the implemented API instead of a plan.
+
+### Notes
+
+- Change notification is long-polling (`/v1/watch`) rather than SSE/WebSocket:
+  `tiny_http` streams through a chunk encoder that buffers small writes, so short
+  server-sent-event frames are never flushed.
+- Only one process should own the on-disk index: when a daemon is running,
+  clients attach to it rather than starting a second in-process engine.
+
 ## [0.7.0] - 2026-09-24
 
 ### Added
@@ -253,6 +288,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.8.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.8.0
 [0.7.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.7.0
 [0.6.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.6.0
 [0.5.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.5.0

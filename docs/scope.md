@@ -257,16 +257,33 @@ One query box, three effective combinations:
 
 ---
 
-## 8. Optional Daemon HTTP API (localhost only)
+## 8. Daemon HTTP API (localhost only) — implemented in `daemon/`
 
-`tiny_http`, bound to `127.0.0.1`, port `24123` by default. Read-only; no auth on loopback.
-The GUI and CLI do **not** use this by default (they link `core/` directly).
+`everything-daemon` owns the engine as a **separate process** and serves it over
+`tiny_http`, bound to `127.0.0.1:5858` by default. Read-only; no auth, loopback
+only. Full reference: **`docs/api.md`**.
+
+Splitting the engine out of the GUI means the index keeps running — and every
+client keeps working — even when no GUI is running at all:
+
+- `everything-gui` attaches to a daemon (`--daemon ADDR`, `EVERYTHING_DAEMON`, or
+auto-detected on the default address) and falls back to an in-process engine when
+none is running, so it can never become unusable.
+- `everything` (CLI) indexes in-process by default and supports `--remote ADDR`.
+- Any other client can use plain HTTP + JSON (`curl`, scripts, any language).
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/status` | index size, roots, watcher state (live/degraded), skipped-dir counts |
-| `GET /api/search` | `name`, `name_regex`, `content`, `case`, `hidden`, `path_match`, `limit`, `scope` → `{results:[{path,size,mtime,is_dir}], total, truncated}` |
-| `POST /api/index/rebuild` | full rescan (e.g. after system restore) |
+| `GET /v1/health` | liveness/version probe |
+| `GET /v1/status` | index size, watcher state (live/degraded), skipped-dir counts |
+| `POST /v1/search` | `Query` JSON → `{results:[{path,size,mtime,is_dir}], truncated, elapsed_ms, indexed}` |
+| `GET /v1/search` | same, via query parameters (`query`, `regex`, `content`, `case`, `hidden`, `path`, `dirs`, `limit`, `category`) |
+| `POST /v1/rebuild` | full rescan (e.g. after system restore) |
+| `GET /v1/watch` | long-poll: status returned when it changes, or on timeout |
+
+Change notification is **long-polling**, not SSE/WebSocket: it works with every
+HTTP client and is not defeated by `tiny_http`'s chunked encoder, which buffers
+small writes (so short SSE frames are never flushed).
 
 ## 9. Resource Footprint Budget (non-negotiable targets)
 

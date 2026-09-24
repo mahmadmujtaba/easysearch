@@ -1,7 +1,11 @@
-//! `everything` — headless search CLI over the same engine as the GUI.
+//! `everything` — headless search CLI.
+//!
+//! By default it indexes in-process (no daemon needed). With `--remote ADDR` it
+//! instead queries a running `everything-daemon`, so the CLI keeps working even
+//! when no GUI is involved.
 
 use clap::{Parser, Subcommand};
-use everything_core::{Config, Engine, Query, State};
+use everything_core::{Backend, Config, Query, State};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -11,6 +15,11 @@ use std::time::Duration;
     about = "Realtime file and content search for Linux (Everything-style)"
 )]
 struct Cli {
+    /// Query a running daemon instead of indexing in this process
+    /// (e.g. --remote 127.0.0.1:5858).
+    #[arg(long, global = true, value_name = "ADDR")]
+    remote: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -55,8 +64,11 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    let config = Config::load();
-    let mut engine = Engine::new(config);
+    // Local (default) or a running daemon.
+    let backend = match &cli.remote {
+        Some(addr) => Backend::remote(addr.clone()),
+        None => Backend::local(Config::load()),
+    };
 
     match cli.command {
         Command::Search {
@@ -69,9 +81,8 @@ fn main() {
             limit,
             no_wait,
         } => {
-            engine.start();
             if !no_wait {
-                engine.wait_live(Duration::from_secs(120));
+                backend.wait_live(Duration::from_secs(120));
             }
             let q = Query {
                 name: query,
@@ -84,7 +95,7 @@ fn main() {
                 include_dirs: true,
                 limit,
             };
-            match engine.search(&q) {
+            match backend.search(&q) {
                 Ok(resp) => {
                     for r in &resp.results {
                         println!("{}", r.path.display());
@@ -104,10 +115,9 @@ fn main() {
             }
         }
         Command::Status | Command::Index => {
-            engine.start();
-            engine.wait_live(Duration::from_secs(120));
-            let s = engine.status_snapshot();
-            let (files, dirs) = engine.counts();
+            backend.wait_live(Duration::from_secs(120));
+            let s = backend.status_snapshot();
+            let (files, dirs) = backend.counts();
             println!("state:          {:?}", s.state);
             println!("files:          {files}");
             println!("dirs:           {dirs}");

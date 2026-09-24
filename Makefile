@@ -10,6 +10,7 @@
 #   make fmt        format sources
 #   make run        run the production GUI
 #   make run-dev    run the dev GUI
+#   make daemon     run the search daemon (HTTP/JSON API on 127.0.0.1:5858)
 #   make install    copy release binaries to ~/.local/bin
 #   make clean      remove build artifacts
 #   make help       show this help
@@ -22,7 +23,7 @@ BIN_DIR    := target/release
 INSTALLDIR := $(HOME)/.local/bin
 
 .PHONY: all build dev release prod test test-release check clippy fmt \
-        run run-dev install uninstall clean help
+        run run-dev daemon install uninstall clean help
 
 ## Default: dev build + tests + production build.
 all: build test release
@@ -63,15 +64,24 @@ run: release
 run-dev: build
 	./target/debug/everything-gui
 
+## Build and launch the search daemon (GUI and CLI then attach to it).
+daemon: release
+	./$(BIN_DIR)/everything-daemon --addr 127.0.0.1:5858
+
+## Build and launch the daemon (dev profile).
+daemon-dev: build
+	./target/debug/everything-daemon --addr 127.0.0.1:5858
+
 ## Install release binaries into ~/.local/bin.
 install: release
 	mkdir -p $(INSTALLDIR)
 	install -m 0755 $(BIN_DIR)/everything $(INSTALLDIR)/everything
 	install -m 0755 $(BIN_DIR)/everything-gui $(INSTALLDIR)/everything-gui
-	@echo "Installed: $(INSTALLDIR)/everything, $(INSTALLDIR)/everything-gui"
+	install -m 0755 $(BIN_DIR)/everything-daemon $(INSTALLDIR)/everything-daemon
+	@echo "Installed: $(INSTALLDIR)/everything, $(INSTALLDIR)/everything-gui, $(INSTALLDIR)/everything-daemon"
 
 uninstall:
-	rm -f $(INSTALLDIR)/everything $(INSTALLDIR)/everything-gui
+	rm -f $(INSTALLDIR)/everything $(INSTALLDIR)/everything-gui $(INSTALLDIR)/everything-daemon
 
 clean:
 	$(CARGO_BIN) clean

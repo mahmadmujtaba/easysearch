@@ -7,8 +7,9 @@
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
+use everything_core::api::DEFAULT_ADDR;
 use everything_core::{
-    Category, ContentIndexStatus, Engine, Query, ResultRow, SearchResponse, State, Status,
+    Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -329,10 +330,7 @@ fn tab_title(tab: &TabState) -> String {
 }
 
 fn main() -> eframe::Result {
-    let config = everything_core::Config::load();
-    let mut engine = Engine::new(config);
-    engine.start();
-    let engine = Arc::new(engine);
+    let backend = select_backend();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -345,8 +343,44 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Everything for Linux",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, engine)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, backend)))),
     )
+}
+
+/// Choose the search backend.
+///
+/// `--daemon <addr>` (or `EVERYTHING_DAEMON=<addr>`) uses that daemon;
+/// otherwise a daemon already listening on [`DEFAULT_ADDR`] is used when
+/// reachable; otherwise the engine runs in-process, so the GUI always works.
+fn select_backend() -> Arc<Backend> {
+    if let Some(addr) = daemon_from_env_or_args() {
+        eprintln!("everything-gui: using daemon at {addr}");
+        return Arc::new(Backend::remote(addr));
+    }
+    if everything_core::remote::probe(DEFAULT_ADDR, Duration::from_millis(300)) {
+        eprintln!("everything-gui: using daemon at {DEFAULT_ADDR}");
+        return Arc::new(Backend::remote(DEFAULT_ADDR));
+    }
+    eprintln!("everything-gui: no daemon on {DEFAULT_ADDR} — using the in-process engine");
+    Arc::new(Backend::local(everything_core::Config::load()))
+}
+
+fn daemon_from_env_or_args() -> Option<String> {
+    if let Ok(addr) = std::env::var("EVERYTHING_DAEMON") {
+        if !addr.trim().is_empty() {
+            return Some(addr);
+        }
+    }
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(rest) = arg.strip_prefix("--daemon=") {
+            return Some(rest.to_string());
+        }
+        if arg == "--daemon" {
+            return args.next();
+        }
+    }
+    None
 }
 
 /// Persistent GUI preferences (`~/.config/everything-linux/gui.json`).
@@ -458,7 +492,7 @@ struct Preview {
 }
 
 struct App {
-    engine: Arc<Engine>,
+    engine: Arc<Backend>,
     prefs: GuiPrefs,
     query: String,
     regex_mode: bool,
@@ -506,13 +540,15 @@ struct App {
     /// Set when a tab's state changed; persisted by a throttled background save.
     dirty: bool,
     last_save: Instant,
+    /// Human label for the search backend ("in-process" or "daemon HOST:PORT").
+    backend_label: String,
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>, engine: Arc<Engine>) -> App {
+    fn new(cc: &eframe::CreationContext<'_>, backend: Arc<Backend>) -> App {
         let (query_tx, query_rx) = mpsc::channel::<UiMsg>();
         let (result_tx, result_rx) = mpsc::channel::<OutMsg>();
-        let engine_worker = Arc::clone(&engine);
+        let backend_worker = Arc::clone(&backend);
 
         std::thread::Builder::new()
             .name("search".into())
@@ -523,7 +559,7 @@ impl App {
                     query,
                 }) = query_rx.recv()
                 {
-                    let result = engine_worker.search(&query);
+                    let result = backend_worker.search(&query);
                     let _ = result_tx.send(OutMsg::Done {
                         tab,
                         ui_query,
@@ -539,7 +575,8 @@ impl App {
             None => !matches!(dark_light::detect(), dark_light::Mode::Light),
         };
         let (ui_font, mono_font) = load_system_fonts();
-        let status_snapshot = engine.status_snapshot();
+        let status_snapshot = backend.status_snapshot();
+        let backend_label = backend.label();
         let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
         let (tray_rx, tray_handle) =
             match tray::spawn_tray("Everything for Linux", Arc::clone(&history_shared)) {
@@ -561,7 +598,7 @@ impl App {
         let start = tabs[active_tab].clone();
 
         let mut app = App {
-            engine,
+            engine: backend,
             prefs,
             query: start.query,
             regex_mode: start.regex_mode,
@@ -602,6 +639,7 @@ impl App {
             active_tab,
             dirty: false,
             last_save: Instant::now(),
+            backend_label,
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
@@ -1752,6 +1790,10 @@ impl App {
                     ("Double-click", "Open a result"),
                     ("Esc", "Clear the search"),
                     ("Ctrl+F", "Focus the search box"),
+                    ("Ctrl+T", "New tab"),
+                    ("Ctrl+W", "Close tab"),
+                    ("Ctrl+Tab", "Next tab"),
+                    ("Ctrl+1..9", "Select tab"),
                     ("↑ / ↓ (empty search)", "Cycle search history"),
                     ("Click column headers", "Sort results"),
                 ];
@@ -2615,8 +2657,19 @@ impl App {
                 }
                 ui.label(egui::RichText::new(label).color(t.dim).size(12.0));
                 ui.separator();
+                let (backend_text, backend_color) = if self.engine.connected() {
+                    (self.backend_label.clone(), t.faint)
+                } else {
+                    (format!("{} · unreachable", self.backend_label), t.bad)
+                };
                 ui.label(
-                    egui::RichText::new("↑↓ navigate · Enter open · Esc clear")
+                    egui::RichText::new(backend_text)
+                        .color(backend_color)
+                        .size(12.0),
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("↑↓ navigate · Enter open · Ctrl+T tab")
                         .color(t.faint)
                         .size(12.0),
                 );

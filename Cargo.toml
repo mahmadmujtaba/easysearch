@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["core", "cli", "gui"]
+members = ["core", "cli", "gui", "daemon"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 

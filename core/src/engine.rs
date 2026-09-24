@@ -15,13 +15,14 @@ use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use crate::walker::{walk_root_apply, walk_root_collect};
 use crate::watcher;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 /// One result row for the UI / CLI.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResultRow {
     pub path: PathBuf,
     pub size: u64,
@@ -29,7 +30,7 @@ pub struct ResultRow {
     pub is_dir: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<ResultRow>,
     pub truncated: bool,
@@ -38,14 +39,14 @@ pub struct SearchResponse {
     pub indexed: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum State {
     Starting,
     Indexing,
     Live,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ContentIndexStatus {
     Disabled,
     Enabled {
@@ -55,7 +56,7 @@ pub enum ContentIndexStatus {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Status {
     pub state: State,
     pub degraded: bool,
@@ -69,6 +70,22 @@ pub struct Status {
     pub base_entries: usize,
     pub base_files: u64,
     pub base_dirs: u64,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status {
+            state: State::Starting,
+            degraded: false,
+            skipped: 0,
+            watch_failures: 0,
+            content_index: ContentIndexStatus::Disabled,
+            overlay_pending: 0,
+            base_entries: 0,
+            base_files: 0,
+            base_dirs: 0,
+        }
+    }
 }
 
 /// Upper bound on how many name-matched candidates a content query will fan
