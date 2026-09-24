@@ -4,6 +4,33 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-24
+
+### Added
+
+- **One file to run: `everything-linux`.** A single binary that is both the GUI
+  and the search daemon. Run with no arguments it makes sure a daemon is
+  listening — re-executing *itself* in `--daemon` mode, detached into its own
+  session — and attaches the GUI to it, so the HTTP API keeps serving other
+  clients and the index keeps running after the GUI is closed. If a daemon
+  cannot be started (for example the port is taken), the GUI falls back to an
+  in-process engine instead of failing. The daemon's log goes to
+  `$XDG_CACHE_HOME/everything-linux/daemon.log`.
+- `make dist` copies the shareable single binary to `dist/everything-linux`
+  (~17 MB); `make run` now launches it and `make install` installs it alongside
+  the per-component binaries.
+
+### Changed
+
+- Workspace migrated to Rust **edition 2024** (from 2021). No behavioural changes
+  were required apart from `std::env::set_var` becoming `unsafe`: tests now pass
+  the child's environment explicitly instead of mutating ours, which is also
+  race-free.
+- The GUI crate is now a library plus a thin binary, so the combined app reuses
+  the same UI; a shared daemon entry point (`run_forever`) backs both the
+  standalone daemon and the combined binary.
+- `docs/api.md` documents the single-file app and the sharing workflow.
+
 ## [0.8.0] - 2026-09-24
 
 ### Added
@@ -288,6 +315,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.9.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.9.0
 [0.8.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.8.0
 [0.7.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.7.0
 [0.6.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.6.0

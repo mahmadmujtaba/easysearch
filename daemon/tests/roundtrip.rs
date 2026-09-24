@@ -32,9 +32,11 @@ impl Drop for TestDir {
 
 /// Start a daemon over an isolated root; returns its base address.
 fn start_daemon(root: &std::path::Path) -> String {
-    let mut cfg = Config::default();
-    cfg.roots = vec![root.to_string_lossy().into_owned()];
-    cfg.disk_index_dir = Some(root.join(".cache-dir").to_string_lossy().into_owned());
+    let cfg = Config {
+        roots: vec![root.to_string_lossy().into_owned()],
+        disk_index_dir: Some(root.join(".cache-dir").to_string_lossy().into_owned()),
+        ..Config::default()
+    };
     let mut engine = Engine::new(cfg);
     engine.start();
 
@@ -64,12 +66,11 @@ fn wait_live(backend: &Backend, timeout: Duration) -> bool {
 fn wait_live_http(addr: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Ok(body) = request(addr, "GET", "/v1/status", None) {
-            if let Ok(report) = serde_json::from_slice::<StatusReport>(&body) {
-                if report.status.state == State::Live {
-                    return true;
-                }
-            }
+        if let Ok(body) = request(addr, "GET", "/v1/status", None)
+            && let Ok(report) = serde_json::from_slice::<StatusReport>(&body)
+            && report.status.state == State::Live
+        {
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -141,9 +142,11 @@ fn rest_api_shapes_are_stable() {
     let body = request(&addr, "GET", "/v1/search?query=*.csv&limit=10", None).unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let results = json["results"].as_array().expect("results array");
-    assert!(results
-        .iter()
-        .any(|r| r["path"].as_str().unwrap_or("").ends_with("report.csv")));
+    assert!(
+        results
+            .iter()
+            .any(|r| r["path"].as_str().unwrap_or("").ends_with("report.csv"))
+    );
 
     // POST search
     let q = serde_json::to_vec(&Query {

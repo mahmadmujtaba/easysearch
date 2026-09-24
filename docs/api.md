@@ -8,9 +8,23 @@ other client keeps working — even when no GUI is running. Clients:
 
 | Client | How it talks to the engine |
 | --- | --- |
-| `everything-gui` | attaches to a daemon (`--daemon ADDR`, `EVERYTHING_DAEMON`, or auto-detected on the default address); falls back to an in-process engine when none is running |
+| `everything-linux` | **the single-file app**: opens the GUI and starts a daemon by re-executing itself when none is listening (falling back to an in-process engine if it cannot). This is what end users run. |
+| `everything-gui` | the GUI alone (dev convenience): attaches to a daemon (`--daemon ADDR`, `EVERYTHING_DAEMON`, or auto-detected on the default address) |
 | `everything` (CLI) | in-process by default; `--remote ADDR` queries a daemon |
 | anything else | plain HTTP + JSON (`curl`, scripts, another language) |
+
+### Sharing the single binary
+
+```sh
+make dist          # → dist/everything-linux  (one self-contained file)
+```
+
+The GUI and the daemon are the same executable: running it starts a daemon (the
+same file, re-executed with `--daemon`, detached into its own session) and
+attaches the GUI to it. The daemon's log goes to
+`$XDG_CACHE_HOME/everything-linux/daemon.log`. It needs only the usual desktop
+libraries (OpenGL/EGL and the windowing stack) that any graphical Linux
+installation already has.
 
 > **Security:** the API has no authentication and is bound to loopback. Do not
 > bind it to a non-loopback address or expose it through a proxy.

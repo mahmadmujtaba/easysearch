@@ -10,8 +10,8 @@
 //! Fallback: if a daemon cannot be started (e.g. the port is taken by something
 //! unrelated), the GUI runs the engine in-process instead of failing.
 
-use everything_core::api::{Health, API_VERSION, DEFAULT_ADDR};
-use everything_core::{remote, Backend, Config, Engine};
+use everything_core::api::{API_VERSION, DEFAULT_ADDR, Health};
+use everything_core::{Backend, Config, Engine, remote};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -94,8 +94,33 @@ pub fn ensure_daemon(addr: &str) -> Ensured {
     }
 }
 
+/// Poll `addr` until a healthy daemon answers (bounded).
+pub fn wait_for_daemon(addr: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if daemon_is_up(addr) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
 /// Spawn `exe --daemon --addr <addr>`, detached from this process.
 pub fn spawn_daemon(addr: &str, exe: &Path) -> std::io::Result<Child> {
+    spawn_daemon_with_env(addr, exe, &[])
+}
+
+/// Like [`spawn_daemon`], with extra environment variables for the child.
+///
+/// Passing the child's environment explicitly (rather than mutating ours) keeps
+/// callers — including tests — thread-safe: `std::env::set_var` is `unsafe` in
+/// edition 2024 precisely because it races with other threads.
+pub fn spawn_daemon_with_env(
+    addr: &str,
+    exe: &Path,
+    envs: &[(String, String)],
+) -> std::io::Result<Child> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -105,6 +130,9 @@ pub fn spawn_daemon(addr: &str, exe: &Path) -> std::io::Result<Child> {
         .arg(addr)
         .arg("--quiet")
         .stdin(Stdio::null());
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
 
     // Send the daemon's output to a log file so it never writes to a closed
     // stdout once the GUI exits.
@@ -175,13 +203,13 @@ pub fn run_gui(addr: &str) -> Result<(), String> {
         }
         Ensured::Started(_child) => {
             eprintln!("everything-linux: started a search daemon on {addr}");
-            if let Some(h) = health(addr) {
-                if h.api != API_VERSION {
-                    eprintln!(
-                        "everything-linux: warning: daemon API {} differs from expected {API_VERSION}",
-                        h.api
-                    );
-                }
+            if let Some(h) = health(addr)
+                && h.api != API_VERSION
+            {
+                eprintln!(
+                    "everything-linux: warning: daemon API {} differs from expected {API_VERSION}",
+                    h.api
+                );
             }
             Backend::remote(addr)
         }

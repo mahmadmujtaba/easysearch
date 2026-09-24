@@ -2,7 +2,9 @@
 //! daemon. This exercises the daemon half plus the auto-start path the GUI uses
 //! (`ensure_daemon_with`), without needing a display.
 //!
-//! Kept as one test because the child inherits the parent's `XDG_*` environment.
+//! The child's environment is passed explicitly instead of mutating ours:
+//! `std::env::set_var` is `unsafe` in edition 2024, and even then it would race
+//! with other tests running on other threads.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -52,8 +54,8 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("needle.txt"), "hello").unwrap();
 
-    // Isolated config + cache so the child only indexes our tiny root (and does
-    // not touch the developer's home or real cache).
+    // Isolated config + cache for the child, so it only indexes our tiny root
+    // (and never touches the developer's home or real cache).
     let cfg = dir.0.join("cfg");
     std::fs::create_dir_all(cfg.join("everything-linux")).unwrap();
     std::fs::write(
@@ -61,17 +63,24 @@ fn single_binary_starts_a_daemon_and_serves_search() {
         format!(r#"{{"roots":["{}"]}}"#, root.display()),
     )
     .unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", &cfg);
-    std::env::set_var("XDG_CACHE_HOME", dir.0.join("cache"));
+    let envs = vec![
+        (
+            "XDG_CONFIG_HOME".to_string(),
+            cfg.to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME".to_string(),
+            dir.0.join("cache").to_string_lossy().into_owned(),
+        ),
+    ];
 
     let addr = free_addr();
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_everything-linux"));
 
-    // The binary should re-exec itself in daemon mode.
-    let mut child = match everything_app::ensure_daemon_with(&addr, &exe) {
-        everything_app::Ensured::Started(child) => child,
-        other => panic!("expected a freshly started daemon, got {other:?}"),
-    };
+    // The binary should run itself as a daemon.
+    let mut child = everything_app::spawn_daemon_with_env(&addr, &exe, &envs)
+        .expect("spawning the daemon half of the binary failed");
+    let up = everything_app::wait_for_daemon(&addr, Duration::from_secs(30));
 
     // Poll until the fixture is indexed and searchable.
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -79,21 +88,21 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     while Instant::now() < deadline {
         if let Ok(body) =
             everything_core::remote::request(&addr, "GET", "/v1/search?query=needle*&limit=5", None)
+            && String::from_utf8_lossy(&body).contains("needle.txt")
         {
-            if String::from_utf8_lossy(&body).contains("needle.txt") {
-                found = true;
-                break;
-            }
+            found = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    // A second call must recognise the running daemon rather than spawn another.
+    // With a daemon already listening, ensure must not start a second one.
     let second = everything_app::ensure_daemon_with(&addr, &exe);
 
     let _ = child.kill();
     let _ = child.wait();
 
+    assert!(up, "daemon never became reachable on {addr}");
     assert!(found, "daemon never returned the fixture file");
     assert!(
         matches!(second, everything_app::Ensured::AlreadyUp),
