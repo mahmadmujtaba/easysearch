@@ -203,11 +203,129 @@ fn category_color(t: &Theme, cat: &Category) -> egui::Color32 {
 }
 
 enum UiMsg {
-    Search(Query),
+    /// A search for one tab. `ui_query` is the raw search-box text, echoed back
+    /// so a stale response (the query changed since) can be dropped.
+    Search {
+        tab: usize,
+        ui_query: String,
+        query: Query,
+    },
 }
 
 enum OutMsg {
-    Done(Result<SearchResponse, String>),
+    Done {
+        tab: usize,
+        ui_query: String,
+        result: Result<SearchResponse, String>,
+    },
+}
+
+/// Per-tab search state.
+///
+/// The **active** tab's fields live directly on [`App`] (so all the UI code can
+/// keep reading `self.query`, `self.results`, …); the other tabs are snapshots
+/// held in `App::tabs` and swapped in/out when switching.
+#[derive(Clone)]
+struct TabState {
+    query: String,
+    regex_mode: bool,
+    content_mode: bool,
+    case_sensitive: bool,
+    hidden: bool,
+    full_path: bool,
+    category: Category,
+    results: Vec<ResultRow>,
+    truncated: bool,
+    error: Option<String>,
+    elapsed_ms: u64,
+    selected: usize,
+    sort: Option<Sort>,
+    last_sent: String,
+    pending: bool,
+}
+
+impl Default for TabState {
+    fn default() -> Self {
+        TabState {
+            query: String::new(),
+            regex_mode: false,
+            content_mode: false,
+            case_sensitive: false,
+            hidden: false,
+            full_path: false,
+            category: Category::All,
+            results: Vec::new(),
+            truncated: false,
+            error: None,
+            elapsed_ms: 0,
+            selected: 0,
+            sort: None,
+            last_sent: String::new(),
+            pending: false,
+        }
+    }
+}
+
+impl TabState {
+    fn from_prefs(p: &TabPrefs) -> TabState {
+        TabState {
+            query: p.query.clone(),
+            regex_mode: p.regex_mode,
+            content_mode: p.content_mode,
+            case_sensitive: p.case_sensitive,
+            hidden: p.hidden,
+            full_path: p.full_path,
+            category: category_at(p.category_index),
+            ..TabState::default()
+        }
+    }
+
+    fn to_prefs(&self) -> TabPrefs {
+        TabPrefs {
+            query: self.query.clone(),
+            regex_mode: self.regex_mode,
+            content_mode: self.content_mode,
+            case_sensitive: self.case_sensitive,
+            hidden: self.hidden,
+            full_path: self.full_path,
+            category_index: category_index(&self.category),
+        }
+    }
+}
+
+/// Persisted (query-only) form of a tab; results are not stored.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct TabPrefs {
+    query: String,
+    regex_mode: bool,
+    content_mode: bool,
+    case_sensitive: bool,
+    hidden: bool,
+    full_path: bool,
+    /// Index into [`CATEGORIES`] — keeps `Category` out of the persisted format.
+    category_index: usize,
+}
+
+fn category_index(cat: &Category) -> usize {
+    CATEGORIES.iter().position(|(_, c)| c == cat).unwrap_or(0)
+}
+
+fn category_at(i: usize) -> Category {
+    CATEGORIES.get(i).map(|(_, c)| *c).unwrap_or(Category::All)
+}
+
+/// Tab label: the query, or a placeholder for an empty search.
+fn tab_title(tab: &TabState) -> String {
+    let q = tab.query.trim();
+    if q.is_empty() {
+        return "New search".to_string();
+    }
+    let mut s: String = q.chars().take(22).collect();
+    if q.chars().count() > 22 {
+        s.push('…');
+    }
+    s
 }
 
 fn main() -> eframe::Result {
@@ -246,6 +364,10 @@ struct GuiPrefs {
     zoom: f32,
     /// Include folders in search results.
     include_dirs: bool,
+    /// Open search tabs (queries only) restored on startup.
+    tabs: Vec<TabPrefs>,
+    /// Index of the tab that was active when the app was last closed.
+    active_tab: usize,
 }
 
 impl Default for GuiPrefs {
@@ -257,6 +379,8 @@ impl Default for GuiPrefs {
             history: Vec::new(),
             zoom: 1.0,
             include_dirs: true,
+            tabs: Vec::new(),
+            active_tab: 0,
         }
     }
 }
@@ -375,6 +499,13 @@ struct App {
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
+    /// Snapshot state of every tab; the active one is mirrored in the fields
+    /// above and refreshed via [`App::snapshot`] before a switch or a save.
+    tabs: Vec<TabState>,
+    active_tab: usize,
+    /// Set when a tab's state changed; persisted by a throttled background save.
+    dirty: bool,
+    last_save: Instant,
 }
 
 impl App {
@@ -386,9 +517,18 @@ impl App {
         std::thread::Builder::new()
             .name("search".into())
             .spawn(move || {
-                while let Ok(UiMsg::Search(q)) = query_rx.recv() {
-                    let res = engine_worker.search(&q);
-                    let _ = result_tx.send(OutMsg::Done(res));
+                while let Ok(UiMsg::Search {
+                    tab,
+                    ui_query,
+                    query,
+                }) = query_rx.recv()
+                {
+                    let result = engine_worker.search(&query);
+                    let _ = result_tx.send(OutMsg::Done {
+                        tab,
+                        ui_query,
+                        result,
+                    });
                 }
             })
             .expect("failed to spawn search thread");
@@ -410,30 +550,40 @@ impl App {
                 }
             };
 
+        // Restore the tabs that were open when the app last closed (at least one).
+        let tab_prefs = if prefs.tabs.is_empty() {
+            vec![TabPrefs::default()]
+        } else {
+            prefs.tabs.clone()
+        };
+        let active_tab = prefs.active_tab.min(tab_prefs.len() - 1);
+        let tabs: Vec<TabState> = tab_prefs.iter().map(TabState::from_prefs).collect();
+        let start = tabs[active_tab].clone();
+
         let mut app = App {
             engine,
             prefs,
-            query: String::new(),
-            regex_mode: false,
-            content_mode: false,
-            case_sensitive: false,
-            hidden: false,
-            full_path: false,
-            category: Category::All,
+            query: start.query,
+            regex_mode: start.regex_mode,
+            content_mode: start.content_mode,
+            case_sensitive: start.case_sensitive,
+            hidden: start.hidden,
+            full_path: start.full_path,
+            category: start.category,
             limit: 500,
-            results: Vec::new(),
-            truncated: false,
-            error: None,
-            elapsed_ms: 0,
+            results: start.results,
+            truncated: start.truncated,
+            error: start.error,
+            elapsed_ms: start.elapsed_ms,
             status: status_snapshot,
-            last_sent: String::new(),
+            last_sent: String::new(), // force an initial search for the active tab
             pending: false,
             last_edit: Instant::now(),
             query_tx,
             result_rx,
-            selected: 0,
+            selected: start.selected,
             scroll_to: None,
-            sort: None,
+            sort: start.sort,
             preview: None,
             dark,
             history_idx: None,
@@ -448,6 +598,10 @@ impl App {
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
+            tabs,
+            active_tab,
+            dirty: false,
+            last_save: Instant::now(),
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
@@ -570,6 +724,108 @@ impl App {
         self.theme().dim
     }
 
+    /// Copy the live search fields into the active tab's snapshot.
+    fn snapshot(&mut self) {
+        let i = self.active_tab;
+        if i >= self.tabs.len() {
+            return;
+        }
+        self.tabs[i] = TabState {
+            query: self.query.clone(),
+            regex_mode: self.regex_mode,
+            content_mode: self.content_mode,
+            case_sensitive: self.case_sensitive,
+            hidden: self.hidden,
+            full_path: self.full_path,
+            category: self.category,
+            results: self.results.clone(),
+            truncated: self.truncated,
+            error: self.error.clone(),
+            elapsed_ms: self.elapsed_ms,
+            selected: self.selected,
+            sort: self.sort,
+            last_sent: self.last_sent.clone(),
+            pending: self.pending,
+        };
+    }
+
+    /// Load a tab snapshot into the live search fields.
+    fn restore(&mut self, i: usize) {
+        let t = self.tabs[i].clone();
+        self.query = t.query;
+        self.regex_mode = t.regex_mode;
+        self.content_mode = t.content_mode;
+        self.case_sensitive = t.case_sensitive;
+        self.hidden = t.hidden;
+        self.full_path = t.full_path;
+        self.category = t.category;
+        self.results = t.results;
+        self.truncated = t.truncated;
+        self.error = t.error;
+        self.elapsed_ms = t.elapsed_ms;
+        self.selected = t.selected;
+        self.sort = t.sort;
+        self.last_sent = t.last_sent;
+        self.pending = t.pending;
+        // Transient view state is rebuilt for the newly shown tab.
+        self.preview = None;
+        self.scroll_to = None;
+        self.history_idx = None;
+        self.last_edit = Instant::now();
+    }
+
+    fn switch_tab(&mut self, i: usize) {
+        if i >= self.tabs.len() || i == self.active_tab {
+            return;
+        }
+        self.snapshot();
+        self.active_tab = i;
+        self.restore(i);
+        self.save_prefs();
+    }
+
+    fn new_tab(&mut self) {
+        self.snapshot();
+        self.tabs.push(TabState::default());
+        self.active_tab = self.tabs.len() - 1;
+        self.restore(self.active_tab);
+        self.save_prefs();
+        self.send_query();
+    }
+
+    fn close_tab(&mut self, i: usize) {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+            return;
+        }
+        // Keep what the closing tab was searching for in the history.
+        let q = self.tabs[i].query.trim().to_string();
+        if !q.is_empty() {
+            self.prefs.commit_query(&q);
+        }
+        if i == self.active_tab {
+            self.tabs.remove(i);
+            self.active_tab = i.min(self.tabs.len() - 1);
+            self.restore(self.active_tab);
+        } else {
+            self.tabs.remove(i);
+            if i < self.active_tab {
+                self.active_tab -= 1;
+            }
+        }
+        self.sync_history();
+        self.save_prefs();
+    }
+
+    /// Persist tabs + shared preferences (captures the live tab first).
+    fn save_prefs(&mut self) {
+        self.snapshot();
+        self.prefs.tabs = self.tabs.iter().map(TabState::to_prefs).collect();
+        self.prefs.active_tab = self.active_tab;
+        self.prefs.save();
+        self.dirty = false;
+        self.last_save = Instant::now();
+    }
+
     fn send_query(&mut self) {
         let name = if self.content_mode {
             String::new()
@@ -592,11 +848,16 @@ impl App {
             include_dirs: self.prefs.include_dirs,
             limit: self.limit,
         };
-        let _ = self.query_tx.send(UiMsg::Search(q));
+        let _ = self.query_tx.send(UiMsg::Search {
+            tab: self.active_tab,
+            ui_query: self.query.clone(),
+            query: q,
+        });
         self.last_sent = self.query.clone();
         self.pending = true;
         self.selected = 0;
         self.scroll_to = None;
+        self.dirty = true;
     }
 
     /// Cycle the sort for a column and re-sort the current results in place
@@ -761,6 +1022,63 @@ fn nav_item(
         t.text,
     );
     resp
+}
+
+/// One tab pill: title, and a “×” to close it. Returns `(switched, closed)`.
+fn tab_button(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    title: &str,
+    active: bool,
+    closable: bool,
+) -> (bool, bool) {
+    let galley = ui.painter().layout_no_wrap(
+        title.to_string(),
+        egui::FontId::new(12.5, egui::FontFamily::Proportional),
+        t.text,
+    );
+    let text_size = galley.size();
+    let close_w = if closable { 18.0 } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(22.0 + text_size.x + close_w, 26.0),
+        egui::Sense::click(),
+    );
+    let radius = egui::CornerRadius::same(7);
+    if active {
+        ui.painter().rect_filled(rect, radius, t.accent_soft());
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + 1.0, rect.center().y - 7.0),
+            egui::vec2(3.0, 14.0),
+        );
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, radius, t.hover);
+    }
+    ui.painter().galley(
+        egui::pos2(rect.min.x + 11.0, rect.center().y - text_size.y * 0.5),
+        galley,
+        if active { t.text } else { t.dim },
+    );
+
+    let mut closed = false;
+    if closable {
+        let crect = egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - 11.0, rect.center().y),
+            egui::vec2(14.0, 14.0),
+        );
+        let close_hover = ui.rect_contains_pointer(crect);
+        ui.painter().text(
+            crect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::new(12.0, egui::FontFamily::Proportional),
+            if close_hover { t.text } else { t.faint },
+        );
+        closed = resp.clicked() && close_hover;
+    }
+    let switched = resp.clicked() && !closed;
+    (switched, closed)
 }
 
 /// Small vector magnifier used as the search bar's leading icon.
@@ -1034,27 +1352,59 @@ fn resolve_family(family: &str, mono: bool) -> Option<Vec<u8>> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        while let Ok(OutMsg::Done(res)) = self.result_rx.try_recv() {
-            match res {
-                Ok(r) => {
-                    self.results = r.results;
-                    self.truncated = r.truncated;
-                    self.elapsed_ms = r.elapsed_ms;
-                    self.error = None;
-                    self.pending = false;
-                    if let Some(sort) = self.sort {
-                        sort_results(&mut self.results, sort);
+        while let Ok(OutMsg::Done {
+            tab,
+            ui_query,
+            result,
+        }) = self.result_rx.try_recv()
+        {
+            if tab == self.active_tab {
+                if ui_query != self.last_sent {
+                    continue; // stale: the query changed since this search was sent
+                }
+                match result {
+                    Ok(r) => {
+                        self.results = r.results;
+                        self.truncated = r.truncated;
+                        self.elapsed_ms = r.elapsed_ms;
+                        self.error = None;
+                        self.pending = false;
+                        if let Some(sort) = self.sort {
+                            sort_results(&mut self.results, sort);
+                        }
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        self.pending = false;
                     }
                 }
-                Err(e) => {
-                    self.error = Some(e);
-                    self.pending = false;
+            } else if let Some(t) = self.tabs.get_mut(tab) {
+                // Result for a background tab: update its snapshot only.
+                if ui_query != t.last_sent {
+                    continue;
+                }
+                match result {
+                    Ok(r) => {
+                        t.results = r.results;
+                        t.truncated = r.truncated;
+                        t.elapsed_ms = r.elapsed_ms;
+                        t.error = None;
+                        t.pending = false;
+                        if let Some(sort) = t.sort {
+                            sort_results(&mut t.results, sort);
+                        }
+                    }
+                    Err(e) => {
+                        t.error = Some(e);
+                        t.pending = false;
+                    }
                 }
             }
         }
         self.status = self.engine.status_snapshot();
 
         if self.query != self.last_sent {
+            self.dirty = true;
             if self.pending {
                 self.last_sent = self.query.clone();
                 self.pending = false;
@@ -1066,12 +1416,19 @@ impl eframe::App for App {
             }
         }
 
+        // Persist tab state occasionally while editing (throttled), so closing
+        // the app keeps the open searches.
+        if self.dirty && self.last_save.elapsed() >= Duration::from_secs(2) {
+            self.save_prefs();
+        }
+
         let search_focused = ctx.memory(|m| m.has_focus(search_id()));
 
         if self.search_was_focused && !search_focused && !self.query.is_empty() && !self.pending {
             let q = self.query.clone();
             self.prefs.commit_query(&q);
             self.sync_history();
+            self.save_prefs();
         }
         self.search_was_focused = search_focused;
 
@@ -1128,6 +1485,33 @@ impl eframe::App for App {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
         }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::T)) {
+            self.new_tab();
+            ctx.memory_mut(|m| m.request_focus(search_id()));
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::W)) {
+            let active = self.active_tab;
+            self.close_tab(active);
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Tab)) {
+            let next = (self.active_tab + 1) % self.tabs.len().max(1);
+            self.switch_tab(next);
+        }
+        for (n, key) in [
+            (0usize, egui::Key::Num1),
+            (1, egui::Key::Num2),
+            (2, egui::Key::Num3),
+            (3, egui::Key::Num4),
+            (4, egui::Key::Num5),
+            (5, egui::Key::Num6),
+            (6, egui::Key::Num7),
+            (7, egui::Key::Num8),
+            (8, egui::Key::Num9),
+        ] {
+            if n < self.tabs.len() && ctx.input(|i| i.modifiers.command && i.key_pressed(key)) {
+                self.switch_tab(n);
+            }
+        }
 
         ctx.request_repaint_after(Duration::from_millis(250));
 
@@ -1178,6 +1562,7 @@ impl eframe::App for App {
         }
 
         self.menu_bar(ctx);
+        self.tab_bar(ctx);
         self.top_bar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
         self.bottom_controls(ctx);
@@ -1201,6 +1586,12 @@ impl eframe::App for App {
         if self.show_shortcuts {
             self.shortcuts_dialog(ctx);
         }
+    }
+
+    /// Persist open tabs and history on shutdown (eframe calls this on exit and
+    /// on every `auto_save_interval` tick).
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.save_prefs();
     }
 }
 
@@ -1389,7 +1780,18 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.menu_button("File", |ui| {
-                        if ui.button("New search").clicked() {
+                        if ui.button("New tab").clicked() {
+                            self.new_tab();
+                            ctx.memory_mut(|m| m.request_focus(search_id()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Close tab").clicked() {
+                            let active = self.active_tab;
+                            self.close_tab(active);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Focus search").clicked() {
                             ctx.memory_mut(|m| m.request_focus(search_id()));
                             ui.close_menu();
                         }
@@ -1419,7 +1821,7 @@ impl App {
                             | ui.checkbox(&mut self.full_path, "Full path match")
                                 .changed();
                         if changed {
-                            self.last_edit = Instant::now();
+                            self.send_query();
                         }
                         ui.separator();
                         if ui.button("Clear search history").clicked() {
@@ -1479,6 +1881,49 @@ impl App {
             });
     }
 
+    /// Tab strip: one pill per open search, plus a “+” action.
+    fn tab_bar(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        egui::TopBottomPanel::top("tabs")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(14, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let mut switch: Option<usize> = None;
+                    let mut close: Option<usize> = None;
+                    let mut new_tab = false;
+                    let closable = self.tabs.len() > 1;
+                    for i in 0..self.tabs.len() {
+                        let active = i == self.active_tab;
+                        let title = tab_title(&self.tabs[i]);
+                        let (clicked, closed) = tab_button(ui, &t, &title, active, closable);
+                        if closed {
+                            close = Some(i);
+                        } else if clicked {
+                            switch = Some(i);
+                        }
+                    }
+                    ui.add_space(6.0);
+                    if ui.button("+").on_hover_text("New tab (Ctrl+T)").clicked() {
+                        new_tab = true;
+                    }
+                    if let Some(i) = switch {
+                        self.switch_tab(i);
+                    }
+                    if let Some(i) = close {
+                        self.close_tab(i);
+                    }
+                    if new_tab {
+                        self.new_tab();
+                        ctx.memory_mut(|m| m.request_focus(search_id()));
+                    }
+                });
+            });
+    }
+
     /// Floating search bar with in-bar toggles and the options menu.
     fn top_bar(&mut self, ctx: &egui::Context) {
         let t = self.theme();
@@ -1534,10 +1979,10 @@ impl App {
 
                             // In-bar toggles: regex, case-sensitive.
                             if toggle(ui, &t, &mut self.regex_mode, ".*", "Regex mode") {
-                                self.last_edit = Instant::now();
+                                self.send_query();
                             }
                             if toggle(ui, &t, &mut self.case_sensitive, "Aa", "Case-sensitive") {
-                                self.last_edit = Instant::now();
+                                self.send_query();
                             }
 
                             let history = self.prefs.history.clone();
@@ -1568,16 +2013,16 @@ impl App {
                                     .on_hover_text("Search inside files (regex)")
                                     .changed()
                                 {
-                                    self.last_edit = Instant::now();
+                                    self.send_query();
                                 }
                                 if ui.checkbox(&mut self.hidden, "Hidden files").changed() {
-                                    self.last_edit = Instant::now();
+                                    self.send_query();
                                 }
                                 if ui
                                     .checkbox(&mut self.full_path, "Full path match")
                                     .changed()
                                 {
-                                    self.last_edit = Instant::now();
+                                    self.send_query();
                                 }
                                 ui.separator();
                                 if ui
@@ -2480,5 +2925,64 @@ fn sort_results(results: &mut [ResultRow], sort: Sort) {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn category_index_roundtrips() {
+        for (i, (_, cat)) in CATEGORIES.iter().enumerate() {
+            assert_eq!(category_index(cat), i);
+            assert_eq!(category_at(i), *cat);
+        }
+        // Out-of-range indices (e.g. from an older/newer build) fall back to All.
+        assert_eq!(category_at(usize::MAX), Category::All);
+    }
+
+    #[test]
+    fn tab_prefs_roundtrip_keeps_query_and_filters() {
+        let tab = TabState {
+            query: "invoice 2026".into(),
+            regex_mode: true,
+            case_sensitive: true,
+            hidden: true,
+            category: Category::Images,
+            ..TabState::default()
+        };
+        let back = TabState::from_prefs(&tab.to_prefs());
+        assert_eq!(back.query, "invoice 2026");
+        assert!(back.regex_mode);
+        assert!(back.case_sensitive);
+        assert!(back.hidden);
+        assert!(!back.content_mode);
+        assert_eq!(back.category, Category::Images);
+        // A restored tab must re-run its search rather than show stale results.
+        assert_eq!(back.last_sent, "");
+        assert!(back.results.is_empty());
+    }
+
+    #[test]
+    fn old_gui_json_without_tabs_still_loads() {
+        let p: GuiPrefs = serde_json::from_str(r#"{"dark":true,"history":["a b"]}"#).unwrap();
+        assert!(p.tabs.is_empty());
+        assert_eq!(p.active_tab, 0);
+        assert_eq!(p.zoom, 1.0);
+        assert!(p.include_dirs);
+        assert_eq!(p.history, vec!["a b".to_string()]);
+    }
+
+    #[test]
+    fn tab_title_falls_back_and_truncates() {
+        let mut tab = TabState::default();
+        assert_eq!(tab_title(&tab), "New search");
+        tab.query = "   ".into();
+        assert_eq!(tab_title(&tab), "New search");
+        tab.query = "a".repeat(40);
+        let title = tab_title(&tab);
+        assert_eq!(title.chars().count(), 23); // 22 + ellipsis
+        assert!(title.ends_with('…'));
     }
 }

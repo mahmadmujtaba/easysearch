@@ -4,6 +4,29 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-24
+
+### Added
+
+- **Search tabs.** Each tab is an independent search with its own query,
+  regex / case / contents / hidden / full-path toggles, type filter, results,
+  selection and sort. A tab strip under the menu bar switches, closes (`×`) and
+  adds (`+`) tabs; keyboard shortcuts are `Ctrl+T` (new), `Ctrl+W` (close),
+  `Ctrl+Tab` (next) and `Ctrl+1..9` (select), with matching *File* menu items.
+  Switching tabs is instant — results are kept per tab — and background tabs
+  keep searching, with stale responses dropped.
+- **Session persistence.** Open tabs (query, filters and which tab was active)
+  are saved to `gui.json` and restored on startup. State is saved when tabs are
+  added / closed / switched, when the search box loses focus, on exit, and by a
+  throttled background save while editing — so closing the app keeps the
+  searches you had open. Older `gui.json` files without tabs still load.
+
+### Fixed
+
+- Toggling `.*` (regex), `Aa` (case), *Match contents*, *Hidden files* or
+  *Full path* now re-runs the search immediately. Previously the change had no
+  effect until the query text was edited.
+
 ## [0.6.0] - 2026-09-24
 
 ### Added
@@ -230,6 +253,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.7.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.7.0
 [0.6.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.6.0
 [0.5.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.5.0
 [0.4.1]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.1
