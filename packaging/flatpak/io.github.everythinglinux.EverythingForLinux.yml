@@ -1,0 +1,87 @@
+# Flatpak manifest for Everything for Linux.
+#
+# Build with:
+#
+#     make flatpak          # or: scripts/package-flatpak.sh
+#
+# Prerequisites (once):
+#     flatpak install flathub org.freedesktop.Platform//24.08 \
+#                             org.freedesktop.Sdk//24.08 \
+#                             org.freedesktop.Sdk.Extension.rust-stable//24.08
+#
+# Note: the sandbox only sees the directories granted in finish-args. To search
+# more of the disk, add e.g. "--filesystem=host:ro" to finish-args below.
+
+app-id: io.github.everythinglinux.EverythingForLinux
+
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: everything-linux
+
+finish-args:
+  # Windowing / rendering
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Read (and, for the row actions, write) the user's own files.
+  - --filesystem=home
+  # System tray (ksni talks to the StatusNotifierWatcher on the session bus).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.kde.StatusNotifierItem
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/everything-linux/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: everything-linux
+    buildsystem: simple
+
+    build-commands:
+      - cargo build --release --workspace --locked --offline
+      # everything-linux is the GUI *and* the daemon; the separate everything-gui
+      # binary is a development convenience and is not shipped.
+      - install -Dpm0755 target/release/everything-linux  /app/bin/everything-linux
+      - install -Dpm0755 target/release/everything        /app/bin/everything
+      - install -Dpm0755 target/release/everything-daemon /app/bin/everything-daemon
+      - install -Dpm0644 packaging/common/io.github.everythinglinux.EverythingForLinux.desktop
+        /app/share/applications/io.github.everythinglinux.EverythingForLinux.desktop
+      - install -Dpm0644 packaging/common/io.github.everythinglinux.EverythingForLinux.metainfo.xml
+        /app/share/metainfo/io.github.everythinglinux.EverythingForLinux.metainfo.xml
+      - install -Dpm0644 packaging/icons/hicolor/scalable/apps/io.github.everythinglinux.EverythingForLinux.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.everythinglinux.EverythingForLinux.svg
+
+    sources:
+      # The project itself (committed sources + the vendored arrayref patch).
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .shots
+          - build-flatpak
+          - dist
+          - target
+
+      # Every crates.io dependency, generated from Cargo.lock:
+      #     python3 scripts/gen-cargo-sources.py
+      - cargo-sources.json
+
+      # Point cargo at the vendored crates instead of the network. This is
+      # written last so it replaces the machine-specific .cargo/config.toml
+      # (whose custom linker only exists on the development machine).
+      - type: inline
+        dest: .cargo
+        dest-filename: config.toml
+        contents: |
+          [source.crates-io]
+          replace-with = 'vendored-sources'
+
+          [source.vendored-sources]
+          directory = 'cargo/vendor'

@@ -4,6 +4,34 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-24
+
+### Added
+
+- **Debian packages** — `make deb` stages the release binaries, the desktop
+  entry, the AppStream metainfo and the icons and builds a `.deb` with
+  `dpkg-deb`, needing no root. `Depends` combines `dpkg-shlibdeps` output with
+  the GUI libraries the binary `dlopen`s (mapped to real package names), so the
+  dependency list is complete rather than guessed.
+- **RPM packages** — `make rpm` builds the spec from a source tarball with
+  `rpmbuild`; the `dlopen`ed libraries are required by soname
+  (`libEGL.so.1()(64bit)`), which is exact and distribution-independent.
+- **Flatpak** — a manifest plus `cargo-sources.json` generated from
+  `Cargo.lock`, so the sandbox builds offline against vendored crates.
+- **Shared packaging assets**: a desktop entry, AppStream metainfo, and a flat
+  SVG app icon (rendered to PNG at build time).
+- **A `LICENSE` file** (MIT), which the packages install as their copyright
+  file. The copyright holder line is a placeholder.
+- New Makefile targets: `deb`, `rpm`, `flatpak`, `packages`, `cargo-sources` and
+  `validate-packaging`. See `docs/packaging.md`.
+
+### Changed
+
+- The packages ship `everything-linux` (GUI + daemon in one binary), the CLI and
+  a headless daemon. The separate `everything-gui` binary is a development
+  convenience that duplicated `everything-linux` and added ~17 MB, so it is no
+  longer packaged (the deb is ~6.4 MB compressed / ~23 MB installed).
+
 ## [0.10.0] - 2026-09-24
 
 ### Added

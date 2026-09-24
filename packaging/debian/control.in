@@ -1,0 +1,25 @@
+Package: @PKG@
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Depends: @DEPENDS@
+Installed-Size: @SIZE@
+Description: Instant file and content search for Linux
+ Everything for Linux searches file names and file contents while you type,
+ across your whole filesystem, and keeps its index up to date in realtime as
+ files are created, renamed, changed or deleted.
+ .
+ It is a lightweight native application (Rust + egui): no database, no runtime
+ and no web view. Queries understand globs, several terms, exclusions and
+ regex; content search uses the embedded ripgrep engine and always reads files
+ live rather than serving stale results.
+ .
+ This package installs the combined GUI + search-daemon binary
+ (everything-linux), the scriptable CLI (everything) and a headless daemon
+ (everything-daemon), plus a desktop entry, an AppStream metainfo file and the
+ application icons.
+ .
+ The search engine and the daemon API are bound to loopback only and are
+ unauthenticated; do not expose them to a network.

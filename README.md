@@ -38,6 +38,22 @@ Binaries land in `target/release/everything` and `target/release/everything-gui`
 
 > Optional, only for **.docx content search**: `sudo apt install docx2txt`.
 
+## Packaging
+
+Distribution packages are built from the same assets as the app:
+
+```sh
+make deb        # dist/everything-linux_<version>_<arch>.deb      (dpkg-deb)
+make rpm        # ~/rpmbuild/RPMS/... then copied to dist/          (rpmbuild)
+make flatpak    # dist/io.github.everythinglinux.EverythingForLinux.flatpak
+make packages   # all of the above that this machine has tools for
+make validate-packaging   # desktop entry + AppStream metadata
+```
+
+None of them need root. See [`docs/packaging.md`](docs/packaging.md) for what
+they install, the dependency-derivation details, the Flatpak sandbox notes, and
+which identifiers to change before publishing.
+
 ## Usage
 
 ```sh

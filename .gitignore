@@ -79,3 +79,9 @@ desktop.ini
 
 # Local screenshot scratch (used while developing the UI)
 .shots/
+
+# Packaging output and scratch
+build-flatpak/
+*.deb
+*.rpm
+*.flatpak

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Everything for Linux app icon: a magnifier with a lightning bolt inside.
+
+  Drawn with filled shapes only (no gradients, no strokes) so that every SVG
+  renderer draws it identically — including minimal ones that ignore
+  stroke-only shapes, such as ImageMagick's built-in renderer.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Rounded-square background -->
+  <rect x="16" y="16" width="480" height="480" rx="110" ry="110" fill="#232842"/>
+
+  <!-- Magnifier handle: a filled bar with a rounded end -->
+  <path d="M288.6 309.4 L315.4 282.6 L401.4 368.6 L374.6 395.4 Z" fill="#7aa2f7"/>
+  <circle cx="388" cy="382" r="19" fill="#7aa2f7"/>
+
+  <!-- Magnifier ring: an outer disc with the background punched out -->
+  <circle cx="226" cy="220" r="117" fill="#7aa2f7"/>
+  <circle cx="226" cy="220" r="87" fill="#232842"/>
+
+  <!-- Lightning bolt -->
+  <path d="M246 152 L192 240 h38 l-16 66 70 -92 h-40 z" fill="#e0af68"/>
+</svg>

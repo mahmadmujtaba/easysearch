@@ -25,6 +25,10 @@ mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
+/// Reverse-DNS application id. Kept in sync with the packaging assets in
+/// `packaging/` (desktop entry, AppStream metainfo, Flatpak manifest) so the
+/// window, the launcher entry and the icon all agree.
+const APP_ID: &str = "io.github.everythinglinux.EverythingForLinux";
 /// Selectable UI zoom levels (1.0 = 100%).
 const ZOOM_LEVELS: &[f32] = &[1.0, 1.1, 1.25];
 
@@ -507,7 +511,9 @@ pub fn run(backend: Arc<Backend>) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Everything for Linux")
-            .with_app_id("everything-linux")
+            // Must match the installed desktop entry / icon name so Wayland
+            // compositors associate the window with it (and show the icon).
+            .with_app_id(APP_ID)
             .with_inner_size([1240.0, 760.0])
             .with_min_inner_size([640.0, 400.0]),
         ..Default::default()

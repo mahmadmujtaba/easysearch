@@ -14,6 +14,11 @@
 #   make daemon     run just the search daemon (HTTP/JSON API)
 #   make dist       copy the shareable single binary to dist/
 #   make install    copy release binaries to ~/.local/bin
+#   make deb        build a Debian package (.deb)
+#   make rpm        build an RPM (.rpm)     [needs rpmbuild]
+#   make flatpak    build a Flatpak bundle  [needs flatpak-builder]
+#   make packages   build all three
+#   make validate-packaging  check the desktop entry + AppStream metadata
 #   make clean      remove build artifacts
 #   make help       show this help
 
@@ -24,8 +29,14 @@ CARGO_BIN := $(shell command -v cargo 2>/dev/null || echo "$(HOME)/.cargo/bin/ca
 BIN_DIR    := target/release
 INSTALLDIR := $(HOME)/.local/bin
 
+# Reverse-DNS application id, shared by the desktop entry, the AppStream
+# metainfo file and the Flatpak manifest. Change it in one place here and in
+# packaging/common/, packaging/icons/ and packaging/flatpak/.
+APP_ID     := io.github.everythinglinux.EverythingForLinux
+
 .PHONY: all build dev release prod test test-release check clippy fmt \
-        run run-dev run-gui daemon daemon-dev dist install uninstall clean help
+        run run-dev run-gui daemon daemon-dev dist install uninstall clean help \
+        deb rpm flatpak packages cargo-sources validate-packaging
 
 ## Default: dev build + tests + production build.
 all: build test release
@@ -77,6 +88,43 @@ dist: release
 	install -m 0755 $(BIN_DIR)/everything-linux dist/everything-linux
 	@echo "Shareable binary: dist/everything-linux"
 	@ls -lh dist/everything-linux
+
+## Build a Debian package (needs the release binaries, no root required).
+deb: release
+	./scripts/package-deb.sh
+
+## Build an RPM from source (needs rpmbuild).
+rpm:
+	./scripts/package-rpm.sh
+
+## Build a Flatpak bundle (needs flatpak-builder + the freedesktop SDK).
+flatpak:
+	./scripts/package-flatpak.sh
+
+## Build every package format this machine has the tools for.
+packages: deb
+	@command -v rpmbuild >/dev/null 2>&1 && $(MAKE) --no-print-directory rpm || \
+		echo "skipping rpm: rpmbuild is not installed"
+	@command -v flatpak-builder >/dev/null 2>&1 && $(MAKE) --no-print-directory flatpak || \
+		echo "skipping flatpak: flatpak-builder is not installed"
+
+## Regenerate the Flatpak crate sources from Cargo.lock.
+cargo-sources:
+	python3 scripts/gen-cargo-sources.py
+
+## Check the desktop entry and the AppStream metainfo file.
+##
+## AppStream warnings are reported but do not fail the build: the project has no
+## public homepage URL yet, and appstreamcli warns about a missing one. Real
+## errors (lines starting with "E:") do fail.
+validate-packaging:
+	desktop-file-validate packaging/common/$(APP_ID).desktop
+	@out=$$(appstreamcli validate --no-net packaging/common/$(APP_ID).metainfo.xml 2>&1 || true); \
+	 echo "$$out"; \
+	 if echo "$$out" | grep -q '^E:'; then \
+	   echo "appstreamcli: metadata has errors" >&2; exit 1; \
+	 fi; \
+	 echo "appstreamcli: no errors"
 
 ## Build and launch the search daemon (GUI and CLI then attach to it).
 daemon: release

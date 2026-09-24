@@ -1,0 +1,101 @@
+# RPM spec for Everything for Linux.
+#
+# This is a template: scripts/package-rpm.sh substitutes @VERSION@ and feeds it
+# to rpmbuild together with a source tarball of the repository. Build it with
+#
+#     make rpm
+#
+# The build needs network access to fetch crates (or a populated cargo cache).
+
+%global app_id io.github.everythinglinux.EverythingForLinux
+
+Name:           everything-linux
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Instant file and content search for Linux
+
+License:        MIT
+URL:            https://github.com/everythinglinux/everything-for-linux
+Source0:        everything-for-linux-%{version}.tar.gz
+
+BuildRequires:  cargo
+BuildRequires:  rust >= 1.88
+BuildRequires:  desktop-file-utils
+
+# The GUI toolkit (winit/glutin) loads these with dlopen at runtime, so the
+# automatic ELF dependency generator cannot see them. Requiring the sonames
+# directly is both exact and distribution-independent.
+Requires:       libEGL.so.1()(64bit)
+Requires:       libGL.so.1()(64bit)
+Requires:       libwayland-client.so.0()(64bit)
+Requires:       libwayland-egl.so.1()(64bit)
+Requires:       libxkbcommon.so.0()(64bit)
+Requires:       libxkbcommon-x11.so.0()(64bit)
+Requires:       libX11.so.6()(64bit)
+Requires:       libX11-xcb.so.1()(64bit)
+Requires:       libXcursor.so.1()(64bit)
+Requires:       libXi.so.6()(64bit)
+Requires:       libXrender.so.1()(64bit)
+
+%description
+Everything for Linux searches file names and file contents while you type,
+across your whole filesystem, and keeps its index up to date in realtime as
+files are created, renamed, changed or deleted.
+
+It is a lightweight native application (Rust + egui): no database, no runtime
+and no web view. Queries understand globs, several terms, exclusions and regex;
+content search uses the embedded ripgrep engine and always reads files live
+rather than serving stale results.
+
+This package installs the combined GUI + search-daemon binary
+(everything-linux), the scriptable CLI (everything) and a headless daemon
+(everything-daemon), plus a desktop entry, an AppStream metainfo file and the
+application icons.
+
+%prep
+%autosetup -n everything-for-linux-%{version}
+
+%build
+cargo build --release --workspace --locked
+
+%install
+rm -rf %{buildroot}
+install -d %{buildroot}%{_bindir}
+# everything-linux is the GUI *and* the daemon (it re-executes itself with
+# --daemon), so everything-gui — a development convenience that would add
+# another ~17 MB — is deliberately not packaged.
+install -Dpm0755 target/release/everything-linux  %{buildroot}%{_bindir}/everything-linux
+install -Dpm0755 target/release/everything        %{buildroot}%{_bindir}/everything
+install -Dpm0755 target/release/everything-daemon %{buildroot}%{_bindir}/everything-daemon
+
+install -Dpm0644 packaging/common/%{app_id}.desktop \
+    %{buildroot}%{_datadir}/applications/%{app_id}.desktop
+install -Dpm0644 packaging/common/%{app_id}.metainfo.xml \
+    %{buildroot}%{_datadir}/metainfo/%{app_id}.metainfo.xml
+install -Dpm0644 packaging/icons/hicolor/scalable/apps/%{app_id}.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
+
+install -d %{buildroot}%{_docdir}/%{name}
+install -pm0644 LICENSE   %{buildroot}%{_docdir}/%{name}/LICENSE
+install -pm0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
+
+# Validate the desktop entry and the AppStream metadata when the tools are here.
+desktop-file-validate %{buildroot}%{_datadir}/applications/%{app_id}.desktop || :
+if command -v appstream-util >/dev/null 2>&1; then
+    appstream-util validate-relax --nonet \
+        %{buildroot}%{_datadir}/metainfo/%{app_id}.metainfo.xml || :
+fi
+
+%files
+%license LICENSE
+%doc README.md
+%{_bindir}/everything-linux
+%{_bindir}/everything
+%{_bindir}/everything-daemon
+%{_datadir}/applications/%{app_id}.desktop
+%{_datadir}/metainfo/%{app_id}.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
+
+%changelog
+* Thu Sep 24 2026 Everything for Linux contributors <everything-linux@localhost> - @VERSION@-1
+- Initial packaged release (.deb, .rpm and Flatpak metadata).

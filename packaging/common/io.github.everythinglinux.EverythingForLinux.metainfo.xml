@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.everythinglinux.EverythingForLinux</id>
+
+  <name>Everything for Linux</name>
+  <summary>Instant file and content search across your filesystem</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <developer id="io.github.everythinglinux">
+    <name>Everything for Linux</name>
+  </developer>
+
+  <description>
+    <p>
+      Everything for Linux searches file names and file contents as you type,
+      across your whole filesystem, and keeps its index up to date in realtime
+      as files are created, renamed, changed and deleted.
+    </p>
+    <p>It is a lightweight native desktop application: no database, no runtime, no web view.</p>
+    <ul>
+      <li>Realtime index kept fresh by kernel filesystem events (inotify)</li>
+      <li>Everything-style queries: globs, multiple terms, exclusion, regex</li>
+      <li>Content search powered by the embedded ripgrep engine, always current</li>
+      <li>Live preview pane, tabs, search history and quick location filters</li>
+      <li>Follows your desktop's light/dark theme and fonts</li>
+      <li>Optional tray icon, plus a scriptable HTTP/JSON API and CLI</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.everythinglinux.EverythingForLinux.desktop</launchable>
+
+  <provides>
+    <binary>everything-linux</binary>
+    <binary>everything</binary>
+  </provides>
+
+  <categories>
+    <category>Utility</category>
+    <category>FileTools</category>
+  </categories>
+
+  <keywords>
+    <keyword>search</keyword>
+    <keyword>find</keyword>
+    <keyword>files</keyword>
+    <keyword>content</keyword>
+    <keyword>realtime</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.11.0" date="2026-09-24">
+      <description>
+        <p>Initial packaged release: .deb, .rpm and Flatpak metadata.</p>
+      </description>
+    </release>
+  </releases>
+</component>
