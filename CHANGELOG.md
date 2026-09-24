@@ -4,6 +4,44 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-24
+
+### Changed
+
+- **Reworked the GUI's visual design and typography.** A complete `Theme` now
+  defines every surface, text weight and accent for both appearances, and
+  egui's `Visuals` is fully specified (panels, popups, menus, widget states,
+  selection, borders, shadows, corner radii). Light mode no longer inherits
+  dark-tuned constants: a refined Tokyo Night for dark, and a clean cool-grey /
+  white theme with an accessible blue accent for light. Typography uses one
+  consistent scale (Heading 19 / Body 14.5 / Button 13.5 / Small 12 /
+  Monospace 13) with roomier spacing and interaction sizes.
+- **System fonts are now resolved correctly.** Fonts are located via fontconfig
+  (`fc-list`) and resolved to the smallest upright, normal-weight, single-face
+  file. Previously the whole system font directory (~3,000 files) was scanned
+  and the chosen family was copied wholesale — for a font shipped as a `.ttc`
+  collection this copied the entire collection (e.g. a 12.4 MiB, 36-face file)
+  and used face 0, which is not necessarily the Regular weight.
+- **Result rows and navigation are aligned and icon-free.** Emoji were replaced
+  by drawn elements whose metrics do not depend on the font: rounded file-type
+  chips (a short token such as `DIR` / `PDF` / `RS`), a painted sidebar (colour
+  dot plus accent bar, precisely centred label), a vector magnifier, drawn
+  folder / copy / terminal hover actions, and a flat sortable header. Filename
+  and breadcrumb form a clear two-line hierarchy with right-aligned size and
+  modified columns.
+- Search bar, empty state, preview pane and status bar re-themed; the live
+  indicator is a green dot rather than an emoji.
+
+### Removed
+
+- The `fontdb` dependency; font resolution now uses fontconfig.
+
+### Performance
+
+- Lower idle memory: loading system fonts no longer scans every installed font
+  or copies large `.ttc` collections (measured ≈196 MiB → ≈161 MiB RSS on the
+  same build profile).
+
 ## [0.4.1] - 2026-09-24
 
 ### Fixed
@@ -167,6 +205,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.5.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.5.0
 [0.4.1]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.1
 [0.4.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.3.0

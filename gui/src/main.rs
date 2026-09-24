@@ -22,24 +22,123 @@ mod tray;
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
 
-// Tokyo Night palette (dark).
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(122, 162, 247); // #7aa2f7
-const BG: egui::Color32 = egui::Color32::from_rgb(26, 27, 38); // #1a1b26
-const BG_PANEL: egui::Color32 = egui::Color32::from_rgb(22, 22, 30); // #16161e
-const SIDEBAR_BG: egui::Color32 = egui::Color32::from_rgb(31, 35, 53); // #1f2335
-const WIDGET_DARK: egui::Color32 = egui::Color32::from_rgb(41, 46, 66); // #292e42
-const WIDGET_HOVER_DARK: egui::Color32 = egui::Color32::from_rgb(59, 66, 97); // #3b4261
-const FG_DARK: egui::Color32 = egui::Color32::from_rgb(192, 202, 245); // #c0caf5
-const DIM_DARK: egui::Color32 = egui::Color32::from_rgb(86, 95, 137); // #565f89
-const WIDGET_LIGHT: egui::Color32 = egui::Color32::from_rgb(232, 234, 240);
-const WIDGET_HOVER_LIGHT: egui::Color32 = egui::Color32::from_rgb(220, 224, 234);
-const DIM_LIGHT: egui::Color32 = egui::Color32::from_rgb(100, 108, 124);
-const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(158, 206, 106); // #9ece6a
-const WARN_ORANGE: egui::Color32 = egui::Color32::from_rgb(255, 158, 100); // #ff9e64
-const IMG_BLUE: egui::Color32 = egui::Color32::from_rgb(122, 162, 247);
-const ARCH_ORANGE: egui::Color32 = egui::Color32::from_rgb(224, 175, 104); // #e0af68
-const AV_PURPLE: egui::Color32 = egui::Color32::from_rgb(187, 154, 247); // #bb9af7
-const CODE_CYAN: egui::Color32 = egui::Color32::from_rgb(125, 207, 255); // #7dcfff
+/// Complete colour scheme for one appearance mode.
+///
+/// Both modes define *every* surface explicitly, so light mode never inherits a
+/// dark-tuned constant — the previous cause of the washed-out light theme.
+#[derive(Clone, Copy)]
+struct Theme {
+    dark: bool,
+    /// Window background — the deepest surface.
+    bg: egui::Color32,
+    /// Docked panels: menu bar, search bar, sidebar, status bar.
+    panel: egui::Color32,
+    /// Elevated surfaces: popups, rows, chips.
+    card: egui::Color32,
+    /// Hovered row/widget background.
+    hover: egui::Color32,
+    /// Pressed/active widget background.
+    active: egui::Color32,
+    /// Table zebra striping.
+    stripe: egui::Color32,
+    /// Borders and separators.
+    stroke: egui::Color32,
+    /// Primary text.
+    text: egui::Color32,
+    /// Secondary text: file paths, metadata.
+    dim: egui::Color32,
+    /// Tertiary text: hints, tips, counts.
+    faint: egui::Color32,
+    /// Brand / selection accent.
+    accent: egui::Color32,
+    good: egui::Color32,
+    warn: egui::Color32,
+    bad: egui::Color32,
+    kind_dir: egui::Color32,
+    kind_img: egui::Color32,
+    kind_doc: egui::Color32,
+    kind_code: egui::Color32,
+    kind_arch: egui::Color32,
+    kind_av: egui::Color32,
+}
+
+impl Theme {
+    const DARK: Theme = Theme {
+        dark: true,
+        bg: egui::Color32::from_rgb(0x16, 0x16, 0x1e),
+        panel: egui::Color32::from_rgb(0x1a, 0x1b, 0x26),
+        card: egui::Color32::from_rgb(0x20, 0x24, 0x37),
+        hover: egui::Color32::from_rgb(0x2a, 0x30, 0x47),
+        active: egui::Color32::from_rgb(0x34, 0x3b, 0x59),
+        stripe: egui::Color32::from_rgb(0x1d, 0x1f, 0x2c),
+        stroke: egui::Color32::from_rgb(0x2c, 0x32, 0x4a),
+        text: egui::Color32::from_rgb(0xc6, 0xce, 0xf0),
+        dim: egui::Color32::from_rgb(0x8c, 0x95, 0xbb),
+        faint: egui::Color32::from_rgb(0x5c, 0x66, 0x8e),
+        accent: egui::Color32::from_rgb(0x7a, 0xa2, 0xf7),
+        good: egui::Color32::from_rgb(0x9e, 0xce, 0x6a),
+        warn: egui::Color32::from_rgb(0xe0, 0xaf, 0x68),
+        bad: egui::Color32::from_rgb(0xf7, 0x76, 0x8e),
+        kind_dir: egui::Color32::from_rgb(0x9e, 0xce, 0x6a),
+        kind_img: egui::Color32::from_rgb(0x7d, 0xcf, 0xff),
+        kind_doc: egui::Color32::from_rgb(0xe0, 0xaf, 0x68),
+        kind_code: egui::Color32::from_rgb(0x7a, 0xa2, 0xf7),
+        kind_arch: egui::Color32::from_rgb(0xff, 0x9e, 0x64),
+        kind_av: egui::Color32::from_rgb(0xbb, 0x9a, 0xf7),
+    };
+
+    const LIGHT: Theme = Theme {
+        dark: false,
+        bg: egui::Color32::from_rgb(0xef, 0xf1, 0xf6),
+        panel: egui::Color32::from_rgb(0xff, 0xff, 0xff),
+        card: egui::Color32::from_rgb(0xf5, 0xf7, 0xfb),
+        hover: egui::Color32::from_rgb(0xe7, 0xeb, 0xf4),
+        active: egui::Color32::from_rgb(0xda, 0xe0, 0xef),
+        stripe: egui::Color32::from_rgb(0xf7, 0xf9, 0xfd),
+        stroke: egui::Color32::from_rgb(0xdd, 0xe2, 0xec),
+        text: egui::Color32::from_rgb(0x1a, 0x1f, 0x2e),
+        dim: egui::Color32::from_rgb(0x59, 0x63, 0x78),
+        faint: egui::Color32::from_rgb(0x8b, 0x94, 0xa9),
+        accent: egui::Color32::from_rgb(0x35, 0x68, 0xd4),
+        good: egui::Color32::from_rgb(0x2f, 0x9e, 0x44),
+        warn: egui::Color32::from_rgb(0xa9, 0x6a, 0x00),
+        bad: egui::Color32::from_rgb(0xc7, 0x33, 0x4d),
+        kind_dir: egui::Color32::from_rgb(0x2f, 0x9e, 0x44),
+        kind_img: egui::Color32::from_rgb(0x0b, 0x72, 0x85),
+        kind_doc: egui::Color32::from_rgb(0xa9, 0x6a, 0x00),
+        kind_code: egui::Color32::from_rgb(0x35, 0x68, 0xd4),
+        kind_arch: egui::Color32::from_rgb(0xbc, 0x4c, 0x1d),
+        kind_av: egui::Color32::from_rgb(0x7a, 0x3f, 0xc9),
+    };
+
+    fn of(dark: bool) -> Theme {
+        if dark {
+            Self::DARK
+        } else {
+            Self::LIGHT
+        }
+    }
+
+    /// Soft accent used behind selected rows and labels.
+    fn accent_soft(&self) -> egui::Color32 {
+        self.accent
+            .gamma_multiply(if self.dark { 0.26 } else { 0.15 })
+    }
+
+    /// Tinted fill for a type chip, derived from the chip's accent colour.
+    fn chip_fill(&self, color: egui::Color32) -> egui::Color32 {
+        color.gamma_multiply(if self.dark { 0.20 } else { 0.13 })
+    }
+
+    fn shadow(&self, blur: u8, y: i8) -> egui::Shadow {
+        egui::Shadow {
+            offset: [0, y],
+            blur,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(if self.dark { 130 } else { 26 }),
+        }
+    }
+}
 
 /// Font families to try for the UI (first one found on the system wins).
 const UI_FONT_PREFERENCE: &[&str] = &[
@@ -65,29 +164,41 @@ const MONO_FONT_PREFERENCE: &[&str] = &[
 const RECENT_AGE_SECS: i64 = 7 * 24 * 3600;
 const LARGE_MIN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 
-const CATEGORIES: &[(&str, &str, Category)] = &[
-    ("All", "🗂️", Category::All),
+const CATEGORIES: &[(&str, Category)] = &[
+    ("All files", Category::All),
     (
         "Recent",
-        "🕘",
         Category::Recent {
             max_age_secs: RECENT_AGE_SECS,
         },
     ),
-    ("Images", "🖼️", Category::Images),
-    ("Docs", "📄", Category::Docs),
-    ("Code", "💻", Category::Code),
-    ("Archives", "📦", Category::Archives),
-    ("Audio", "🎵", Category::Audio),
-    ("Video", "🎬", Category::Video),
+    ("Images", Category::Images),
+    ("Documents", Category::Docs),
+    ("Code", Category::Code),
+    ("Archives", Category::Archives),
+    ("Audio", Category::Audio),
+    ("Video", Category::Video),
     (
-        "Large files > 1 GiB",
-        "🐘",
+        "Large files",
         Category::Large {
             min_bytes: LARGE_MIN_BYTES,
         },
     ),
 ];
+
+/// Accent colour for a sidebar category.
+fn category_color(t: &Theme, cat: &Category) -> egui::Color32 {
+    match cat {
+        Category::All => t.accent,
+        Category::Recent { .. } => t.good,
+        Category::Images => t.kind_img,
+        Category::Docs => t.kind_doc,
+        Category::Code => t.kind_code,
+        Category::Archives => t.kind_arch,
+        Category::Audio | Category::Video => t.kind_av,
+        Category::Large { .. } => t.warn,
+    }
+}
 
 enum UiMsg {
     Search(Query),
@@ -315,98 +426,118 @@ impl App {
     }
 
     fn apply_style(&self, ctx: &egui::Context) {
-        let mut visuals = if self.dark {
+        let t = self.theme();
+        let mut v = if t.dark {
             egui::Visuals::dark()
         } else {
             egui::Visuals::light()
         };
-        if self.dark {
-            visuals.panel_fill = BG_PANEL;
-            visuals.window_fill = BG;
-            visuals.override_text_color = Some(FG_DARK);
-        }
-        visuals.selection.bg_fill = ACCENT;
-        visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
-        visuals.hyperlink_color = ACCENT;
-        let (w, wh) = if self.dark {
-            (WIDGET_DARK, WIDGET_HOVER_DARK)
-        } else {
-            (WIDGET_LIGHT, WIDGET_HOVER_LIGHT)
-        };
-        visuals.widgets.inactive.weak_bg_fill = w;
-        visuals.widgets.hovered.weak_bg_fill = wh;
-        visuals.widgets.active.weak_bg_fill = wh;
-        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
-        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
-        visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
-        visuals.window_corner_radius = egui::CornerRadius::same(12);
-        ctx.set_visuals(visuals);
+        v.override_text_color = Some(t.text);
+        v.panel_fill = t.panel;
+        v.window_fill = t.panel;
+        v.extreme_bg_color = t.bg;
+        v.faint_bg_color = t.stripe;
+        v.window_stroke = egui::Stroke::new(1.0_f32, t.stroke);
+        v.window_corner_radius = egui::CornerRadius::same(12);
+        v.menu_corner_radius = egui::CornerRadius::same(10);
+        v.window_shadow = t.shadow(28, 10);
+        v.popup_shadow = t.shadow(18, 6);
+        v.selection.bg_fill = t.accent_soft();
+        v.selection.stroke = egui::Stroke::new(1.0_f32, t.accent);
+        v.hyperlink_color = t.accent;
+        v.warn_fg_color = t.warn;
+        v.error_fg_color = t.bad;
 
+        let radius = egui::CornerRadius::same(7);
+        let set = |w: &mut egui::style::WidgetVisuals,
+                   bg: egui::Color32,
+                   weak: egui::Color32,
+                   fg: egui::Color32,
+                   border: egui::Color32| {
+            w.bg_fill = bg;
+            w.weak_bg_fill = weak;
+            w.bg_stroke = egui::Stroke::new(1.0_f32, border);
+            w.fg_stroke = egui::Stroke::new(1.0_f32, fg);
+            w.corner_radius = radius;
+            w.expansion = 0.0;
+        };
+        set(
+            &mut v.widgets.noninteractive,
+            t.panel,
+            t.card,
+            t.text,
+            t.stroke,
+        );
+        set(&mut v.widgets.inactive, t.card, t.card, t.text, t.stroke);
+        set(&mut v.widgets.hovered, t.hover, t.hover, t.text, t.accent);
+        set(&mut v.widgets.active, t.active, t.active, t.text, t.accent);
+        set(&mut v.widgets.open, t.card, t.card, t.text, t.stroke);
+        ctx.set_visuals(v);
+
+        // System font first; the bundled egui fonts remain as glyph fallbacks
+        // (emoji, CJK, rare symbols the system font may lack).
         let mut fonts = egui::FontDefinitions::default();
         if let Some(bytes) = &self.ui_font {
             fonts.font_data.insert(
-                "system-ui".to_owned(),
+                "ui".to_owned(),
                 Arc::new(egui::FontData::from_owned(bytes.clone())),
             );
             fonts
                 .families
                 .entry(egui::FontFamily::Proportional)
                 .or_default()
-                .insert(0, "system-ui".to_owned());
+                .insert(0, "ui".to_owned());
         }
         if let Some(bytes) = &self.mono_font {
             fonts.font_data.insert(
-                "system-mono".to_owned(),
+                "mono".to_owned(),
                 Arc::new(egui::FontData::from_owned(bytes.clone())),
             );
             fonts
                 .families
                 .entry(egui::FontFamily::Monospace)
                 .or_default()
-                .insert(0, "system-mono".to_owned());
+                .insert(0, "mono".to_owned());
         }
         ctx.set_fonts(fonts);
 
         let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.spacing.interact_size = egui::vec2(28.0, 28.0);
+        style.spacing.menu_margin = egui::Margin::same(6);
+        style.spacing.window_margin = egui::Margin::same(10);
+        style.spacing.scroll = egui::style::ScrollStyle::solid();
         style.text_styles.insert(
             egui::TextStyle::Heading,
-            egui::FontId::new(22.0, egui::FontFamily::Proportional),
+            egui::FontId::new(19.0, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Body,
-            egui::FontId::new(16.0, egui::FontFamily::Proportional),
+            egui::FontId::new(14.5, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Button,
-            egui::FontId::new(15.0, egui::FontFamily::Proportional),
+            egui::FontId::new(13.5, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Small,
-            egui::FontId::new(13.0, egui::FontFamily::Proportional),
+            egui::FontId::new(12.0, egui::FontFamily::Proportional),
         );
         style.text_styles.insert(
             egui::TextStyle::Monospace,
-            egui::FontId::new(14.0, egui::FontFamily::Monospace),
+            egui::FontId::new(13.0, egui::FontFamily::Monospace),
         );
         ctx.set_style(style);
     }
 
-    fn fg(&self) -> egui::Color32 {
-        if self.dark {
-            FG_DARK
-        } else {
-            egui::Color32::from_rgb(40, 44, 54)
-        }
+    /// The active colour scheme.
+    fn theme(&self) -> Theme {
+        Theme::of(self.dark)
     }
 
     fn fg_dim(&self) -> egui::Color32 {
-        if self.dark {
-            DIM_DARK
-        } else {
-            DIM_LIGHT
-        }
+        self.theme().dim
     }
 
     fn send_query(&mut self) {
@@ -565,32 +696,309 @@ fn search_id() -> egui::Id {
     egui::Id::new("search_input")
 }
 
+/// Full-width sidebar navigation row. Painted manually so the label is exactly
+/// vertically centred, independent of the font's own metrics.
+fn nav_item(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    dot: egui::Color32,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
+    let radius = egui::CornerRadius::same(7);
+    if selected {
+        ui.painter().rect_filled(rect, radius, t.accent_soft());
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + 1.0, rect.center().y - 8.0),
+            egui::vec2(3.0, 16.0),
+        );
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, radius, t.hover);
+    }
+    let dot_x = rect.min.x + 16.0;
+    ui.painter()
+        .circle_filled(egui::pos2(dot_x, rect.center().y), 3.5, dot);
+    ui.painter().text(
+        egui::pos2(dot_x + 13.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::new(13.5, egui::FontFamily::Proportional),
+        t.text,
+    );
+    resp
+}
+
+/// Small vector magnifier used as the search bar's leading icon.
+fn magnifier(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    let c = rect.center();
+    let stroke = egui::Stroke::new(1.6_f32, color);
+    ui.painter()
+        .circle_stroke(egui::pos2(c.x - 1.5, c.y - 1.5), 5.0, stroke);
+    ui.painter().line_segment(
+        [
+            egui::pos2(c.x + 2.0, c.y + 2.0),
+            egui::pos2(c.x + 6.0, c.y + 6.0),
+        ],
+        stroke,
+    );
+}
+
+/// Compact toggle pill for the in-bar `.*` / `Aa` switches.
+fn toggle(ui: &mut egui::Ui, t: &Theme, value: &mut bool, text: &str, tip: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
+    let radius = egui::CornerRadius::same(6);
+    let selected = *value;
+    let fill = if selected {
+        t.accent_soft()
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.0_f32, t.accent.gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::new(12.0, egui::FontFamily::Monospace),
+        if selected { t.accent } else { t.dim },
+    );
+    let clicked = resp.clicked();
+    resp.on_hover_text(tip);
+    if clicked {
+        *value = !*value;
+    }
+    clicked
+}
+
+/// Rounded file-type chip shown at the start of every result row.
+fn type_chip(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::Response {
+    let color = type_color(t, path, is_dir);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(8);
+    ui.painter().rect_filled(rect, radius, t.chip_fill(color));
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        chip_label(path, is_dir),
+        egui::FontId::new(10.5, egui::FontFamily::Proportional),
+        color,
+    );
+    resp
+}
+
+/// Short uppercase token inside a type chip (extension, or a category word).
+fn chip_label(path: &Path, is_dir: bool) -> String {
+    if is_dir {
+        return "DIR".to_string();
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if !e.is_empty() => e.chars().take(4).collect::<String>().to_ascii_uppercase(),
+        _ => "FILE".to_string(),
+    }
+}
+
+/// Accent colour for a file's type.
+fn type_color(t: &Theme, path: &Path, is_dir: bool) -> egui::Color32 {
+    if is_dir {
+        return t.kind_dir;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "ico" | "avif") => {
+            t.kind_img
+        }
+        Some(
+            "zip" | "tar" | "gz" | "xz" | "bz2" | "7z" | "rar" | "zst" | "deb" | "rpm" | "jar",
+        ) => t.kind_arch,
+        Some(
+            "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "opus" | "mp4" | "mkv" | "avi" | "mov"
+            | "webm" | "flv" | "mpg" | "mpeg" | "wmv",
+        ) => t.kind_av,
+        Some(
+            "pdf" | "doc" | "docx" | "odt" | "rtf" | "xls" | "xlsx" | "csv" | "ods" | "ppt"
+            | "pptx" | "odp" | "txt" | "md" | "log",
+        ) => t.kind_doc,
+        Some(
+            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "c" | "cpp" | "h" | "hpp" | "java"
+            | "rb" | "sh" | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php"
+            | "lua" | "zig" | "ex" | "exs" | "kt" | "swift" | "xml" | "ini" | "conf",
+        ) => t.kind_code,
+        _ => t.dim,
+    }
+}
+
+/// Small filled status dot for the status bar.
+fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+}
+
+#[derive(Clone, Copy)]
+enum RowAction {
+    Folder,
+    Copy,
+    Terminal,
+}
+
+/// Compact drawn action button for a result row (no emoji, so it aligns and
+/// renders identically on every system).
+fn action_button(ui: &mut egui::Ui, t: &Theme, kind: RowAction, tip: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), t.hover);
+    }
+    let stroke = egui::Stroke::new(1.3_f32, if hovered { t.accent } else { t.dim });
+    let c = rect.center();
+    match kind {
+        RowAction::Folder => {
+            let body =
+                egui::Rect::from_min_size(egui::pos2(c.x - 7.0, c.y - 3.5), egui::vec2(14.0, 10.0));
+            ui.painter().rect_stroke(
+                body,
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            let tab =
+                egui::Rect::from_min_size(egui::pos2(c.x - 7.0, c.y - 6.0), egui::vec2(6.0, 3.0));
+            ui.painter().rect_stroke(
+                tab,
+                egui::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        RowAction::Copy => {
+            let back =
+                egui::Rect::from_min_size(egui::pos2(c.x - 6.0, c.y - 6.0), egui::vec2(9.0, 11.0));
+            let front =
+                egui::Rect::from_min_size(egui::pos2(c.x - 2.0, c.y - 3.0), egui::vec2(9.0, 11.0));
+            ui.painter().rect_stroke(
+                back,
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            ui.painter()
+                .rect_filled(front, egui::CornerRadius::same(2), t.panel);
+            ui.painter().rect_stroke(
+                front,
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        RowAction::Terminal => {
+            ui.painter().text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                ">_",
+                egui::FontId::new(11.0, egui::FontFamily::Monospace),
+                if hovered { t.accent } else { t.dim },
+            );
+        }
+    }
+    let clicked = resp.clicked();
+    resp.on_hover_text(tip);
+    clicked
+}
+
+/// Load the UI and monospace system fonts.
+///
+/// Uses fontconfig (`fc-list`) to resolve each preferred family to a concrete
+/// file, then picks the smallest upright, normal-weight, single-face candidate.
+/// This deliberately avoids scanning every installed font (previously ~3,000
+/// files, which cost ~14 MiB) and avoids huge `.ttc` collections — loading
+/// `Inter.ttc` copied 12 MiB and, because a collection's face 0 is not
+/// necessarily Regular, could also pick the wrong weight.
 fn load_system_fonts() -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
     (
-        first_available_face(&db, UI_FONT_PREFERENCE),
-        first_available_face(&db, MONO_FONT_PREFERENCE),
+        resolve_font(UI_FONT_PREFERENCE, false),
+        resolve_font(MONO_FONT_PREFERENCE, true),
     )
 }
 
-fn first_available_face(db: &fontdb::Database, families: &[&str]) -> Option<Vec<u8>> {
+fn resolve_font(families: &[&str], mono: bool) -> Option<Vec<u8>> {
     for family in families {
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Name(family)],
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        if let Some(id) = db.query(&query) {
-            let mut bytes: Option<Vec<u8>> = None;
-            db.with_face_data(id, |data, _face| bytes = Some(data.to_vec()));
-            if bytes.is_some() {
-                return bytes;
-            }
+        if let Some(bytes) = resolve_family(family, mono) {
+            return Some(bytes);
         }
     }
     None
+}
+
+fn resolve_family(family: &str, mono: bool) -> Option<Vec<u8>> {
+    let out = Command::new("fc-list")
+        .arg("-f")
+        .arg("%{file}|W%{weight}|S%{slant}|P%{spacing}\n")
+        .arg(format!(":family={family}"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let want_spacing = if mono { "P100" } else { "P" };
+    let mut best: Option<(usize, PathBuf)> = None;
+    for line in text.lines() {
+        let mut f = line.split('|');
+        let (Some(file), Some(weight), Some(slant), Some(spacing)) =
+            (f.next(), f.next(), f.next(), f.next())
+        else {
+            continue;
+        };
+        if weight != "W80" || slant != "S0" {
+            continue;
+        }
+        // Proportional fonts report an empty spacing (`P`); monospace fonts 100.
+        let spacing_ok = spacing == want_spacing || (!mono && spacing == "P0");
+        if !spacing_ok {
+            continue;
+        }
+        let path = PathBuf::from(file);
+        if !matches!(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .as_deref(),
+            Some("ttf" | "otf")
+        ) {
+            continue;
+        }
+        let name_len = path
+            .file_name()
+            .map(|n| n.to_string_lossy().len())
+            .unwrap_or(usize::MAX);
+        if best.as_ref().is_none_or(|(len, _)| name_len < *len) {
+            best = Some((name_len, path));
+        }
+    }
+    std::fs::read(best?.1).ok()
 }
 
 impl eframe::App for App {
@@ -775,7 +1183,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("⚡ Everything for Linux")
+                        egui::RichText::new("Everything for Linux")
                             .size(20.0)
                             .strong(),
                     );
@@ -945,7 +1353,7 @@ impl App {
     /// Application menu bar (File / Edit / View / Settings / Help).
     fn menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menubar")
-            .exact_height(26.0)
+            .exact_height(30.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.menu_button("File", |ui| {
@@ -1041,183 +1449,198 @@ impl App {
 
     /// Floating search bar with in-bar toggles and the options menu.
     fn top_bar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("search").show(ctx, |ui| {
-            ui.add_space(12.0);
-            let dim = self.fg_dim();
-            let hint = if self.content_mode {
-                "Search file contents (regex)…"
-            } else if self.regex_mode {
-                "Search filenames (regex)…"
-            } else {
-                "Search files, folders, or contents…"
-            };
-            egui::Frame::new()
-                .fill(if self.dark { WIDGET_DARK } else { WIDGET_LIGHT })
-                .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(12, 10))
-                .stroke(egui::Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.55)))
-                .shadow(egui::Shadow {
-                    offset: [0, 3],
-                    blur: 10,
-                    spread: 0,
-                    color: ACCENT.gamma_multiply(0.25),
-                })
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("🔍").size(19.0));
-                        let edit = egui::TextEdit::singleline(&mut self.query)
-                            .id(search_id())
-                            .hint_text(egui::RichText::new(hint).color(dim))
-                            .font(egui::TextStyle::Heading)
-                            .desired_width(f32::INFINITY)
-                            .margin(egui::vec2(6.0, 6.0));
-                        let resp = ui.add(edit);
-                        if resp.changed() {
-                            self.last_edit = Instant::now();
-                            self.history_idx = None;
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let q = self.query.clone();
-                            self.prefs.commit_query(&q);
-                            self.sync_history();
-                            self.history_idx = None;
-                            if let Some(first) = self.results.first() {
-                                App::open(&first.path);
+        let t = self.theme();
+        let focused = ctx.memory(|m| m.has_focus(search_id()));
+        egui::TopBottomPanel::top("search")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(14, 12)),
+            )
+            .show(ctx, |ui| {
+                let hint = if self.content_mode {
+                    "Search file contents (regex)…"
+                } else if self.regex_mode {
+                    "Search filenames (regex)…"
+                } else {
+                    "Search files and folders…"
+                };
+                egui::Frame::new()
+                    .fill(t.card)
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        if focused { t.accent } else { t.stroke },
+                    ))
+                    .shadow(t.shadow(14, 4))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            magnifier(ui, t.faint);
+                            ui.add_space(4.0);
+                            let edit = egui::TextEdit::singleline(&mut self.query)
+                                .id(search_id())
+                                .hint_text(egui::RichText::new(hint).color(t.faint))
+                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::vec2(2.0, 4.0))
+                                .frame(false);
+                            let resp = ui.add(edit);
+                            if resp.changed() {
+                                self.last_edit = Instant::now();
+                                self.history_idx = None;
                             }
-                        }
-                        // In-bar toggles: regex, case, history, options.
-                        if ui
-                            .selectable_label(self.regex_mode, ".*")
-                            .on_hover_text("Regex mode")
-                            .clicked()
-                        {
-                            self.regex_mode = !self.regex_mode;
-                            self.last_edit = Instant::now();
-                        }
-                        if ui
-                            .selectable_label(self.case_sensitive, "Aa")
-                            .on_hover_text("Case-sensitive")
-                            .clicked()
-                        {
-                            self.case_sensitive = !self.case_sensitive;
-                            self.last_edit = Instant::now();
-                        }
-                        let history = self.prefs.history.clone();
-                        ui.menu_button("🕘", |ui| {
-                            ui.set_min_width(240.0);
-                            ui.label(egui::RichText::new("Recent searches").small().color(dim));
-                            ui.separator();
-                            if history.is_empty() {
-                                ui.weak("No recent searches yet");
-                            }
-                            for q in &history {
-                                if ui.button(q).clicked() {
-                                    self.run_query(q);
-                                    ui.close_menu();
+                            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                let q = self.query.clone();
+                                self.prefs.commit_query(&q);
+                                self.sync_history();
+                                self.history_idx = None;
+                                if let Some(first) = self.results.first() {
+                                    App::open(&first.path);
                                 }
                             }
-                            if !history.is_empty() {
+
+                            // In-bar toggles: regex, case-sensitive.
+                            if toggle(ui, &t, &mut self.regex_mode, ".*", "Regex mode") {
+                                self.last_edit = Instant::now();
+                            }
+                            if toggle(ui, &t, &mut self.case_sensitive, "Aa", "Case-sensitive") {
+                                self.last_edit = Instant::now();
+                            }
+
+                            let history = self.prefs.history.clone();
+                            ui.menu_button(egui::RichText::new("History").size(13.0), |ui| {
+                                ui.set_min_width(240.0);
+                                if history.is_empty() {
+                                    ui.weak("No recent searches yet");
+                                }
+                                for q in &history {
+                                    if ui.button(q).clicked() {
+                                        self.run_query(q);
+                                        ui.close_menu();
+                                    }
+                                }
+                                if !history.is_empty() {
+                                    ui.separator();
+                                    if ui.button("Clear history").clicked() {
+                                        self.prefs.clear_history();
+                                        self.sync_history();
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                            ui.menu_button(egui::RichText::new("Filters").size(13.0), |ui| {
+                                ui.set_min_width(220.0);
+                                if ui
+                                    .checkbox(&mut self.content_mode, "Match contents")
+                                    .on_hover_text("Search inside files (regex)")
+                                    .changed()
+                                {
+                                    self.last_edit = Instant::now();
+                                }
+                                if ui.checkbox(&mut self.hidden, "Hidden files").changed() {
+                                    self.last_edit = Instant::now();
+                                }
+                                if ui
+                                    .checkbox(&mut self.full_path, "Full path match")
+                                    .changed()
+                                {
+                                    self.last_edit = Instant::now();
+                                }
                                 ui.separator();
-                                if ui.button("Clear history").clicked() {
-                                    self.prefs.clear_history();
-                                    self.sync_history();
-                                    ui.close_menu();
+                                if ui
+                                    .checkbox(&mut self.prefs.show_preview, "Preview pane")
+                                    .changed()
+                                {
+                                    self.prefs.save();
                                 }
+                                if ui
+                                    .button(if self.dark {
+                                        "Switch to light theme"
+                                    } else {
+                                        "Switch to dark theme"
+                                    })
+                                    .clicked()
+                                {
+                                    self.dark = !self.dark;
+                                    self.prefs.dark = Some(self.dark);
+                                    self.prefs.save();
+                                    self.apply_style(ui.ctx());
+                                }
+                            });
+                            if !self.query.is_empty()
+                                && ui.button("×").on_hover_text("Clear").clicked()
+                            {
+                                self.query.clear();
+                                self.history_idx = None;
+                                self.send_query();
+                            }
+                            if self.pending {
+                                ui.spinner();
                             }
                         });
-                        ui.menu_button("≡", |ui| {
-                            ui.set_min_width(220.0);
-                            if ui
-                                .checkbox(&mut self.content_mode, "Match contents")
-                                .on_hover_text("Search inside files (regex)")
-                                .changed()
-                            {
-                                self.last_edit = Instant::now();
-                            }
-                            if ui.checkbox(&mut self.hidden, "Hidden files").changed() {
-                                self.last_edit = Instant::now();
-                            }
-                            if ui
-                                .checkbox(&mut self.full_path, "Full path match")
-                                .changed()
-                            {
-                                self.last_edit = Instant::now();
-                            }
-                            ui.separator();
-                            if ui
-                                .checkbox(&mut self.prefs.show_preview, "Preview pane")
-                                .changed()
-                            {
-                                self.prefs.save();
-                            }
-                            if ui
-                                .button(if self.dark {
-                                    "☀️ Light theme"
-                                } else {
-                                    "🌙 Dark theme"
-                                })
-                                .clicked()
-                            {
-                                self.dark = !self.dark;
-                                self.prefs.dark = Some(self.dark);
-                                self.prefs.save();
-                                self.apply_style(ctx);
-                            }
-                        });
-                        if !self.query.is_empty() && ui.button("✕").on_hover_text("Clear").clicked()
-                        {
-                            self.query.clear();
-                            self.history_idx = None;
-                            self.send_query();
-                        }
-                        if self.pending {
-                            ui.spinner();
-                        }
                     });
-                });
-            ui.add_space(10.0);
-        });
+            });
     }
 
     fn sidebar(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
         egui::SidePanel::left("sidebar")
             .resizable(true)
-            .default_width(190.0)
-            .min_width(140.0)
+            .default_width(202.0)
+            .min_width(160.0)
+            .max_width(320.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(10, 12)),
+            )
             .show(ctx, |ui| {
-                ui.visuals_mut().panel_fill = if self.dark { SIDEBAR_BG } else { WIDGET_LIGHT };
-                ui.add_space(12.0);
                 ui.label(
-                    egui::RichText::new("Categories")
-                        .small()
-                        .color(self.fg_dim()),
+                    egui::RichText::new("CATEGORIES")
+                        .size(11.0)
+                        .strong()
+                        .color(t.faint),
                 );
-                ui.add_space(6.0);
-                for (label, icon, cat) in CATEGORIES {
+                ui.add_space(8.0);
+
+                let mut chosen: Option<Category> = None;
+                for (label, cat) in CATEGORIES {
                     let selected = self.category == *cat;
-                    let resp = ui.selectable_label(selected, format!("{icon}  {label}"));
-                    if resp.clicked() {
-                        if selected {
-                            self.category = Category::All;
-                        } else {
-                            self.category = *cat;
-                        }
-                        self.send_query();
+                    if nav_item(ui, &t, category_color(&t, cat), label, selected).clicked() {
+                        chosen = Some(if selected { Category::All } else { *cat });
                     }
                 }
-                ui.add_space(12.0);
+                if let Some(c) = chosen {
+                    self.category = c;
+                    self.send_query();
+                }
+
+                ui.add_space(16.0);
                 ui.separator();
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Tips").small().color(self.fg_dim()));
-                ui.add_space(4.0);
-                for tip in [
-                    "*.pdf  — glob patterns",
-                    "a b    — both terms",
-                    "!draft — exclude",
-                    ".*     — regex mode",
-                    "↑ in empty search: history",
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("TIPS")
+                        .size(11.0)
+                        .strong()
+                        .color(t.faint),
+                );
+                ui.add_space(8.0);
+                for (token, meaning) in [
+                    ("*.pdf", "glob pattern"),
+                    ("a b", "both terms"),
+                    ("!draft", "exclude"),
+                    (".*", "regex mode"),
                 ] {
-                    ui.label(egui::RichText::new(tip).small().color(self.fg_dim()));
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(token)
+                                .monospace()
+                                .size(11.5)
+                                .color(t.dim),
+                        );
+                        ui.label(egui::RichText::new(meaning).size(11.5).color(t.faint));
+                    });
                 }
             });
     }
@@ -1226,7 +1649,7 @@ impl App {
         if let Some(err) = &self.error {
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, format!("⚠ Query error: {err}"));
+                ui.colored_label(ui.visuals().error_fg_color, format!("Query error: {err}"));
             });
             return;
         }
@@ -1237,21 +1660,22 @@ impl App {
         }
 
         let ctx = ui.ctx().clone();
+        let t = self.theme();
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click()) // rows must sense clicks, not just hover
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::remainder().clip(true))
-            .column(Column::exact(92.0).at_least(70.0).clip(true))
+            .column(Column::exact(96.0).at_least(72.0).clip(true))
             .column(Column::exact(150.0).at_least(110.0).clip(true))
-            .column(Column::exact(100.0).at_least(80.0).clip(true));
+            .column(Column::exact(96.0).at_least(80.0).clip(true));
         if let Some(target) = self.scroll_to.take() {
             table = table.scroll_to_row(target, Some(egui::Align::Center));
         }
 
         table
-            .header(32.0, |mut header| {
+            .header(34.0, |mut header| {
                 header.col(|ui| {
                     if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked()
                     {
@@ -1276,12 +1700,16 @@ impl App {
                         }
                     });
                 });
-                header.col(|_ui| {});
+                header.col(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new("Actions").size(11.5).color(t.faint));
+                    });
+                });
             })
             .body(|body| {
                 let rows = self.results.len();
                 let selected = self.selected;
-                body.rows(52.0, rows, |mut row| {
+                body.rows(48.0, rows, |mut row| {
                     let i = row.index();
                     row.set_selected(i == selected);
                     let r = &self.results[i];
@@ -1296,28 +1724,25 @@ impl App {
                         row_left = Some(rect.min.x);
                         row_y = Some(rect.y_range());
                         if i == selected {
-                            let (bar, _) =
-                                ui.allocate_exact_size(egui::vec2(3.0, 52.0), egui::Sense::hover());
-                            ui.painter().rect_filled(bar, 0.0, ACCENT);
+                            let bar = egui::Rect::from_min_size(
+                                egui::pos2(rect.min.x, rect.top() + 7.0),
+                                egui::vec2(3.0, rect.height() - 14.0),
+                            );
+                            ui.painter()
+                                .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
                         }
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(icon_for(&r.path, r.is_dir)).size(17.0));
-                            let (dot, _) =
-                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter().circle_filled(
-                                dot.center(),
-                                3.5,
-                                badge_color(&r.path, r.is_dir),
-                            );
+                            type_chip(ui, &t, &r.path, r.is_dir);
+                            ui.add_space(2.0);
                             ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.spacing_mut().item_spacing.y = 1.0;
                                 let name = r
                                     .path
                                     .file_name()
                                     .map(|n| n.to_string_lossy().into_owned())
                                     .unwrap_or_else(|| r.path.display().to_string());
-                                ui.label(egui::RichText::new(name).strong().color(self.fg()));
-                                breadcrumb_ui(ui, &r.path, self.fg_dim());
+                                ui.label(egui::RichText::new(name).strong().color(t.text));
+                                breadcrumb_ui(ui, &r.path, t.faint);
                             });
                         });
                     });
@@ -1329,13 +1754,13 @@ impl App {
                                 } else {
                                     human_size(r.size)
                                 })
-                                .color(self.fg_dim()),
+                                .color(t.dim),
                             );
                         });
                     });
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(human_time(r.mtime)).color(self.fg_dim()));
+                            ui.label(egui::RichText::new(human_time(r.mtime)).color(t.dim));
                         });
                     });
                     row.col(|ui| {
@@ -1352,29 +1777,26 @@ impl App {
                                 _ => false,
                             };
                             if hovered {
-                                if ui
-                                    .small_button("📂")
-                                    .on_hover_text("Open containing folder")
-                                    .clicked()
-                                {
+                                if action_button(
+                                    ui,
+                                    &t,
+                                    RowAction::Folder,
+                                    "Open containing folder",
+                                ) {
                                     actions = Some((
                                         true,
                                         actions.is_some_and(|a| a.1),
                                         actions.is_some_and(|a| a.2),
                                     ));
                                 }
-                                if ui.small_button("🔗").on_hover_text("Copy path").clicked() {
+                                if action_button(ui, &t, RowAction::Copy, "Copy path") {
                                     actions = Some((
                                         actions.is_some_and(|a| a.0),
                                         true,
                                         actions.is_some_and(|a| a.2),
                                     ));
                                 }
-                                if ui
-                                    .small_button("🖥")
-                                    .on_hover_text("Open in terminal")
-                                    .clicked()
-                                {
+                                if action_button(ui, &t, RowAction::Terminal, "Open in terminal") {
                                     actions = Some((
                                         actions.is_some_and(|a| a.0),
                                         actions.is_some_and(|a| a.1),
@@ -1429,60 +1851,72 @@ impl App {
     }
 
     fn empty_state(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(40.0);
+        let t = self.theme();
+        ui.add_space(64.0);
         ui.vertical_centered(|ui| {
             if self.status.state != State::Live && self.query.is_empty() {
                 ui.spinner();
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.label(
                     egui::RichText::new(format!("Indexing… {} files", self.engine.counts().0))
-                        .color(self.fg_dim()),
+                        .color(t.dim),
                 );
                 return;
             }
             if !self.query.is_empty() && !self.pending {
-                ui.label(egui::RichText::new("🔎").size(52.0));
-                ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new("No results")
-                        .size(22.0)
+                    egui::RichText::new("No matches")
+                        .size(19.0)
                         .strong()
-                        .color(self.fg()),
+                        .color(t.text),
                 );
-                ui.add_space(4.0);
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!("Nothing found for “{}”", self.query)).color(t.dim),
+                );
+                ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(
-                        "Try fewer terms, a different pattern, or tick “Match contents”",
+                        "Try fewer terms, a different pattern, or enable “Match contents”.",
                     )
-                    .color(self.fg_dim()),
+                    .size(12.5)
+                    .color(t.faint),
                 );
                 return;
             }
             // Idle state: search tips + recent searches.
-            ui.label(egui::RichText::new("🔍").size(48.0));
-            ui.add_space(8.0);
             ui.label(
-                egui::RichText::new("Search tips")
-                    .size(20.0)
+                egui::RichText::new("Start typing to search")
+                    .size(19.0)
                     .strong()
-                    .color(self.fg()),
+                    .color(t.text),
             );
             ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "Search every file and folder in your home directory, instantly.",
+                )
+                .color(t.dim),
+            );
+            ui.add_space(18.0);
             for tip in [
-                "Type to search filenames instantly — “*.pdf”, “invoice 2026”, “!draft”",
-                "Tick “.*” for regex, or “Match contents” to search inside files",
-                "Press ↑ with an empty search box to recall previous queries",
+                "Glob patterns — *.pdf, report-*.txt",
+                "Multiple terms are ANDed — invoice 2026",
+                "Exclude with ! — logo !draft",
+                "Regex — toggle .* in the search bar",
+                "Contents — tick “Match contents” to search inside files",
             ] {
-                ui.label(egui::RichText::new(format!("· {tip}")).color(self.fg_dim()));
+                ui.label(egui::RichText::new(tip).size(12.5).color(t.faint));
             }
             if !self.prefs.history.is_empty() {
-                ui.add_space(16.0);
+                ui.add_space(22.0);
                 ui.label(
-                    egui::RichText::new("Recent searches")
-                        .small()
-                        .color(self.fg_dim()),
+                    egui::RichText::new("RECENT SEARCHES")
+                        .size(11.0)
+                        .strong()
+                        .color(t.faint),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 let history = self.prefs.history.clone();
                 ui.horizontal_wrapped(|ui| {
                     for q in history.iter().take(8) {
@@ -1496,12 +1930,21 @@ impl App {
     }
 
     fn preview_panel(&mut self, ui: &mut egui::Ui) {
+        let t = self.theme();
         let Some(pv) = &self.preview else {
-            ui.add_space(40.0);
+            ui.add_space(64.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("👁").size(36.0));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Select a file to preview").color(self.fg_dim()));
+                ui.label(
+                    egui::RichText::new("No file selected")
+                        .size(15.0)
+                        .color(t.dim),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Pick a result to preview it here.")
+                        .size(12.5)
+                        .color(t.faint),
+                );
             });
             return;
         };
@@ -1511,35 +1954,40 @@ impl App {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(icon_for(&pv.path, pv.is_dir)).size(22.0));
+            type_chip(ui, &t, &pv.path, pv.is_dir);
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(name).strong().size(15.0).color(t.text));
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(name)
-                    .strong()
-                    .size(18.0)
-                    .color(self.fg()),
+                egui::RichText::new(type_label(&pv.path, pv.is_dir))
+                    .size(12.5)
+                    .color(t.dim),
+            );
+            ui.label(egui::RichText::new("·").size(12.5).color(t.faint));
+            ui.label(
+                egui::RichText::new(human_size(pv.size))
+                    .size(12.5)
+                    .color(t.dim),
+            );
+            ui.label(egui::RichText::new("·").size(12.5).color(t.faint));
+            ui.label(
+                egui::RichText::new(human_time(pv.mtime))
+                    .size(12.5)
+                    .color(t.dim),
             );
         });
-        ui.horizontal(|ui| {
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-            ui.painter()
-                .circle_filled(dot.center(), 3.5, badge_color(&pv.path, pv.is_dir));
-            ui.label(egui::RichText::new(type_label(&pv.path, pv.is_dir)).color(self.fg_dim()));
-            ui.label(egui::RichText::new("·").color(self.fg_dim()));
-            ui.label(egui::RichText::new(human_size(pv.size)).color(self.fg_dim()));
-            ui.label(egui::RichText::new("·").color(self.fg_dim()));
-            ui.label(egui::RichText::new(human_time(pv.mtime)).color(self.fg_dim()));
-        });
-        ui.add_space(2.0);
+        ui.add_space(8.0);
         ui.label(
             egui::RichText::new(pv.path.display().to_string())
-                .small()
+                .size(12.0)
                 .monospace()
-                .color(self.fg_dim()),
+                .color(t.faint),
         );
-        ui.separator();
-
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.button("Open").clicked() {
                 App::open(&pv.path);
@@ -1555,14 +2003,15 @@ impl App {
                 App::open_terminal(&pv.path);
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
 
         if pv.is_dir {
-            ui.add_space(16.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("📁 Directory").size(30.0));
-                ui.add_space(8.0);
-                if ui.button("Open").clicked() {
+                ui.label(egui::RichText::new("Folder").size(14.0).color(t.dim));
+                ui.add_space(10.0);
+                if ui.button("Open in file manager").clicked() {
                     App::open(&pv.path);
                 }
             });
@@ -1573,104 +2022,91 @@ impl App {
                 ui.add(
                     egui::Image::new(tex)
                         .max_size(egui::vec2(ui.available_width().min(320.0), 320.0))
-                        .corner_radius(8),
+                        .corner_radius(10),
                 );
             });
             return;
         }
         if pv.text.is_empty() {
-            ui.label(egui::RichText::new("No preview (binary or too large)").color(self.fg_dim()));
+            ui.label(egui::RichText::new("No preview (binary or too large)").color(t.faint));
             return;
         }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .stick_to_bottom(false)
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(&pv.text)
                         .monospace()
-                        .color(if self.dark {
-                            FG_DARK
-                        } else {
-                            egui::Color32::from_rgb(30, 34, 42)
-                        }),
+                        .size(12.0)
+                        .color(t.dim),
                 );
             });
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let t = self.theme();
         ui.horizontal(|ui| {
             // Live-index indicator (pulses while indexing).
-            let t = ui.input(|i| i.time);
             match self.status.state {
                 State::Starting | State::Indexing => {
-                    let a = ((t * 5.0).sin() * 0.5 + 0.5) as f32;
-                    let (dot, _) =
-                        ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
-                    ui.painter().circle_filled(
-                        dot.center(),
-                        4.5,
-                        WARN_ORANGE.gamma_multiply(0.5 + 0.5 * a),
-                    );
+                    let a = ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32;
+                    status_dot(ui, t.warn.gamma_multiply(0.5 + 0.5 * a));
                     ui.label(
-                        egui::RichText::new(format!("Indexing… {}", self.engine.counts().0))
-                            .color(self.fg_dim())
-                            .small(),
+                        egui::RichText::new(format!("Indexing… {} files", self.engine.counts().0))
+                            .color(t.faint)
+                            .size(12.0),
                     );
                 }
                 State::Live => {
-                    let (dot, _) =
-                        ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
-                    ui.painter().circle_filled(dot.center(), 4.5, OK_GREEN);
-                    ui.label(egui::RichText::new("⚡ Live").color(self.fg_dim()).small());
+                    status_dot(ui, t.good);
+                    ui.label(
+                        egui::RichText::new("Live")
+                            .color(t.good)
+                            .size(12.0)
+                            .strong(),
+                    );
                     let (files, dirs) = self.engine.counts();
                     ui.label(
-                        egui::RichText::new(format!("· {files} files · {dirs} dirs"))
-                            .color(self.fg_dim())
-                            .small(),
+                        egui::RichText::new(format!("{files} files · {dirs} folders"))
+                            .color(t.faint)
+                            .size(12.0),
                     );
                 }
             }
             if self.status.degraded {
                 let txt = if self.status.watch_failures > 0 {
-                    format!(
-                        "⚠ {} dir(s) not realtime · periodic rebuild",
-                        self.status.watch_failures
-                    )
+                    format!("· {} dir(s) not realtime", self.status.watch_failures)
                 } else {
-                    "⚠ degraded (periodic rebuild)".to_string()
+                    "· periodic rebuild".to_string()
                 };
-                ui.label(egui::RichText::new(txt).color(WARN_ORANGE).small());
+                ui.label(egui::RichText::new(txt).color(t.warn).size(12.0));
             }
             if self.status.overlay_pending > 0 {
                 ui.label(
                     egui::RichText::new(format!("· {} pending", self.status.overlay_pending))
-                        .color(self.fg_dim())
-                        .small(),
+                        .color(t.faint)
+                        .size(12.0),
                 );
             }
-            match &self.status.content_index {
-                ContentIndexStatus::Enabled {
-                    entries,
-                    bytes,
-                    pending,
-                } => {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "· cache {} files · {} MiB{}",
-                            entries,
-                            bytes / (1024 * 1024),
-                            if *pending > 0 {
-                                format!(" · {pending} pending")
-                            } else {
-                                String::new()
-                            }
-                        ))
-                        .color(self.fg_dim())
-                        .small(),
-                    );
-                }
-                ContentIndexStatus::Disabled => {}
+            if let ContentIndexStatus::Enabled {
+                entries,
+                bytes,
+                pending,
+            } = &self.status.content_index
+            {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "· cache {entries} files · {} MiB{}",
+                        bytes / (1024 * 1024),
+                        if *pending > 0 {
+                            format!(" · {pending} pending")
+                        } else {
+                            String::new()
+                        }
+                    ))
+                    .color(t.faint)
+                    .size(12.0),
+                );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut label = format!(
@@ -1682,14 +2118,14 @@ impl App {
                     label.push('+');
                 }
                 if self.elapsed_ms > 0 {
-                    label.push_str(&format!(" · {} ms", self.elapsed_ms));
+                    label.push_str(&format!("  ·  {} ms", self.elapsed_ms));
                 }
-                ui.label(egui::RichText::new(label).color(self.fg_dim()).small());
+                ui.label(egui::RichText::new(label).color(t.dim).size(12.0));
                 ui.separator();
                 ui.label(
-                    egui::RichText::new("↑↓ navigate · Enter open · Esc clear · Ctrl+F search")
-                        .color(self.fg_dim())
-                        .small(),
+                    egui::RichText::new("↑↓ navigate · Enter open · Esc clear")
+                        .color(t.faint)
+                        .size(12.0),
                 );
             });
         });
@@ -1735,31 +2171,6 @@ fn breadcrumb_ui(ui: &mut egui::Ui, path: &Path, dim: egui::Color32) {
             }
         }
     });
-}
-
-/// Per-category accent dot for row badges.
-fn badge_color(path: &Path, is_dir: bool) -> egui::Color32 {
-    if is_dir {
-        return OK_GREEN;
-    }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "ico") => IMG_BLUE,
-        Some("zip" | "tar" | "gz" | "xz" | "bz2" | "7z" | "rar" | "zst" | "deb" | "rpm") => {
-            ARCH_ORANGE
-        }
-        Some("mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "opus") => AV_PURPLE,
-        Some("mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "mpg" | "mpeg" | "wmv") => AV_PURPLE,
-        Some(
-            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "hpp" | "java" | "rb" | "sh"
-            | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php" | "lua" | "zig"
-            | "ex" | "exs" | "kt" | "swift",
-        ) => CODE_CYAN,
-        _ => DIM_DARK,
-    }
 }
 
 fn type_label(path: &Path, is_dir: bool) -> String {
@@ -1822,34 +2233,6 @@ fn shell_quote(path: &Path) -> String {
     format!("{:?}", path.display().to_string())
 }
 
-fn icon_for(path: &Path, is_dir: bool) -> &'static str {
-    if is_dir {
-        return "📁";
-    }
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "ico") => "🖼️",
-        Some("mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "mpg" | "mpeg" | "wmv") => "🎬",
-        Some("mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "opus") => "🎵",
-        Some("zip" | "tar" | "gz" | "xz" | "bz2" | "7z" | "rar" | "zst" | "deb" | "rpm") => "📦",
-        Some("pdf") => "📕",
-        Some("doc" | "docx" | "odt" | "rtf") => "📝",
-        Some("xls" | "xlsx" | "csv" | "ods") => "📊",
-        Some("ppt" | "pptx" | "odp") => "📽️",
-        Some(
-            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "hpp" | "java" | "rb" | "sh"
-            | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php" | "lua" | "zig"
-            | "ex" | "exs" | "kt" | "swift",
-        ) => "💻",
-        Some("txt" | "md" | "log" | "conf" | "ini" | "cfg" | "env") => "📄",
-        Some("exe" | "bin" | "so" | "appimage") => "⚙️",
-        _ => "📄",
-    }
-}
-
 fn human_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
     let mut v = bytes as f64;
@@ -1899,19 +2282,25 @@ fn sort_button(
     current: Option<Sort>,
     is_active: impl Fn(Sort) -> bool,
 ) -> egui::Response {
+    let active = current.is_some_and(&is_active);
     let mark = match current {
         Some(s) if is_active(s) => match s {
             Sort::Name(asc) | Sort::Size(asc) | Sort::Mtime(asc) => {
                 if asc {
-                    " ▲"
+                    "  ↑"
                 } else {
-                    " ▼"
+                    "  ↓"
                 }
             }
         },
         _ => "",
     };
-    ui.button(format!("{label}{mark}"))
+    ui.selectable_label(
+        active,
+        egui::RichText::new(format!("{label}{mark}"))
+            .size(12.0)
+            .strong(),
+    )
 }
 
 fn cycle_sort(current: Option<Sort>, prefer: Sort) -> Option<Sort> {
