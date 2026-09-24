@@ -34,6 +34,37 @@ env/
 # Caches and ephemeral state
 .cache/
 .Trash/
+.local/share/Trash/
+
+# Steam / Proton / Wine prefixes (huge, root-owned subtrees break watchers)
+steamapps/compatdata/
+steamapps/common/
+steamapps/shadercache/
+.steam/
+.var/app/*/cache/
+.wine/
+.winetricks/
+
+# Flatpak / Snap / container runtime blobs
+.var/app/*/config/
+.snap/
+containers/libpod/
+
+# Browser caches and profiles (index-heavy, low search value)
+.config/google-chrome/
+.config/chromium/
+.mozilla/firefox/*/cache2/
+.cache/mozilla/
+.cache/google-chrome/
+
+# Virtualenvs / toolchains / SDKs
+.gradle/
+.cargo/registry/
+.rustup/toolchains/
+.npm/
+.pnpm-store/
+.cache/pip/
+.cache/uv/
 
 # Editor/IDE settings
 .idea/

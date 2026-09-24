@@ -17,9 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
 
-/// Spawn the watcher thread. `on_error` is invoked when the kernel reports a
-/// watcher error (e.g. exhausted watch limits); the engine uses it to switch
-/// to degraded mode with periodic rebuilds.
+/// Spawn the watcher thread. `on_error` is invoked when watching is impaired
+/// (unreadable subtrees or a watcher-level error); the engine then falls back
+/// to periodic rebuilds for the affected paths.
+///
+/// Watches are installed **per directory** (non-recursively) rather than as a
+/// single recursive watch: one unreadable directory is skipped and counted
+/// instead of aborting the whole watch — which a single root-owned folder
+/// inside a Steam/Proton prefix would otherwise cause.
 pub fn start_watcher(
     roots: Vec<PathBuf>,
     overlay: Arc<RwLock<Overlay>>,
@@ -31,32 +36,94 @@ pub fn start_watcher(
     on_error: Arc<dyn Fn() + Send + Sync>,
 ) -> JoinHandle<()> {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = RecommendedWatcher::new(tx, NotifyConfig::default())
-        .expect("failed to create filesystem watcher (inotify)");
-    for root in &roots {
-        if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
-            eprintln!("watch {root:?} failed: {e}");
-            on_error();
-        }
-    }
 
     std::thread::Builder::new()
         .name("watcher".into())
         .spawn(move || {
-            // Keep the watcher alive for the lifetime of this thread: dropping
-            // it removes the inotify watches and no further events arrive.
-            let _keep_alive = watcher;
+            // The watcher lives inside the thread for its whole lifetime
+            // (dropping it removes every watch).
+            let mut watcher = match RecommendedWatcher::new(tx, NotifyConfig::default()) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("filesystem watcher unavailable: {e}");
+                    on_error();
+                    return;
+                }
+            };
+
+            let mut failures: u64 = 0;
+            let mut watched: u64 = 0;
+            for root in &roots {
+                // Non-recursive on the root itself catches new top-level entries;
+                // every eligible directory is then watched individually.
+                match watcher.watch(root, RecursiveMode::NonRecursive) {
+                    Ok(_) => watched += 1,
+                    Err(e) => {
+                        failures += 1;
+                        if failures <= 5 {
+                            eprintln!("watch {root:?} failed: {e}");
+                        }
+                    }
+                }
+                for dir in crate::walker::collect_dirs(root, &roots_set, respect_ignore) {
+                    match watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                        Ok(_) => watched += 1,
+                        Err(e) => {
+                            failures += 1;
+                            if failures <= 5 {
+                                eprintln!("watch {dir:?} failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+            {
+                let mut s = status.write().unwrap();
+                s.watch_failures = failures;
+                if failures > 0 {
+                    s.degraded = true;
+                    eprintln!(
+                        "watcher: {watched} dirs live, {failures} unwatchable (periodic rebuild covers them)"
+                    );
+                }
+            }
+            if failures > 0 {
+                on_error();
+            }
+
             for res in rx {
                 match res {
-                    Ok(event) => handle_event(
-                        &event,
-                        &overlay,
-                        &roots_set,
-                        &cache,
-                        queue.as_ref(),
-                        &status,
-                        respect_ignore,
-                    ),
+                    Ok(event) => {
+                        // A directory created (or moved in) needs its own watches:
+                        // this root's watch is non-recursive, so nothing else
+                        // will cover it.
+                        let new_dir = matches!(event.kind, EventKind::Create(_))
+                            || matches!(
+                                event.kind,
+                                EventKind::Modify(notify::event::ModifyKind::Name(
+                                    notify::event::RenameMode::To
+                                ))
+                            );
+                        if new_dir {
+                            for p in event.paths.iter().filter(|p| {
+                                p.is_dir() && roots_set.is_in_roots(p) && !roots_set.is_excluded(p)
+                            }) {
+                                let _ = watcher.watch(p, RecursiveMode::NonRecursive);
+                                for dir in crate::walker::collect_dirs(p, &roots_set, respect_ignore) {
+                                    let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
+                                }
+                            }
+                        }
+                        handle_event(
+                            &event,
+                            &overlay,
+                            &roots_set,
+                            &cache,
+                            queue.as_ref(),
+                            &status,
+                            respect_ignore,
+                        );
+                    }
                     Err(e) => {
                         eprintln!("watcher error: {e}");
                         on_error();

@@ -201,6 +201,46 @@ fn apply(overlay: &Arc<RwLock<Overlay>>, batch: Vec<(PathBuf, Meta)>) {
     }
 }
 
+/// Walk `root` and collect every directory that should be watched.
+///
+/// Uses the same ignore-file and mount-exclusion rules as indexing, and —
+/// unlike a single recursive inotify watch — *skips* unreadable directories
+/// instead of failing, so one bad folder cannot knock out the whole watcher.
+pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, respect_ignore: bool) -> Vec<PathBuf> {
+    let mut builder = WalkBuilder::new(root);
+    builder.hidden(false).follow_links(false).threads(1);
+    if respect_ignore {
+        builder
+            .ignore(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .parents(true)
+            .require_git(false);
+        if let Some(ig) = global_ignore_path() {
+            let _ = builder.add_ignore(ig);
+        }
+    } else {
+        builder
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .parents(false);
+    }
+    let mut dirs = Vec::new();
+    for entry in builder.build() {
+        let Ok(entry) = entry else { continue }; // unreadable: skip, don't fail
+        if roots.is_excluded(entry.path()) {
+            continue;
+        }
+        if entry.file_type().map_or(false, |t| t.is_dir()) {
+            dirs.push(entry.path().to_path_buf());
+        }
+    }
+    dirs
+}
+
 /// Path of the global ignore file at `~/.config/everything-linux/ignore`.
 /// Patterns use gitignore syntax, matched relative to the working directory
 /// (or use `**/` prefixes to match anywhere).

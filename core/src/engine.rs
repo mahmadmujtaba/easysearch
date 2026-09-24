@@ -60,6 +60,8 @@ pub struct Status {
     pub state: State,
     pub degraded: bool,
     pub skipped: u64,
+    /// Directories that could not be watched (0 = fully realtime).
+    pub watch_failures: u64,
     pub content_index: ContentIndexStatus,
     /// Pending overlay changes (awaiting compaction into the disk index).
     pub overlay_pending: usize,
@@ -93,6 +95,7 @@ impl Engine {
             state: State::Starting,
             degraded: false,
             skipped: 0,
+            watch_failures: 0,
             content_index: ContentIndexStatus::Disabled,
             overlay_pending: 0,
             base_entries: 0,

@@ -127,6 +127,12 @@ fn main() {
                     "live (inotify)"
                 }
             );
+            if s.watch_failures > 0 {
+                println!(
+                    "unwatchable:    {} dir(s) (covered by periodic rebuild)",
+                    s.watch_failures
+                );
+            }
             println!("skipped dirs:   {}", s.skipped);
             match &s.content_index {
                 everything_core::ContentIndexStatus::Disabled => {

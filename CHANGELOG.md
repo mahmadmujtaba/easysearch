@@ -4,6 +4,28 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-24
+
+### Fixed
+
+- **Realtime watcher no longer degrades on unreadable directories.** Watches are
+  now installed per directory (non-recursive) instead of as a single recursive
+  root watch, so one root-owned folder (for example inside a Steam/Proton
+  `compatdata` prefix) can no longer abort the whole watch and silently drop the
+  session into periodic-rebuild mode. Directories created at runtime are watched
+  automatically, and the watcher covers the whole root instead of just the
+  top level.
+- Partial watch coverage is now visible: the GUI status bar shows
+  `⚠ N dir(s) not realtime · periodic rebuild` and `everything status` prints an
+  `unwatchable:` line, instead of reporting a healthy session while rebuilds
+  quietly mask the gap.
+
+### Changed
+
+- `.gitignore` / `~/.gitignore`: added Steam/Proton/Wine prefixes, Flatpak/Snap
+  and container blobs, browser caches, and toolchain/virtualenv directories.
+  This keeps the index lean and avoids watcher-hostile root-owned trees.
+
 ## [0.4.0] - 2026-08-20
 
 ### Added
@@ -145,6 +167,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
+[0.4.1]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.1
 [0.4.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.3.0
 [0.2.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.2.0
