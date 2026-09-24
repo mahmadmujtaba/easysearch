@@ -3,10 +3,12 @@
 //! Exposed as a library so the combined single-binary app (`everything-linux`)
 //! can drive the same UI; [`run`] takes an already-chosen [`Backend`].
 //!
-//! Pro-Search layout (three panes): a category sidebar, a floating search bar
-//! with in-bar toggles, a virtualized results table (two-line rows, badges,
-//! breadcrumbs, hover actions), and a live preview pane (thumbnail + quick
-//! actions). Tokyo Night palette; Wayland-first windowing.
+//! Layout follows the "FileSearch Pro" reference: a menu bar and a labelled
+//! toolbar, a search row (query + scope + go), a filter bar, a results header
+//! with sorting and density, then three panes — a sidebar (categories, saved
+//! searches, locations, advanced options), a virtualized results table, and a
+//! preview/details panel — over a view tab strip, recent searches and a live
+//! status bar. Tokyo Night palette; Wayland-first windowing.
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -15,6 +17,7 @@ use everything_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -240,6 +243,10 @@ struct TabState {
     category: Category,
     /// Location filter: only paths under this directory (`None` = everywhere).
     under: Option<String>,
+    /// Size / modified-time / extension filters from the filter bar.
+    size: SizeFilter,
+    modified: ModifiedFilter,
+    extensions: Vec<String>,
     results: Vec<ResultRow>,
     truncated: bool,
     error: Option<String>,
@@ -261,6 +268,9 @@ impl Default for TabState {
             full_path: false,
             category: Category::All,
             under: None,
+            size: SizeFilter::Any,
+            modified: ModifiedFilter::Any,
+            extensions: Vec::new(),
             results: Vec::new(),
             truncated: false,
             error: None,
@@ -284,6 +294,9 @@ impl TabState {
             full_path: p.full_path,
             category: category_at(p.category_index),
             under: p.under.clone(),
+            size: size_at(p.size_index),
+            modified: modified_at(p.modified_index),
+            extensions: p.extensions.clone(),
             ..TabState::default()
         }
     }
@@ -298,6 +311,9 @@ impl TabState {
             full_path: self.full_path,
             category_index: category_index(&self.category),
             under: self.under.clone(),
+            size_index: size_index(self.size),
+            modified_index: modified_index(self.modified),
+            extensions: self.extensions.clone(),
         }
     }
 }
@@ -316,6 +332,11 @@ struct TabPrefs {
     category_index: usize,
     /// Location filter (a directory path), persisted per tab.
     under: Option<String>,
+    /// Index into [`SizeFilter::ALL`] / [`ModifiedFilter::ALL`].
+    size_index: usize,
+    modified_index: usize,
+    /// Extension filter (lowercase, no dot).
+    extensions: Vec<String>,
 }
 
 fn category_index(cat: &Category) -> usize {
@@ -583,6 +604,10 @@ struct GuiPrefs {
     active_tab: usize,
     /// Whether the sidebar's TIPS cheat-sheet is expanded.
     sidebar_tips: bool,
+    /// Compact result rows (the density buttons on the results header).
+    compact_rows: bool,
+    /// User-defined saved searches.
+    saved: Vec<SavedSearch>,
 }
 
 impl Default for GuiPrefs {
@@ -597,6 +622,8 @@ impl Default for GuiPrefs {
             tabs: Vec::new(),
             active_tab: 0,
             sidebar_tips: true,
+            compact_rows: false,
+            saved: Vec::new(),
         }
     }
 }
@@ -662,6 +689,189 @@ enum Sort {
     Name(bool),
     Size(bool),
     Mtime(bool),
+    Relevance(bool),
+}
+
+/// Size filter (the `Size` control in the filter bar).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SizeFilter {
+    #[default]
+    Any,
+    Small,
+    Medium,
+    Large,
+    Huge,
+}
+
+impl SizeFilter {
+    const ALL: &'static [SizeFilter] = &[
+        SizeFilter::Any,
+        SizeFilter::Small,
+        SizeFilter::Medium,
+        SizeFilter::Large,
+        SizeFilter::Huge,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            SizeFilter::Any => "Any",
+            SizeFilter::Small => "< 1 MB",
+            SizeFilter::Medium => "1 – 100 MB",
+            SizeFilter::Large => "100 MB – 1 GB",
+            SizeFilter::Huge => "> 1 GB",
+        }
+    }
+
+    /// Inclusive byte bounds; `None` means unbounded.
+    fn bounds(self) -> (Option<u64>, Option<u64>) {
+        const KB: u64 = 1024;
+        const MB: u64 = 1024 * KB;
+        const GB: u64 = 1024 * MB;
+        match self {
+            SizeFilter::Any => (None, None),
+            SizeFilter::Small => (None, Some(MB - 1)),
+            SizeFilter::Medium => (Some(MB), Some(100 * MB - 1)),
+            SizeFilter::Large => (Some(100 * MB), Some(GB - 1)),
+            SizeFilter::Huge => (Some(GB), None),
+        }
+    }
+}
+
+/// Modified-time filter (the `Modified` control in the filter bar).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ModifiedFilter {
+    #[default]
+    Any,
+    Today,
+    Week,
+    Month,
+    Year,
+}
+
+impl ModifiedFilter {
+    const ALL: &'static [ModifiedFilter] = &[
+        ModifiedFilter::Any,
+        ModifiedFilter::Today,
+        ModifiedFilter::Week,
+        ModifiedFilter::Month,
+        ModifiedFilter::Year,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ModifiedFilter::Any => "Any",
+            ModifiedFilter::Today => "Today",
+            ModifiedFilter::Week => "Past week",
+            ModifiedFilter::Month => "Past month",
+            ModifiedFilter::Year => "Past year",
+        }
+    }
+
+    fn secs(self) -> Option<i64> {
+        match self {
+            ModifiedFilter::Any => None,
+            ModifiedFilter::Today => Some(24 * 3600),
+            ModifiedFilter::Week => Some(7 * 24 * 3600),
+            ModifiedFilter::Month => Some(30 * 24 * 3600),
+            ModifiedFilter::Year => Some(365 * 24 * 3600),
+        }
+    }
+}
+
+/// Extensions offered as one-click chips in the `Ext` filter.
+const COMMON_EXTENSIONS: &[&str] = &[
+    "pdf", "docx", "xlsx", "pptx", "odt", "txt", "md", "csv", "json", "yaml", "toml", "xml",
+    "html", "css", "js", "ts", "rs", "py", "go", "sh", "c", "cpp", "java", "log", "png", "jpg",
+    "svg", "mp3", "mp4", "zip",
+];
+
+/// Result row density (the view buttons on the results header).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Density {
+    #[default]
+    Comfortable,
+    Compact,
+}
+
+impl Density {
+    fn row_height(self) -> f32 {
+        match self {
+            Density::Comfortable => 48.0,
+            Density::Compact => 30.0,
+        }
+    }
+}
+
+/// Which view fills the central area (the tab strip above the status bar).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ViewTab {
+    #[default]
+    Results,
+    Preview,
+    Details,
+    History,
+}
+
+impl ViewTab {
+    const ALL: &'static [ViewTab] = &[
+        ViewTab::Results,
+        ViewTab::Preview,
+        ViewTab::Details,
+        ViewTab::History,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ViewTab::Results => "Results",
+            ViewTab::Preview => "Preview",
+            ViewTab::Details => "Details",
+            ViewTab::History => "Search History",
+        }
+    }
+}
+
+/// A saved search: a name plus the whole query configuration.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct SavedSearch {
+    name: String,
+    query: String,
+    content_mode: bool,
+    regex_mode: bool,
+    case_sensitive: bool,
+    under: Option<String>,
+}
+
+impl Default for SavedSearch {
+    fn default() -> Self {
+        SavedSearch {
+            name: String::new(),
+            query: String::new(),
+            content_mode: false,
+            regex_mode: false,
+            case_sensitive: false,
+            under: None,
+        }
+    }
+}
+
+fn size_index(s: SizeFilter) -> usize {
+    SizeFilter::ALL.iter().position(|x| *x == s).unwrap_or(0)
+}
+
+fn size_at(i: usize) -> SizeFilter {
+    SizeFilter::ALL.get(i).copied().unwrap_or_default()
+}
+
+fn modified_index(m: ModifiedFilter) -> usize {
+    ModifiedFilter::ALL
+        .iter()
+        .position(|x| *x == m)
+        .unwrap_or(0)
+}
+
+fn modified_at(i: usize) -> ModifiedFilter {
+    ModifiedFilter::ALL.get(i).copied().unwrap_or_default()
 }
 
 struct Preview {
@@ -671,6 +881,23 @@ struct Preview {
     mtime: i64,
     text: String,
     image: Option<egui::TextureHandle>,
+}
+
+/// Which part of a file the query is matched against (the search-row scope).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Scope {
+    #[default]
+    Filenames,
+    FullPath,
+    Contents,
+}
+
+/// Which tab the right-hand panel shows.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum PanelTab {
+    #[default]
+    Preview,
+    Details,
 }
 
 struct App {
@@ -685,6 +912,35 @@ struct App {
     category: Category,
     /// Location filter: only paths under this directory (`None` = everywhere).
     under: Option<String>,
+    // --- filter bar -------------------------------------------------------
+    size: SizeFilter,
+    modified: ModifiedFilter,
+    extensions: Vec<String>,
+    /// Text in the sidebar's own filter box (filters the sidebar lists).
+    sidebar_filter: String,
+    // --- view state -------------------------------------------------------
+    density: Density,
+    /// Which view fills the central area (Results / Preview / Details / History).
+    view: ViewTab,
+    /// Which tab the right-hand panel shows (independent of `view`).
+    panel_tab: PanelTab,
+    /// Bulk selection, keyed by path so it survives re-sorting.
+    checked: HashSet<PathBuf>,
+    /// SHA-256 of the selected file, computed on demand for the Details tab.
+    hash: Option<(PathBuf, String)>,
+    /// "Save current search" popup.
+    show_save: bool,
+    save_name: String,
+    /// The saved-searches window.
+    show_saved: bool,
+    /// Location history for the Back/Forward toolbar buttons.
+    loc_history: Vec<Option<String>>,
+    loc_idx: usize,
+    // --- live system stats for the status bar -----------------------------
+    sys_at: Instant,
+    sys_cpu: f32,
+    sys_ram_used_kb: u64,
+    sys_ram_total_kb: u64,
     limit: usize,
     results: Vec<ResultRow>,
     truncated: bool,
@@ -829,6 +1085,12 @@ impl App {
                 .expect("failed to spawn facet thread");
         }
 
+        let density = if prefs.compact_rows {
+            Density::Compact
+        } else {
+            Density::Comfortable
+        };
+        let start_under = start.under.clone();
         let mut app = App {
             engine: backend,
             prefs,
@@ -840,6 +1102,24 @@ impl App {
             full_path: start.full_path,
             category: start.category,
             under: start.under,
+            size: start.size,
+            modified: start.modified,
+            extensions: start.extensions,
+            sidebar_filter: String::new(),
+            density,
+            view: ViewTab::Results,
+            panel_tab: PanelTab::Preview,
+            checked: HashSet::new(),
+            hash: None,
+            show_save: false,
+            save_name: String::new(),
+            show_saved: false,
+            loc_history: vec![start_under.clone()],
+            loc_idx: 0,
+            sys_at: Instant::now(),
+            sys_cpu: 0.0,
+            sys_ram_used_kb: 0,
+            sys_ram_total_kb: 0,
             limit: 500,
             results: start.results,
             truncated: start.truncated,
@@ -1018,6 +1298,9 @@ impl App {
             full_path: self.full_path,
             category: self.category,
             under: self.under.clone(),
+            size: self.size,
+            modified: self.modified,
+            extensions: self.extensions.clone(),
             results: self.results.clone(),
             truncated: self.truncated,
             error: self.error.clone(),
@@ -1040,6 +1323,9 @@ impl App {
         self.full_path = t.full_path;
         self.category = t.category;
         self.under = t.under;
+        self.size = t.size;
+        self.modified = t.modified;
+        self.extensions = t.extensions;
         self.results = t.results;
         self.truncated = t.truncated;
         self.error = t.error;
@@ -1118,6 +1404,7 @@ impl App {
         } else {
             None
         };
+        let (min_size, max_size) = self.size.bounds();
         let q = Query {
             name,
             regex_mode: self.regex_mode,
@@ -1128,6 +1415,10 @@ impl App {
             category: self.category,
             include_dirs: self.prefs.include_dirs,
             under: self.under.clone(),
+            extensions: self.extensions.clone(),
+            min_size,
+            max_size,
+            modified_within_secs: self.modified.secs(),
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search {
@@ -1148,6 +1439,7 @@ impl App {
             return;
         }
         self.under = under;
+        self.push_location();
         self.send_query();
     }
 
@@ -1156,7 +1448,8 @@ impl App {
     fn toggle_sort(&mut self, prefer: Sort) {
         self.sort = cycle_sort(self.sort, prefer);
         if let Some(s) = self.sort {
-            sort_results(&mut self.results, s);
+            let needle = self.last_sent.clone();
+            sort_results(&mut self.results, s, &needle);
         }
     }
 
@@ -1277,6 +1570,266 @@ impl App {
 
 fn search_id() -> egui::Id {
     egui::Id::new("search_input")
+}
+
+/// Icons painted by hand (no icon font, no emoji) so they look identical in
+/// every theme and on every desktop.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Icon {
+    Back,
+    Forward,
+    Home,
+    Index,
+    Content,
+    Clock,
+    Bookmark,
+    Folder,
+    Terminal,
+    Reveal,
+    Open,
+}
+
+fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.5;
+    let stroke = egui::Stroke::new(1.6_f32, color);
+    let p = |x: f32, y: f32| egui::pos2(c.x + x * s, c.y + y * s);
+    match kind {
+        Icon::Back | Icon::Forward => {
+            let dir = if kind == Icon::Back { -1.0 } else { 1.0 };
+            // Shaft.
+            painter.line_segment([p(-0.9 * dir, 0.0), p(0.9 * dir, 0.0)], stroke);
+            // Arrow head at the far end.
+            painter.line_segment([p(0.25 * dir, -0.6), p(0.9 * dir, 0.0)], stroke);
+            painter.line_segment([p(0.25 * dir, 0.6), p(0.9 * dir, 0.0)], stroke);
+        }
+        Icon::Home => {
+            painter.line_segment([p(-0.95, -0.1), p(0.0, -0.95)], stroke);
+            painter.line_segment([p(0.0, -0.95), p(0.95, -0.1)], stroke);
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.65, -0.1), p(0.65, 0.95)),
+                egui::CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        Icon::Index => {
+            for i in 0..3 {
+                let r = egui::Rect::from_min_max(
+                    p(-0.9, -0.95 + i as f32 * 0.62),
+                    p(0.9, -0.45 + i as f32 * 0.62),
+                );
+                painter.rect_filled(r, egui::CornerRadius::same(3), color);
+            }
+        }
+        Icon::Content => {
+            painter.circle_stroke(p(-0.2, -0.2), s * 0.6, egui::Stroke::new(1.8_f32, color));
+            painter.line_segment(
+                [p(0.28, 0.28), p(0.9, 0.9)],
+                egui::Stroke::new(1.8_f32, color),
+            );
+        }
+        Icon::Clock => {
+            painter.circle_stroke(c, s * 0.85, stroke);
+            painter.line_segment([c, p(0.0, -0.5)], stroke);
+            painter.line_segment([c, p(0.45, 0.15)], stroke);
+        }
+        Icon::Bookmark => {
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-0.55, -0.9),
+                    p(0.55, -0.9),
+                    p(0.55, 0.9),
+                    p(0.0, 0.3),
+                    p(-0.55, 0.9),
+                    p(-0.55, -0.9),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Folder => {
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-0.9, 0.75),
+                    p(-0.9, -0.5),
+                    p(-0.25, -0.5),
+                    p(0.0, -0.25),
+                    p(0.9, -0.25),
+                    p(0.9, 0.75),
+                    p(-0.9, 0.75),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Terminal => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.95, -0.8), p(0.95, 0.8)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([p(-0.5, -0.35), p(-0.1, 0.0)], stroke);
+            painter.line_segment([p(-0.1, 0.0), p(-0.5, 0.35)], stroke);
+            painter.line_segment([p(0.1, 0.35), p(0.6, 0.35)], stroke);
+        }
+        Icon::Reveal => {
+            painter.add(egui::Shape::line(
+                vec![p(-0.9, 0.2), p(-0.9, 0.8), p(0.9, 0.8), p(0.9, 0.2)],
+                stroke,
+            ));
+            painter.line_segment([p(0.0, -0.9), p(0.0, 0.1)], stroke);
+            painter.line_segment([p(-0.4, -0.5), p(0.0, -0.9)], stroke);
+            painter.line_segment([p(0.4, -0.5), p(0.0, -0.9)], stroke);
+        }
+        Icon::Open => {
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-0.8, -0.7),
+                    p(0.35, -0.7),
+                    p(0.6, -0.4),
+                    p(0.8, -0.4),
+                    p(0.8, 0.7),
+                    p(-0.8, 0.7),
+                    p(-0.8, -0.7),
+                ],
+                stroke,
+            ));
+        }
+    }
+}
+
+/// A toolbar button: painted icon above a small label, like the reference UI.
+/// Returns `true` only when it is enabled *and* clicked.
+#[allow(clippy::too_many_arguments)]
+fn tool_button(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    icon: Option<Icon>,
+    glyph: Option<&str>,
+    label: &str,
+    tip: &str,
+    active: bool,
+    enabled: bool,
+) -> bool {
+    let font = egui::FontId::new(10.5, egui::FontFamily::Proportional);
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), t.text)
+        .size()
+        .x;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2((text_w + 20.0).max(50.0), 42.0),
+        egui::Sense::click(),
+    );
+    let hovered = enabled && resp.hovered();
+    let radius = egui::CornerRadius::same(7);
+    let fill = if active {
+        Some(t.accent_soft())
+    } else if hovered {
+        Some(t.hover)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, radius, fill);
+    }
+    if active {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.0_f32, t.accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let fg = if !enabled {
+        t.faint
+    } else if active {
+        t.accent
+    } else {
+        t.text
+    };
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + 15.0),
+        egui::vec2(18.0, 18.0),
+    );
+    if let Some(kind) = icon {
+        paint_icon(ui.painter(), icon_rect, kind, fg);
+    } else if let Some(g) = glyph {
+        ui.painter().text(
+            icon_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            g,
+            egui::FontId::new(13.0, egui::FontFamily::Monospace),
+            fg,
+        );
+    }
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.bottom() - 15.0,
+        ),
+        galley,
+        fg,
+    );
+    let tip = if enabled {
+        tip.to_string()
+    } else {
+        format!("{tip} — unavailable while indexing")
+    };
+    resp.on_hover_text(tip).clicked() && enabled
+}
+
+/// An accent-filled button for the primary action (the search row's `Search`).
+fn primary_button(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Option<Icon>) -> bool {
+    let font = egui::FontId::new(12.5, egui::FontFamily::Proportional);
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), t.bg)
+        .size()
+        .x;
+    let w = text_w + if icon.is_some() { 44.0 } else { 26.0 };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
+    let fill = if resp.hovered() {
+        t.accent.gamma_multiply(0.86)
+    } else {
+        t.accent
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(7), fill);
+    let mut x = rect.min.x + 11.0;
+    if let Some(kind) = icon {
+        let ir = egui::Rect::from_center_size(
+            egui::pos2(x + 8.0, rect.center().y),
+            egui::vec2(16.0, 16.0),
+        );
+        paint_icon(ui.painter(), ir, kind, t.bg);
+        x += 21.0;
+    }
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        t.bg,
+    );
+    resp.clicked()
+}
+
+/// Small uppercase label used before a filter control.
+fn bar_label(t: &Theme, text: &str) -> egui::RichText {
+    egui::RichText::new(text).size(11.0).color(t.faint)
+}
+
+/// A cell in the Details grid: muted key on the left, value on the right.
+fn detail_row(ui: &mut egui::Ui, t: &Theme, key: &str, value: &str) {
+    ui.horizontal_top(|ui| {
+        ui.add_sized(
+            egui::vec2(84.0, 16.0),
+            egui::Label::new(egui::RichText::new(key).size(11.5).color(t.faint)),
+        );
+        ui.label(egui::RichText::new(value).size(12.0).color(t.text));
+    });
 }
 
 /// Full-width sidebar row: colour dot, label, optional right-aligned value, and
@@ -1829,7 +2382,8 @@ impl eframe::App for App {
                         self.error = None;
                         self.pending = false;
                         if let Some(sort) = self.sort {
-                            sort_results(&mut self.results, sort);
+                            let needle = self.last_sent.clone();
+                            sort_results(&mut self.results, sort, &needle);
                         }
                     }
                     Err(e) => {
@@ -1850,7 +2404,8 @@ impl eframe::App for App {
                         t.error = None;
                         t.pending = false;
                         if let Some(sort) = t.sort {
-                            sort_results(&mut t.results, sort);
+                            let needle = t.last_sent.clone();
+                            sort_results(&mut t.results, sort, &needle);
                         }
                     }
                     Err(e) => {
@@ -1906,6 +2461,10 @@ impl eframe::App for App {
                 category: Category::All,
                 include_dirs: self.prefs.include_dirs,
                 under: self.under.clone(),
+                extensions: self.extensions.clone(),
+                min_size: self.size.bounds().0,
+                max_size: self.size.bounds().1,
+                modified_within_secs: self.modified.secs(),
                 limit: 1,
             };
             self.counts_key = self.last_sent.clone();
@@ -2076,9 +2635,13 @@ impl eframe::App for App {
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
-        self.top_bar(ctx);
+        self.toolbar(ctx);
+        self.search_row(ctx);
+        self.filter_row(ctx);
+        self.results_header(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
-        self.bottom_controls(ctx);
+        self.recent_row(ctx);
+        self.view_tabs(ctx);
         self.sidebar(ctx);
         if self.prefs.show_preview {
             self.refresh_preview(ctx);
@@ -2099,6 +2662,10 @@ impl eframe::App for App {
         if self.show_shortcuts {
             self.shortcuts_dialog(ctx);
         }
+        if self.show_saved {
+            self.saved_dialog(ctx);
+        }
+        self.save_search_dialog(ctx);
     }
 
     /// Persist open tabs and history on shutdown (eframe calls this on exit and
@@ -2441,140 +3008,634 @@ impl App {
             });
     }
 
-    /// Floating search bar with in-bar toggles and the options menu.
-    fn top_bar(&mut self, ctx: &egui::Context) {
+    /// Toolbar row: labelled action buttons, as in the reference UI.
+    fn toolbar(&mut self, ctx: &egui::Context) {
         let t = self.theme();
-        let focused = ctx.memory(|m| m.has_focus(search_id()));
-        egui::TopBottomPanel::top("search")
+        let indexing = matches!(self.status.state, State::Starting | State::Indexing);
+        let home = self.home_path();
+        let at_home = self.under.as_deref() == home.to_str();
+        let recent = matches!(self.category, Category::Recent { .. });
+        let saved_count = self.prefs.saved.len();
+        egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::new()
                     .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(14, 12)),
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
             )
             .show(ctx, |ui| {
-                let hint = if self.content_mode {
-                    "Search file contents (regex)…"
-                } else if self.regex_mode {
-                    "Search filenames (regex)…"
-                } else {
-                    "Search files and folders…"
-                };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Back),
+                        None,
+                        "Back",
+                        "Previous location",
+                        false,
+                        self.loc_idx > 0,
+                    ) {
+                        self.nav_location(-1);
+                    }
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Forward),
+                        None,
+                        "Forward",
+                        "Next location",
+                        false,
+                        self.loc_idx + 1 < self.loc_history.len(),
+                    ) {
+                        self.nav_location(1);
+                    }
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Home),
+                        None,
+                        "Home",
+                        "Search your home directory",
+                        at_home,
+                        true,
+                    ) {
+                        self.set_under(home.to_str().map(|s| s.to_string()));
+                    }
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Index),
+                        None,
+                        "Index",
+                        "Rebuild the index from disk",
+                        false,
+                        !indexing,
+                    ) {
+                        self.engine.rebuild();
+                    }
+
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Content),
+                        None,
+                        "Content Search",
+                        "Search inside file contents (ripgrep, always fresh)",
+                        self.content_mode,
+                        true,
+                    ) {
+                        self.content_mode = !self.content_mode;
+                        self.send_query();
+                    }
+                    if tool_button(
+                        ui,
+                        &t,
+                        None,
+                        Some(".*"),
+                        "Regex",
+                        "Treat the query as a regular expression",
+                        self.regex_mode,
+                        true,
+                    ) {
+                        self.regex_mode = !self.regex_mode;
+                        self.send_query();
+                    }
+
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Clock),
+                        None,
+                        "Recent",
+                        "Files changed in the last 7 days",
+                        recent,
+                        true,
+                    ) {
+                        self.category = if recent {
+                            Category::All
+                        } else {
+                            Category::Recent {
+                                max_age_secs: RECENT_AGE_SECS,
+                            }
+                        };
+                        self.send_query();
+                    }
+                    let saved_label = if saved_count > 0 {
+                        format!("Saved ({saved_count})")
+                    } else {
+                        "Saved".to_string()
+                    };
+                    if tool_button(
+                        ui,
+                        &t,
+                        Some(Icon::Bookmark),
+                        None,
+                        &saved_label,
+                        "Your saved searches",
+                        self.show_saved,
+                        true,
+                    ) {
+                        self.show_saved = !self.show_saved;
+                    }
+                });
+            });
+    }
+
+    /// Search row: the query field, the scope, the location and the go button.
+    fn search_row(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let focused = ctx.memory(|m| m.has_focus(search_id()));
+        egui::TopBottomPanel::top("searchrow")
+            .frame(
                 egui::Frame::new()
-                    .fill(t.card)
-                    .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        if focused { t.accent } else { t.stroke },
-                    ))
-                    .shadow(t.shadow(14, 4))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            magnifier(ui, t.faint);
-                            ui.add_space(4.0);
-                            let edit = egui::TextEdit::singleline(&mut self.query)
-                                .id(search_id())
-                                .hint_text(egui::RichText::new(hint).color(t.faint))
-                                .font(egui::FontId::new(16.0, egui::FontFamily::Proportional))
-                                .desired_width(f32::INFINITY)
-                                .margin(egui::vec2(2.0, 4.0))
-                                .frame(false);
-                            let resp = ui.add(edit);
-                            if resp.changed() {
-                                self.last_edit = Instant::now();
-                                self.history_idx = None;
-                            }
-                            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                let q = self.query.clone();
-                                self.prefs.commit_query(&q);
-                                self.sync_history();
-                                self.history_idx = None;
-                                if let Some(first) = self.results.first() {
-                                    App::open(&first.path);
-                                }
-                            }
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(bar_label(&t, "Search:"));
 
-                            // In-bar toggles: regex, case-sensitive.
-                            if toggle(ui, &t, &mut self.regex_mode, ".*", "Regex mode") {
-                                self.send_query();
-                            }
-                            if toggle(ui, &t, &mut self.case_sensitive, "Aa", "Case-sensitive") {
-                                self.send_query();
-                            }
-
-                            let history = self.prefs.history.clone();
-                            ui.menu_button(egui::RichText::new("History").size(13.0), |ui| {
-                                ui.set_min_width(240.0);
-                                if history.is_empty() {
-                                    ui.weak("No recent searches yet");
-                                }
-                                for q in &history {
-                                    if ui.button(q).clicked() {
-                                        self.run_query(q);
-                                        ui.close_menu();
-                                    }
-                                }
-                                if !history.is_empty() {
-                                    ui.separator();
-                                    if ui.button("Clear history").clicked() {
-                                        self.prefs.clear_history();
-                                        self.sync_history();
-                                        ui.close_menu();
-                                    }
-                                }
-                            });
-                            ui.menu_button(egui::RichText::new("Filters").size(13.0), |ui| {
-                                ui.set_min_width(220.0);
-                                if ui
-                                    .checkbox(&mut self.content_mode, "Match contents")
-                                    .on_hover_text("Search inside files (regex)")
-                                    .changed()
-                                {
-                                    self.send_query();
-                                }
-                                if ui.checkbox(&mut self.hidden, "Hidden files").changed() {
-                                    self.send_query();
-                                }
-                                if ui
-                                    .checkbox(&mut self.full_path, "Full path match")
-                                    .changed()
-                                {
-                                    self.send_query();
-                                }
-                                ui.separator();
-                                if ui
-                                    .checkbox(&mut self.prefs.show_preview, "Preview pane")
-                                    .changed()
-                                {
-                                    self.prefs.save();
-                                }
-                                if ui
-                                    .button(if self.dark {
-                                        "Switch to light theme"
+                    // The field takes whatever is left after the controls.
+                    let reserved = 460.0;
+                    let field_w = (ui.available_width() - reserved).max(180.0);
+                    ui.scope(|ui| {
+                        ui.set_width(field_w);
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .corner_radius(egui::CornerRadius::same(8))
+                            .inner_margin(egui::Margin::symmetric(10, 5))
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                if focused { t.accent } else { t.stroke },
+                            ))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    magnifier(ui, t.faint);
+                                    ui.add_space(4.0);
+                                    let hint = if self.content_mode {
+                                        "Search inside files…"
                                     } else {
-                                        "Switch to dark theme"
-                                    })
+                                        "Search files and folders…"
+                                    };
+                                    let edit = egui::TextEdit::singleline(&mut self.query)
+                                        .id(search_id())
+                                        .hint_text(egui::RichText::new(hint).color(t.faint))
+                                        .font(egui::FontId::new(
+                                            15.0,
+                                            egui::FontFamily::Proportional,
+                                        ))
+                                        .desired_width(f32::INFINITY)
+                                        .margin(egui::vec2(2.0, 3.0))
+                                        .frame(false);
+                                    let resp = ui.add(edit);
+                                    if resp.changed() {
+                                        self.last_edit = Instant::now();
+                                        self.history_idx = None;
+                                    }
+                                    if resp.lost_focus()
+                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    {
+                                        let q = self.query.clone();
+                                        self.prefs.commit_query(&q);
+                                        self.sync_history();
+                                        self.history_idx = None;
+                                        if let Some(first) = self.results.first() {
+                                            App::open(&first.path);
+                                        }
+                                    }
+                                    if !self.query.is_empty()
+                                        && ui.button("×").on_hover_text("Clear").clicked()
+                                    {
+                                        self.query.clear();
+                                        self.history_idx = None;
+                                        self.send_query();
+                                    }
+                                    if self.pending {
+                                        ui.spinner();
+                                    }
+                                });
+                            });
+                    });
+
+                    // Scope: what part of a file the query is matched against.
+                    let scope = self.scope_label();
+                    ui.menu_button(scope.to_string(), |ui| {
+                        ui.set_min_width(190.0);
+                        if ui
+                            .selectable_label(self.scope() == Scope::Filenames, "Filenames")
+                            .clicked()
+                        {
+                            self.set_scope(Scope::Filenames);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .selectable_label(self.scope() == Scope::FullPath, "Full path")
+                            .clicked()
+                        {
+                            self.set_scope(Scope::FullPath);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .selectable_label(self.scope() == Scope::Contents, "Contents (ripgrep)")
+                            .clicked()
+                        {
+                            self.set_scope(Scope::Contents);
+                            ui.close_menu();
+                        }
+                    })
+                    .on_hover_text("Where the query is matched");
+
+                    // Location.
+                    let loc_label = match &self.under {
+                        None => "All Locations".to_string(),
+                        Some(p) => location_label(p),
+                    };
+                    ui.menu_button(loc_label, |ui| {
+                        ui.set_min_width(220.0);
+                        if ui
+                            .selectable_label(self.under.is_none(), "All Locations")
+                            .clicked()
+                        {
+                            self.set_under(None);
+                            ui.close_menu();
+                        }
+                        for (label, path) in locations() {
+                            let s = path.to_string_lossy().into_owned();
+                            if ui
+                                .selectable_label(self.under.as_deref() == Some(s.as_str()), label)
+                                .clicked()
+                            {
+                                self.set_under(Some(s));
+                                ui.close_menu();
+                            }
+                        }
+                    })
+                    .on_hover_text("Restrict the search to one directory");
+
+                    if primary_button(ui, &t, "Search", Some(Icon::Content)) {
+                        let q = self.query.clone();
+                        self.prefs.commit_query(&q);
+                        self.sync_history();
+                        self.send_query();
+                    }
+                });
+            });
+    }
+
+    /// Filter bar: the row of dropdowns and toggles under the search row.
+    fn filter_row(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        egui::TopBottomPanel::top("filterrow")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 5)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    let mut changed = false;
+
+                    // Type (category).
+                    ui.label(bar_label(&t, "Type"));
+                    ui.menu_button(self.category_label(), |ui| {
+                        ui.set_min_width(170.0);
+                        for (label, cat) in CATEGORIES {
+                            if ui.selectable_label(self.category == *cat, label).clicked() {
+                                self.category = *cat;
+                                changed = true;
+                                ui.close_menu();
+                            }
+                        }
+                    });
+
+                    // Size.
+                    ui.label(bar_label(&t, "Size"));
+                    ui.menu_button(self.size.label(), |ui| {
+                        ui.set_min_width(170.0);
+                        for s in SizeFilter::ALL {
+                            if ui.selectable_label(self.size == *s, s.label()).clicked() {
+                                self.size = *s;
+                                changed = true;
+                                ui.close_menu();
+                            }
+                        }
+                    });
+
+                    // Modified.
+                    ui.label(bar_label(&t, "Modified"));
+                    ui.menu_button(self.modified.label(), |ui| {
+                        ui.set_min_width(170.0);
+                        for m in ModifiedFilter::ALL {
+                            if ui
+                                .selectable_label(self.modified == *m, m.label())
+                                .clicked()
+                            {
+                                self.modified = *m;
+                                changed = true;
+                                ui.close_menu();
+                            }
+                        }
+                    });
+
+                    // Path.
+                    ui.label(bar_label(&t, "Path"));
+                    ui.menu_button(
+                        match &self.under {
+                            None => "/ (everywhere)".to_string(),
+                            Some(p) => p.clone(),
+                        },
+                        |ui| {
+                            ui.set_min_width(240.0);
+                            if ui
+                                .selectable_label(self.under.is_none(), "Everywhere")
+                                .clicked()
+                            {
+                                self.set_under(None);
+                                ui.close_menu();
+                            }
+                            for (label, path) in locations() {
+                                let s = path.to_string_lossy().into_owned();
+                                if ui
+                                    .selectable_label(
+                                        self.under.as_deref() == Some(s.as_str()),
+                                        label,
+                                    )
                                     .clicked()
                                 {
-                                    self.dark = !self.dark;
-                                    self.prefs.dark = Some(self.dark);
-                                    self.prefs.save();
-                                    self.apply_style(ui.ctx());
+                                    self.set_under(Some(s));
+                                    ui.close_menu();
+                                }
+                            }
+                        },
+                    );
+
+                    // Extensions.
+                    ui.label(bar_label(&t, "Ext:"));
+                    let ext_label = if self.extensions.is_empty() {
+                        "any".to_string()
+                    } else {
+                        let mut s = self.extensions.join(", ");
+                        if s.len() > 22 {
+                            s.truncate(21);
+                            s.push('…');
+                        }
+                        s
+                    };
+                    ui.menu_button(ext_label, |ui| {
+                        ui.set_min_width(200.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .show(ui, |ui| {
+                                for ext in COMMON_EXTENSIONS {
+                                    let mut on = self.extensions.iter().any(|e| e == ext);
+                                    if ui.checkbox(&mut on, *ext).changed() {
+                                        if on {
+                                            self.extensions.push((*ext).to_string());
+                                        } else {
+                                            self.extensions.retain(|e| e != ext);
+                                        }
+                                        changed = true;
+                                    }
                                 }
                             });
-                            if !self.query.is_empty()
-                                && ui.button("×").on_hover_text("Clear").clicked()
-                            {
-                                self.query.clear();
-                                self.history_idx = None;
-                                self.send_query();
+                        if !self.extensions.is_empty() {
+                            ui.separator();
+                            if ui.button("Clear extensions").clicked() {
+                                self.extensions.clear();
+                                changed = true;
+                                ui.close_menu();
                             }
-                            if self.pending {
-                                ui.spinner();
+                        }
+                    });
+
+                    // Case / hidden.
+                    if ui.checkbox(&mut self.case_sensitive, "Case").changed() {
+                        changed = true;
+                    }
+                    if ui.checkbox(&mut self.hidden, "Hidden").changed() {
+                        changed = true;
+                    }
+
+                    ui.add_space(4.0);
+                    let any_filter = self.size != SizeFilter::Any
+                        || self.modified != ModifiedFilter::Any
+                        || !self.extensions.is_empty()
+                        || self.under.is_some()
+                        || self.category != Category::All
+                        || self.hidden
+                        || self.case_sensitive
+                        || self.full_path
+                        || self.content_mode;
+                    if ui
+                        .add_enabled(
+                            any_filter,
+                            egui::Button::new(egui::RichText::new("✕  Clear Filters").size(12.0)),
+                        )
+                        .clicked()
+                    {
+                        self.clear_filters();
+                    }
+
+                    if changed {
+                        self.send_query();
+                    }
+                });
+            });
+    }
+
+    /// Results header: the summary line, sorting and row density.
+    fn results_header(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let (files, dirs) = self.engine.counts();
+        let indexed = files + dirs;
+        let shown = self.results.len();
+        let total = self.counts.first().copied().unwrap_or(0).max(shown as u64);
+        let checked = self.checked.len();
+        egui::TopBottomPanel::top("resultshead")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let summary = if self.pending {
+                        "searching…".to_string()
+                    } else if self.error.is_some() {
+                        "query error".to_string()
+                    } else {
+                        format!(
+                            "{} results • {} files indexed • {} ms",
+                            human_count(total),
+                            human_count(indexed),
+                            self.elapsed_ms
+                        )
+                    };
+                    ui.label(egui::RichText::new(summary).size(11.5).color(t.dim));
+                    if checked > 0 {
+                        ui.label(
+                            egui::RichText::new(format!("• {checked} selected"))
+                                .size(11.5)
+                                .color(t.accent),
+                        );
+                    }
+                    if self.truncated {
+                        ui.label(
+                            egui::RichText::new(format!("• showing the first {shown}"))
+                                .size(11.5)
+                                .color(t.warn),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Density.
+                        if ui
+                            .selectable_label(self.density == Density::Compact, "Compact")
+                            .on_hover_text("Compact rows")
+                            .clicked()
+                        {
+                            self.density = Density::Compact;
+                            self.prefs.compact_rows = true;
+                            self.prefs.save();
+                        }
+                        if ui
+                            .selectable_label(self.density == Density::Comfortable, "Cozy")
+                            .on_hover_text("Two-line rows")
+                            .clicked()
+                        {
+                            self.density = Density::Comfortable;
+                            self.prefs.compact_rows = false;
+                            self.prefs.save();
+                        }
+                        ui.add_space(10.0);
+                        ui.label(bar_label(&t, "Sort by:"));
+                        let sort_label = match self.sort {
+                            None | Some(Sort::Relevance(_)) => "Relevance",
+                            Some(Sort::Name(_)) => "Name",
+                            Some(Sort::Size(_)) => "Size",
+                            Some(Sort::Mtime(_)) => "Modified",
+                        };
+                        ui.menu_button(sort_label, |ui| {
+                            ui.set_min_width(150.0);
+                            let opts: [(&str, Sort); 4] = [
+                                ("Relevance", Sort::Relevance(false)),
+                                ("Name", Sort::Name(true)),
+                                ("Size", Sort::Size(false)),
+                                ("Modified", Sort::Mtime(false)),
+                            ];
+                            for (label, s) in opts {
+                                let active = match (self.sort, s) {
+                                    (None, Sort::Relevance(_)) => true,
+                                    (Some(a), b) => same_key(a, b),
+                                    _ => false,
+                                };
+                                if ui.selectable_label(active, label).clicked() {
+                                    self.set_sort(s);
+                                    ui.close_menu();
+                                }
                             }
                         });
                     });
+                });
             });
+    }
+
+    /// Which part of a file the query is matched against.
+    fn scope(&self) -> Scope {
+        if self.content_mode {
+            Scope::Contents
+        } else if self.full_path {
+            Scope::FullPath
+        } else {
+            Scope::Filenames
+        }
+    }
+
+    fn scope_label(&self) -> &'static str {
+        match self.scope() {
+            Scope::Filenames => "Filenames",
+            Scope::FullPath => "Full path",
+            Scope::Contents => "Contents (ripgrep)",
+        }
+    }
+
+    fn set_scope(&mut self, s: Scope) {
+        if self.scope() == s {
+            return;
+        }
+        self.content_mode = s == Scope::Contents;
+        self.full_path = s == Scope::FullPath;
+        self.send_query();
+    }
+
+    fn category_label(&self) -> String {
+        CATEGORIES
+            .iter()
+            .find(|(_, c)| *c == self.category)
+            .map(|(label, _)| (*label).to_string())
+            .unwrap_or_else(|| "All files".to_string())
+    }
+
+    fn home_path(&self) -> PathBuf {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    /// Select a sort order and apply it to the results already on screen.
+    fn set_sort(&mut self, prefer: Sort) {
+        self.sort = Some(prefer);
+        let needle = self.last_sent.clone();
+        sort_results(&mut self.results, prefer, &needle);
+    }
+
+    fn clear_filters(&mut self) {
+        self.category = Category::All;
+        self.size = SizeFilter::Any;
+        self.modified = ModifiedFilter::Any;
+        self.extensions.clear();
+        self.hidden = false;
+        self.case_sensitive = false;
+        self.full_path = false;
+        self.content_mode = false;
+        if self.under.is_some() {
+            self.set_under(None);
+        } else {
+            self.send_query();
+        }
+    }
+
+    /// Move through the location history (the Back/Forward toolbar buttons).
+    fn nav_location(&mut self, delta: i32) {
+        let next = self.loc_idx as i32 + delta;
+        if next < 0 || next as usize >= self.loc_history.len() {
+            return;
+        }
+        self.loc_idx = next as usize;
+        self.under = self.loc_history[self.loc_idx].clone();
+        self.send_query();
+    }
+
+    /// Remember a location change so Back/Forward can walk it.
+    fn push_location(&mut self) {
+        let here = self.under.clone();
+        self.loc_history.truncate(self.loc_idx + 1);
+        if self.loc_history.last().is_some_and(|l| *l == here) {
+            return;
+        }
+        self.loc_history.push(here);
+        self.loc_idx = self.loc_history.len() - 1;
     }
 
     fn sidebar(&mut self, ctx: &egui::Context) {
@@ -3345,74 +4406,6 @@ impl App {
         });
     }
 
-    /// Bottom control strip: UI zoom, file-type filter, and folder toggle.
-    fn bottom_controls(&mut self, ctx: &egui::Context) {
-        let t = self.theme();
-        egui::TopBottomPanel::bottom("controls")
-            .frame(
-                egui::Frame::new()
-                    .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(14, 6)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // --- zoom levels ------------------------------------------
-                    ui.label(egui::RichText::new("Zoom").size(12.0).color(t.faint));
-                    let current = ctx.zoom_factor();
-                    for level in ZOOM_LEVELS {
-                        let active = (current - level).abs() < 0.001;
-                        let label =
-                            egui::RichText::new(format!("{}%", (level * 100.0).round() as i32))
-                                .size(12.0);
-                        if ui.selectable_label(active, label).clicked() {
-                            ctx.set_zoom_factor(*level);
-                            self.prefs.zoom = *level;
-                            self.prefs.save();
-                        }
-                    }
-
-                    ui.separator();
-
-                    // --- file-type filter ------------------------------------
-                    ui.label(egui::RichText::new("Type").size(12.0).color(t.faint));
-                    let current = CATEGORIES
-                        .iter()
-                        .find(|(_, c)| *c == self.category)
-                        .map(|(l, _)| *l)
-                        .unwrap_or("All files");
-                    let mut chosen: Option<Category> = None;
-                    egui::ComboBox::from_id_salt("type_filter")
-                        .selected_text(egui::RichText::new(current).size(12.5))
-                        .width(150.0)
-                        .show_ui(ui, |ui| {
-                            for (label, cat) in CATEGORIES {
-                                if ui.selectable_label(self.category == *cat, *label).clicked() {
-                                    chosen = Some(*cat);
-                                }
-                            }
-                        });
-                    if let Some(c) = chosen {
-                        self.category = c;
-                        self.send_query();
-                    }
-
-                    ui.separator();
-
-                    // --- include folders --------------------------------------
-                    if ui
-                        .checkbox(&mut self.prefs.include_dirs, "Folders")
-                        .on_hover_text("Include folders in results")
-                        .changed()
-                    {
-                        self.prefs.save();
-                        self.send_query();
-                    }
-                });
-            });
-    }
-}
-
-/// Clickable breadcrumb trail: `Home › Pictures › Screenshots`.
 fn breadcrumb_ui(ui: &mut egui::Ui, path: &Path, dim: egui::Color32) {
     let Some(parent) = path.parent() else { return };
     let mut crumbs: Vec<(String, PathBuf)> = Vec::new();
@@ -3565,7 +4558,7 @@ fn sort_button(
     let active = current.is_some_and(&is_active);
     let mark = match current {
         Some(s) if is_active(s) => match s {
-            Sort::Name(asc) | Sort::Size(asc) | Sort::Mtime(asc) => {
+            Sort::Name(asc) | Sort::Size(asc) | Sort::Mtime(asc) | Sort::Relevance(asc) => {
                 if asc {
                     "  ↑"
                 } else {
@@ -3590,6 +4583,7 @@ fn cycle_sort(current: Option<Sort>, prefer: Sort) -> Option<Sort> {
             Sort::Name(true) => Some(Sort::Name(false)),
             Sort::Size(true) => Some(Sort::Size(false)),
             Sort::Mtime(true) => Some(Sort::Mtime(false)),
+            Sort::Relevance(true) => Some(Sort::Relevance(false)),
             _ => None,
         },
         Some(_) => Some(prefer),
@@ -3602,10 +4596,70 @@ fn same_key(a: Sort, b: Sort) -> bool {
         (Sort::Name(_), Sort::Name(_))
             | (Sort::Size(_), Sort::Size(_))
             | (Sort::Mtime(_), Sort::Mtime(_))
+            | (Sort::Relevance(_), Sort::Relevance(_))
     )
 }
 
-fn sort_results(results: &mut [ResultRow], sort: Sort) {
+/// A transparent 0–100 relevance score.
+///
+/// Terms that match the file *name* score highest (exact > prefix > substring),
+/// then matches anywhere in the path; short names get a small bonus because they
+/// are usually the more specific hit. A query with no positive terms (including
+/// an empty one) scores everything equally.
+fn relevance_score(path: &Path, needle: &str) -> u8 {
+    let terms: Vec<String> = needle
+        .split_whitespace()
+        .filter(|t| !t.starts_with('!'))
+        .map(|t| t.trim_matches('*').to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return 100;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let full = path.to_string_lossy().to_lowercase();
+    let mut total: u32 = 0;
+    for t in &terms {
+        total += if name == *t {
+            100
+        } else if name.starts_with(t.as_str()) {
+            70
+        } else if name.contains(t.as_str()) {
+            55
+        } else if full.contains(t.as_str()) {
+            25
+        } else {
+            0
+        };
+    }
+    let mut score = (total / terms.len() as u32) as i32;
+    if name.chars().count() <= 12 {
+        score += 5;
+    }
+    score.clamp(0, 100) as u8
+}
+
+/// Which query terms appear in this result, for the `Match` column.
+fn matched_terms<'a>(path: &Path, needle: &'a str) -> Vec<&'a str> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let full = path.to_string_lossy().to_lowercase();
+    needle
+        .split_whitespace()
+        .filter(|t| !t.starts_with('!'))
+        .filter(|t| {
+            let bare = t.trim_matches('*').to_lowercase();
+            !bare.is_empty() && (name.contains(&bare) || full.contains(&bare))
+        })
+        .collect()
+}
+
+fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str) {
     match sort {
         Sort::Name(asc) => {
             results.sort_by(|a, b| {
@@ -3640,6 +4694,12 @@ fn sort_results(results: &mut [ResultRow], sort: Sort) {
                 } else {
                     b.mtime.cmp(&a.mtime)
                 }
+            });
+        }
+        Sort::Relevance(asc) => {
+            results.sort_by_cached_key(|r| {
+                let s = relevance_score(&r.path, needle);
+                if asc { s } else { 255 - s }
             });
         }
     }

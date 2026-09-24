@@ -605,6 +605,25 @@ fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
     if meta.is_dir && (files_only || !cq.include_dirs) {
         return false;
     }
+    // Extension filter: files only, final extension must be listed.
+    if !cq.extensions.is_empty() && (meta.is_dir || !cq.extension_matches(p)) {
+        return false;
+    }
+    // Size bounds are file-only and inclusive.
+    let has_size_bound = cq.min_size.is_some() || cq.max_size.is_some();
+    if (has_size_bound && meta.is_dir)
+        || cq.min_size.is_some_and(|min| meta.size < min)
+        || cq.max_size.is_some_and(|max| meta.size > max)
+    {
+        return false;
+    }
+    // Recency: `now - mtime <= secs` (a future mtime has a negative age and
+    // therefore still matches).
+    if let Some(secs) = cq.modified_within_secs
+        && now_unix() - meta.mtime > secs
+    {
+        return false;
+    }
     if !cq.include_hidden && is_hidden(p) {
         return false;
     }
@@ -620,6 +639,14 @@ fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
         }
     }
     true
+}
+
+/// Current unix time in whole seconds (0 if the clock is before the epoch).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn build_entries(
@@ -679,4 +706,63 @@ fn trim_allocator() {
     }
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
     let _ = ();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accept(q: &Query, path: &str, size: u64, mtime: i64, is_dir: bool) -> bool {
+        let cq = CompiledQuery::compile(q).unwrap();
+        accepts(
+            &cq,
+            Path::new(path),
+            Meta {
+                size,
+                mtime,
+                is_dir,
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn extension_filter_keeps_only_listed_files() {
+        let q = Query {
+            extensions: vec!["pdf".into()],
+            ..Query::default()
+        };
+        assert!(accept(&q, "/x/report.pdf", 1, 0, false));
+        assert!(accept(&q, "/x/REPORT.PDF", 1, 0, false));
+        assert!(!accept(&q, "/x/report.txt", 1, 0, false));
+        // A directory (even one named `*.pdf`) never matches an ext filter.
+        assert!(!accept(&q, "/x/folder.pdf", 1, 0, true));
+    }
+
+    #[test]
+    fn size_bounds_are_inclusive_and_file_only() {
+        let q = Query {
+            min_size: Some(10),
+            max_size: Some(20),
+            ..Query::default()
+        };
+        assert!(accept(&q, "/x/a.bin", 10, 0, false));
+        assert!(accept(&q, "/x/a.bin", 20, 0, false));
+        assert!(!accept(&q, "/x/a.bin", 9, 0, false));
+        assert!(!accept(&q, "/x/a.bin", 21, 0, false));
+        assert!(!accept(&q, "/x/dir", 15, 0, true));
+    }
+
+    #[test]
+    fn modified_within_keeps_recent_and_future() {
+        let now = now_unix();
+        let q = Query {
+            modified_within_secs: Some(3600),
+            ..Query::default()
+        };
+        assert!(accept(&q, "/x/recent", 1, now - 60, false));
+        assert!(!accept(&q, "/x/old", 1, now - 7200, false));
+        // A future mtime has a negative age and must still match.
+        assert!(accept(&q, "/x/future", 1, now + 100_000, false));
+    }
 }

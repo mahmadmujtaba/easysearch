@@ -8,6 +8,7 @@
 //! GET  /v1/status   → {"status":{..},"files":..,"dirs":..}
 //! POST /v1/search   → Query (JSON) → SearchResponse (JSON)
 //! GET  /v1/search?query=..&regex=1&content=..&limit=..&category=..&under=..
+//!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
 //! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
@@ -240,6 +241,36 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
             "under" => {
                 q.under = if value.is_empty() { None } else { Some(value) };
             }
+            // Comma-separated extensions; trim entries and ignore empties.
+            // Canonicalisation (leading dot, case) happens in `CompiledQuery`.
+            "ext" => {
+                q.extensions = value
+                    .split(',')
+                    .map(|e| e.trim().to_string())
+                    .filter(|e| !e.is_empty())
+                    .collect();
+            }
+            "min_size" => {
+                q.min_size = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid min_size {value:?}"))?,
+                );
+            }
+            "max_size" => {
+                q.max_size = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid max_size {value:?}"))?,
+                );
+            }
+            "modified_within" | "modified_within_secs" => {
+                q.modified_within_secs = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid modified_within {value:?}"))?,
+                );
+            }
             "limit" => {
                 q.limit = value
                     .parse()
@@ -282,5 +313,24 @@ mod tests {
         assert!(parse_query_params("nope=1").is_err());
         assert!(parse_query_params("limit=abc").is_err());
         assert!(parse_query_params("category=weird").is_err());
+    }
+
+    #[test]
+    fn parses_ext_and_size_and_recency_params() {
+        let q = parse_query_params(
+            "ext=pdf,%20docx,,md&min_size=1024&max_size=10485760&modified_within=3600",
+        )
+        .unwrap();
+        assert_eq!(q.extensions, vec!["pdf", "docx", "md"]);
+        assert_eq!(q.min_size, Some(1024));
+        assert_eq!(q.max_size, Some(10 * 1024 * 1024));
+        assert_eq!(q.modified_within_secs, Some(3600));
+
+        // The `modified_within_secs` alias is accepted too.
+        let q = parse_query_params("modified_within_secs=60").unwrap();
+        assert_eq!(q.modified_within_secs, Some(60));
+
+        assert!(parse_query_params("min_size=big").is_err());
+        assert!(parse_query_params("modified_within=soon").is_err());
     }
 }

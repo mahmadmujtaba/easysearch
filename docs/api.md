@@ -67,6 +67,10 @@ Errors are always JSON: `{"error":"…"}` with a `4xx`/`5xx` status.
 | `path` | `1`/`true` — match the full path, not just the basename |
 | `dirs` | `0`/`false` — exclude folders from results |
 | `under` | only return paths inside this directory (e.g. `under=/home/me/Downloads`) |
+| `ext` | comma-separated file extensions (e.g. `ext=pdf,docx,md`, case-insensitive, leading `.` optional); when set, directories are excluded and only these final extensions match |
+| `min_size` | minimum file size in bytes, inclusive; when set, directories are excluded |
+| `max_size` | maximum file size in bytes, inclusive; when set, directories are excluded |
+| `modified_within` | only entries modified within the last N seconds (alias `modified_within_secs`; future mtimes always match) |
 | `limit` | maximum results (default 1000) |
 | `category` | `all`, `recent`, `images`, `docs`, `code`, `archives`, `audio`, `video`, `large` |
 
@@ -85,6 +89,10 @@ Unknown parameters are a `400` (fail loudly rather than silently ignoring).
   "category": "All",
   "include_dirs": true,
   "under": null,
+  "extensions": [],
+  "min_size": null,
+  "max_size": null,
+  "modified_within_secs": null,
   "limit": 100
 }
 ```
@@ -93,6 +101,14 @@ Unknown parameters are a `400` (fail loudly rather than silently ignoring).
 parameterised form used internally, e.g. `{"Recent":{"max_age_secs":604800}}`.
 `under` is an optional directory prefix — only paths inside it are returned —
 and is what the GUI uses for its sidebar *Locations* chips.
+
+`extensions` (default `[]`) restricts files to these final extensions; entries
+are canonicalised (whitespace trimmed, one leading `.` stripped, lowercased,
+deduped) and, when the list is non-empty, directories never match.
+`min_size` / `max_size` (default `null`) are inclusive byte bounds; when either
+is set, directories never match. `modified_within_secs` (default `null`) keeps
+entries whose age `now - mtime` is at most that many seconds. All three fields
+are optional, so older clients that omit them keep working.
 
 ### `SearchResponse`
 

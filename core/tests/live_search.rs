@@ -5,7 +5,7 @@
 
 use everything_core::{Config, Engine, Query};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// A dedicated test directory under the system temp dir.
 ///
@@ -404,5 +404,96 @@ fn include_dirs_toggle_filters_folders() {
     assert!(
         without.results.iter().all(|r| !r.is_dir),
         "folders must be excluded when include_dirs is false"
+    );
+}
+
+#[test]
+fn extension_size_and_recency_filters_agree_and_reduce() {
+    let dir = TestDir::new("filters");
+    let root = dir.0.clone();
+
+    // Sizes are chosen so each filter clearly partitions the fixtures.
+    std::fs::write(root.join("small.pdf"), vec![b'a'; 100]).unwrap();
+    std::fs::write(root.join("large.pdf"), vec![b'a'; 4096]).unwrap();
+    std::fs::write(root.join("notes.md"), vec![b'b'; 512]).unwrap();
+    std::fs::write(root.join("stale.txt"), vec![b'c'; 100]).unwrap();
+    // A directory carrying a file extension: must never match the ext filter.
+    std::fs::create_dir_all(root.join("folder.pdf")).unwrap();
+
+    // Age `stale.txt` by 30 days before the engine indexes it, so the base
+    // index records the old mtime.
+    {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.join("stale.txt"))
+            .unwrap();
+        f.set_modified(SystemTime::now() - Duration::from_secs(30 * 24 * 3600))
+            .unwrap();
+    }
+
+    let engine = test_engine(&root);
+
+    // Baseline: every fixture (the hidden `.cache-dir` is filtered out).
+    let all = Query {
+        name: "*".into(),
+        ..Query::default()
+    };
+    let base_len = engine.search(&all).unwrap().results.len();
+    assert_eq!(engine.count(&all).unwrap() as usize, base_len);
+    assert!(base_len >= 5, "expected the fixtures, got {base_len}");
+
+    // --- extension filter: only listed extensions, never directories
+    let ext = Query {
+        name: "*".into(),
+        extensions: vec!["pdf".into()],
+        ..Query::default()
+    };
+    let resp = engine.search(&ext).unwrap();
+    assert_eq!(engine.count(&ext).unwrap() as usize, resp.results.len());
+    assert!(resp.results.iter().all(|r| !r.is_dir));
+    assert!(
+        resp.results
+            .iter()
+            .all(|r| r.path.extension().and_then(|e| e.to_str()) == Some("pdf"))
+    );
+    assert!(resp.results.iter().any(|r| r.path.ends_with("small.pdf")));
+    assert!(resp.results.iter().any(|r| r.path.ends_with("large.pdf")));
+    assert!(
+        resp.results.len() < base_len,
+        "extension filter should reduce the set"
+    );
+
+    // --- size bounds are inclusive (512 and 4096 both included)
+    let sized = Query {
+        name: "*".into(),
+        min_size: Some(512),
+        max_size: Some(4096),
+        ..Query::default()
+    };
+    let resp = engine.search(&sized).unwrap();
+    assert_eq!(engine.count(&sized).unwrap() as usize, resp.results.len());
+    assert!(resp.results.iter().all(|r| !r.is_dir));
+    assert!(resp.results.iter().all(|r| r.size >= 512 && r.size <= 4096));
+    assert!(resp.results.iter().any(|r| r.path.ends_with("notes.md")));
+    assert!(resp.results.iter().any(|r| r.path.ends_with("large.pdf")));
+    assert!(!resp.results.iter().any(|r| r.path.ends_with("small.pdf")));
+    assert!(
+        resp.results.len() < base_len,
+        "size filter should reduce the set"
+    );
+
+    // --- recency filter: the 30-day-old file drops out
+    let recent = Query {
+        name: "*".into(),
+        modified_within_secs: Some(24 * 3600),
+        ..Query::default()
+    };
+    let resp = engine.search(&recent).unwrap();
+    assert_eq!(engine.count(&recent).unwrap() as usize, resp.results.len());
+    assert!(!resp.results.iter().any(|r| r.path.ends_with("stale.txt")));
+    assert!(resp.results.iter().any(|r| r.path.ends_with("small.pdf")));
+    assert!(
+        resp.results.len() < base_len,
+        "recency filter should reduce the set"
     );
 }

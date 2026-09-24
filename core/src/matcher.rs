@@ -49,6 +49,24 @@ pub struct Query {
     /// Restrict results to paths under this directory (the sidebar's Location
     /// filter). `None` = no restriction.
     pub under: Option<String>,
+    /// Restrict results to files whose final extension is in this list
+    /// (canonicalised on compile: trimmed, leading `.` stripped, lowercased,
+    /// deduped). Empty = no extension filter. When non-empty, directories never
+    /// match.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Inclusive lower bound on file size in bytes. When set, directories never
+    /// match.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// Inclusive upper bound on file size in bytes. When set, directories never
+    /// match.
+    #[serde(default)]
+    pub max_size: Option<u64>,
+    /// Match only entries modified within this many seconds of now
+    /// (`now - mtime <= secs`; a future mtime still matches).
+    #[serde(default)]
+    pub modified_within_secs: Option<i64>,
     pub limit: usize,
 }
 
@@ -64,6 +82,10 @@ impl Default for Query {
             category: Category::All,
             include_dirs: true,
             under: None,
+            extensions: Vec::new(),
+            min_size: None,
+            max_size: None,
+            modified_within_secs: None,
             limit: 1000,
         }
     }
@@ -159,6 +181,11 @@ pub struct CompiledQuery {
     pub category: Category,
     pub include_dirs: bool,
     pub under: Option<String>,
+    /// Canonicalised extension filter (see [`Query::extensions`]); empty = off.
+    pub extensions: Vec<String>,
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
+    pub modified_within_secs: Option<i64>,
     pub limit: usize,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
@@ -184,6 +211,27 @@ impl CompiledQuery {
                 terms.push(term);
             }
         }
+        // Canonicalise the extension filter: trim, strip one leading '.',
+        // lowercase, drop empties, dedupe (order preserved).
+        let mut extensions: Vec<String> = Vec::new();
+        for raw in &q.extensions {
+            let trimmed = raw.trim();
+            let normalized = trimmed
+                .strip_prefix('.')
+                .unwrap_or(trimmed)
+                .to_ascii_lowercase();
+            if normalized.is_empty() || extensions.contains(&normalized) {
+                continue;
+            }
+            extensions.push(normalized);
+        }
+        if let (Some(min), Some(max)) = (q.min_size, q.max_size)
+            && min > max
+        {
+            return Err(format!(
+                "min_size ({min} bytes) is greater than max_size ({max} bytes)"
+            ));
+        }
         Ok(CompiledQuery {
             terms,
             excludes,
@@ -194,9 +242,26 @@ impl CompiledQuery {
             category: q.category,
             include_dirs: q.include_dirs,
             under: q.under.clone(),
+            extensions,
+            min_size: q.min_size,
+            max_size: q.max_size,
+            modified_within_secs: q.modified_within_secs,
             limit: q.limit.max(1),
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
+    }
+
+    /// True if `path`'s final extension is in the filter (always true when the
+    /// filter is empty). Directory exclusion is handled by the engine predicate
+    /// [`crate::engine`]'s `accepts`, not here.
+    pub fn extension_matches(&self, path: &Path) -> bool {
+        if self.extensions.is_empty() {
+            return true;
+        }
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .is_some_and(|e| self.extensions.iter().any(|x| x == &e))
     }
 
     /// Match one indexed path against the name terms.
@@ -360,5 +425,108 @@ mod tests {
             Path::new("/x/note.md"),
             &m(1, 0, false)
         ));
+    }
+
+    #[test]
+    fn extensions_are_canonicalised() {
+        let cq = CompiledQuery::compile(&Query {
+            extensions: vec![
+                " .PDF ".into(),
+                "Md".into(),
+                "pdf".into(),
+                "  ".into(),
+                String::new(),
+                ".txt".into(),
+            ],
+            ..Query::default()
+        })
+        .unwrap();
+        assert_eq!(cq.extensions, vec!["pdf", "md", "txt"]);
+    }
+
+    #[test]
+    fn extension_matching_is_case_insensitive() {
+        let cq = CompiledQuery::compile(&Query {
+            extensions: vec![".PDF".into()],
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(cq.extension_matches(Path::new("/x/report.pdf")));
+        assert!(cq.extension_matches(Path::new("/x/REPORT.PDF")));
+        assert!(!cq.extension_matches(Path::new("/x/report.txt")));
+        assert!(!cq.extension_matches(Path::new("/x/archive")));
+        // Final extension only: `report.tar.gz` is a `gz`, not a `tar`.
+        let gz = CompiledQuery::compile(&Query {
+            extensions: vec!["gz".into()],
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(gz.extension_matches(Path::new("/x/report.tar.gz")));
+        assert!(!gz.extension_matches(Path::new("/x/report.gz.bak")));
+    }
+
+    #[test]
+    fn extension_filter_off_when_empty() {
+        let cq = CompiledQuery::compile(&Query::default()).unwrap();
+        assert!(cq.extension_matches(Path::new("/x/anything")));
+    }
+
+    #[test]
+    fn min_size_greater_than_max_is_a_compile_error() {
+        let err = CompiledQuery::compile(&Query {
+            min_size: Some(10),
+            max_size: Some(5),
+            ..Query::default()
+        })
+        .unwrap_err();
+        assert!(err.contains("min_size"), "unclear error: {err}");
+        assert!(err.contains("max_size"), "unclear error: {err}");
+        // Equal bounds are allowed (inclusive, single-byte range).
+        assert!(
+            CompiledQuery::compile(&Query {
+                min_size: Some(7),
+                max_size: Some(7),
+                ..Query::default()
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn legacy_json_without_new_fields_still_parses() {
+        // The pre-filter payload shape: no extension/size/recency fields.
+        let json = r#"{
+            "name":"*.pdf",
+            "regex_mode":false,
+            "case_sensitive":false,
+            "include_hidden":false,
+            "full_path":false,
+            "content":null,
+            "category":"All",
+            "include_dirs":true,
+            "under":null,
+            "limit":10
+        }"#;
+        let q: Query = serde_json::from_str(json).unwrap();
+        assert!(q.extensions.is_empty());
+        assert_eq!(q.min_size, None);
+        assert_eq!(q.max_size, None);
+        assert_eq!(q.modified_within_secs, None);
+
+        // The new fields survive a full round-trip.
+        let original = Query {
+            name: "*".into(),
+            extensions: vec!["PDF".into()],
+            min_size: Some(10),
+            max_size: Some(20),
+            modified_within_secs: Some(60),
+            ..Query::default()
+        };
+        let round: Query =
+            serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+        assert_eq!(round.extensions, vec!["PDF"]);
+        assert_eq!(round.min_size, Some(10));
+        assert_eq!(round.max_size, Some(20));
+        assert_eq!(round.modified_within_secs, Some(60));
     }
 }
