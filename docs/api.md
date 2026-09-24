@@ -49,6 +49,7 @@ make daemon                              # release build, 127.0.0.1:5858
 | `GET` | `/v1/status` | `{status:{…}, files, dirs}` — index/watcher state |
 | `POST` | `/v1/search` | body: a `Query` object → `SearchResponse` |
 | `GET` | `/v1/search` | same, with query parameters (see below) |
+| `POST` | `/v1/count` | body: a `Query` object → `{"count":n}` (counts only, no rows) |
 | `POST` | `/v1/rebuild` | rebuild the on-disk index in the background → `{ok:true}` |
 | `GET` | `/v1/watch` | long-poll: the `/v1/status` payload, returned when it changes or after `?timeout=<secs>` (default 25, max 120) |
 
@@ -65,6 +66,7 @@ Errors are always JSON: `{"error":"…"}` with a `4xx`/`5xx` status.
 | `hidden` | `1`/`true` — include hidden files |
 | `path` | `1`/`true` — match the full path, not just the basename |
 | `dirs` | `0`/`false` — exclude folders from results |
+| `under` | only return paths inside this directory (e.g. `under=/home/me/Downloads`) |
 | `limit` | maximum results (default 1000) |
 | `category` | `all`, `recent`, `images`, `docs`, `code`, `archives`, `audio`, `video`, `large` |
 
@@ -82,12 +84,15 @@ Unknown parameters are a `400` (fail loudly rather than silently ignoring).
   "content": null,
   "category": "All",
   "include_dirs": true,
+  "under": null,
   "limit": 100
 }
 ```
 
 `category` accepts either a variant name (`"All"`, `"Images"`, …) or the
 parameterised form used internally, e.g. `{"Recent":{"max_age_secs":604800}}`.
+`under` is an optional directory prefix — only paths inside it are returned —
+and is what the GUI uses for its sidebar *Locations* chips.
 
 ### `SearchResponse`
 
@@ -101,6 +106,17 @@ parameterised form used internally, e.g. `{"Recent":{"max_age_secs":604800}}`.
   "indexed": 198550
 }
 ```
+
+### `CountDto` (`POST /v1/count`)
+
+```json
+{ "count": 4213 }
+```
+
+`/v1/count` takes the same `Query` object as `/v1/search` (its `limit` is
+ignored) and returns only how many entries match — the engine walks the index
+with the same predicate as a search, so the two always agree. The GUI uses this
+to fill the per-category counts in its sidebar without transferring rows.
 
 Paths are sent as (lossy) UTF-8 strings; a path that is not valid UTF-8 is
 replaced with U+FFFD.
@@ -118,6 +134,14 @@ curl -s 'http://127.0.0.1:5858/v1/search?query=*.pdf&limit=20'
 curl -s -X POST http://127.0.0.1:5858/v1/search \
   -H 'Content-Type: application/json' \
   -d '{"name":"","content":"fn main\\(","regex_mode":true,"limit":10,"category":"All","include_dirs":false,"case_sensitive":false,"include_hidden":false,"full_path":false}'
+
+# How many results would there be? (no rows transferred)
+curl -s -X POST http://127.0.0.1:5858/v1/count \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"*.pdf","category":"All","include_dirs":false,"limit":1}'
+
+# Everything under one directory only
+curl -s 'http://127.0.0.1:5858/v1/search?query=*.log&under=/home/me/Downloads&limit=20'
 
 # Smallest files only, via jq
 curl -s 'http://127.0.0.1:5858/v1/search?query=*.log&limit=50' | jq -r '.results[] | "\(.size)\t\(.path)"' | sort -n

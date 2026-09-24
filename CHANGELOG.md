@@ -4,6 +4,38 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-24
+
+### Added
+
+- **Count without rows** — `POST /v1/count` takes the same `Query` object as a
+  search and returns just `{"count":n}`, using the same matching predicate so
+  the two can never disagree (shared `Engine::count`, `Backend::count`,
+  `Remote::count`).
+- **Location filter** — `Query.under: Option<String>` restricts results to
+  paths inside a directory; exposed as `under` on `GET /v1/search`, as
+  `--under <DIR>` in the CLI, and as *Locations* chips in the GUI sidebar.
+- **A richer sidebar**: a brand header with a live `LIVE`/`INDEXING` pill, two
+  tiles for *matches* / *shown* plus the indexed file count, per-category
+  result counts, one-click *Locations* chips (the new location filter), inline
+  search options, and a collapsible **TIPS** cheat-sheet whose state persists.
+
+### Changed
+
+- **The preview pane is on by default** for new profiles.
+- **“Follow system” now tracks the desktop live.** The theme is re-read when the
+  desktop rewrites its configuration (`~/.config/kdeglobals`, GTK `settings.ini`,
+  dconf, XFCE xsettings) and, as a safety net, every 15 seconds via the XDG
+  portal — so switching between light and dark flips the app without a restart.
+- **KDE uses `kdeglobals` as the source of truth.** On Plasma, `dark-light`
+  could report a light scheme for a dark desktop; the window background colour in
+  `~/.config/kdeglobals` is now consulted first, then the portal, then GTK.
+
+### Fixed
+
+- Sidebar and facet counts no longer render above the visible area, and the
+  first count request is issued for the initial (empty) query.
+
 ## [0.9.0] - 2026-09-24
 
 ### Added

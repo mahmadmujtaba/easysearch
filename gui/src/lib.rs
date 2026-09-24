@@ -425,16 +425,17 @@ fn theme_fingerprint() -> u64 {
 
 /// Is the desktop configured for a dark scheme?
 ///
-/// `dark-light` covers the XDG portal and most desktops, but reports `Default`
-/// when it cannot tell — notably on KDE when the portal exposes no preference —
-/// so fall back to reading the desktops' own configuration files.
+/// KDE's `kdeglobals` is the authoritative source on Plasma, so it is consulted
+/// first; then the XDG portal (via `dark-light`), which covers GNOME and others;
+/// then GTK's settings; and finally the app defaults to dark.
 fn detect_system_dark() -> bool {
+    if let Some(dark) = kde_globals_is_dark() {
+        return dark;
+    }
     match dark_light::detect() {
         dark_light::Mode::Dark => true,
         dark_light::Mode::Light => false,
-        dark_light::Mode::Default => kde_globals_is_dark()
-            .or_else(gtk_settings_is_dark)
-            .unwrap_or(true),
+        dark_light::Mode::Default => gtk_settings_is_dark().unwrap_or(true),
     }
 }
 
@@ -1419,7 +1420,7 @@ fn chip(ui: &mut egui::Ui, t: &Theme, label: &str, active: bool) -> egui::Respon
         galley,
         if active { t.accent } else { t.text },
     );
-    resp.on_hover_text(label)
+    resp
 }
 
 /// A sidebar checkbox row (square box + label) for the search options.

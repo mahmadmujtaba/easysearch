@@ -76,3 +76,6 @@ containers/libpod/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local screenshot scratch (used while developing the UI)
+.shots/
