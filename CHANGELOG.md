@@ -4,6 +4,15 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-09-25
+
+### Fixed
+
+- **The three UI zoom levels (100% / 110% / 125%) are visible again.** They had
+  moved to the far right of the status bar, where the keyboard-hints string could
+  push them out of the window; they now sit on the left beside the CPU/RAM
+  readout, and there is also a `Zoom` section in the Settings menu.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

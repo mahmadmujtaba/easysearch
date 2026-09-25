@@ -3005,6 +3005,19 @@ impl App {
                             self.show_settings = true;
                             ui.close_menu();
                         }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Zoom").small());
+                        for level in ZOOM_LEVELS {
+                            let label = format!("{:.0}%", level * 100.0);
+                            if ui
+                                .radio((self.prefs.zoom - *level).abs() < 0.001, label)
+                                .clicked()
+                            {
+                                self.prefs.zoom = *level;
+                                ui.ctx().set_zoom_factor(*level);
+                                self.prefs.save();
+                            }
+                        }
                     });
                     ui.menu_button("Help", |ui| {
                         if ui.button("About").clicked() {
@@ -4614,13 +4627,29 @@ impl App {
                 .color(t.faint),
             );
 
+            // UI zoom, kept on the left so a long hints string on the right can
+            // never push it out of the window.
+            ui.separator();
+            ui.label(bar_label(&t, "Zoom"));
+            for level in ZOOM_LEVELS {
+                if ui
+                    .selectable_label(
+                        (self.prefs.zoom - *level).abs() < 0.001,
+                        egui::RichText::new(format!("{:.0}%", level * 100.0)).size(10.5),
+                    )
+                    .clicked()
+                {
+                    self.prefs.zoom = *level;
+                    ui.ctx().set_zoom_factor(*level);
+                    self.prefs.save();
+                }
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(
-                        "↑↓ navigate · Enter open · Ctrl+F search · Ctrl+A select all · Esc clear",
-                    )
-                    .size(10.5)
-                    .color(t.faint),
+                    egui::RichText::new("↑↓ · Enter open · Ctrl+F search · Ctrl+A all · Esc clear")
+                        .size(10.5)
+                        .color(t.faint),
                 );
                 ui.add_space(8.0);
                 ui.separator();
@@ -4644,21 +4673,6 @@ impl App {
                     .size(11.0)
                     .color(t.faint),
                 );
-                ui.separator();
-                for level in ZOOM_LEVELS.iter().rev() {
-                    if ui
-                        .selectable_label(
-                            (self.prefs.zoom - *level).abs() < 0.001,
-                            egui::RichText::new(format!("{:.0}%", level * 100.0)).size(10.5),
-                        )
-                        .clicked()
-                    {
-                        self.prefs.zoom = *level;
-                        ui.ctx().set_zoom_factor(*level);
-                        self.prefs.save();
-                    }
-                }
-                ui.label(bar_label(&t, "Zoom"));
             });
         });
     }
