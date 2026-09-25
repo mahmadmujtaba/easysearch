@@ -60,6 +60,14 @@ impl Overlay {
         self.added.retain(|p, _| !in_base(p));
         self.removed.retain(|p| in_base(p));
     }
+
+    /// Take everything the overlay holds (the SQLite backend applies the batch
+    /// and then clears it; the mmap backend compacts first, then prunes).
+    pub fn take(&mut self) -> (Vec<(PathBuf, Meta)>, Vec<PathBuf>) {
+        let added: Vec<(PathBuf, Meta)> = self.added.drain().collect();
+        let removed: Vec<PathBuf> = self.removed.drain().collect();
+        (added, removed)
+    }
 }
 
 #[cfg(test)]

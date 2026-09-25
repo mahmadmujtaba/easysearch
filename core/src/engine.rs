@@ -6,19 +6,20 @@
 //! page cache, reclaimable, ~zero RSS when cold); only the small hash table
 //! and the recent-change overlay are always resident. See docs/scope.md §9.
 
-use crate::config::Config;
+use crate::config::{Config, Storage};
 use crate::content::{ContentPattern, search_contents};
 use crate::content_index::{ContentIndex, ExtractQueue, spawn_extractor};
 use crate::disk_index::{DiskIndex, INDEX_FILE};
 use crate::matcher::{CompiledQuery, Query, is_hidden, matches_category};
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
+use crate::sqlite_index::{REFRESH_AFTER_DIRTY, SqliteIndex};
 use crate::walker::{walk_root_apply, walk_root_collect};
 use crate::watcher;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 /// One result row for the UI / CLI.
@@ -95,6 +96,9 @@ const CONTENT_FANOUT_CAP: usize = 50_000;
 pub struct Engine {
     config: Config,
     base: Arc<RwLock<Option<Arc<DiskIndex>>>>,
+    /// The SQLite index, when `config.storage == Storage::Sqlite`. The daemon
+    /// owns it: it is the only writer, and every query is answered from here.
+    sqlite: Option<Arc<Mutex<SqliteIndex>>>,
     overlay: Arc<RwLock<Overlay>>,
     status: Arc<RwLock<Status>>,
     roots: Arc<RootSet>,
@@ -103,6 +107,9 @@ pub struct Engine {
     pending: Arc<AtomicUsize>,
     rebuilding: Arc<AtomicBool>,
     index_path: PathBuf,
+    /// Cached (files, dirs) for the SQLite backend: `counts()` runs on every UI
+    /// frame, and an aggregate over the whole table is not per-frame work.
+    counts_cache: Arc<RwLock<((u64, u64), Instant)>>,
 }
 
 impl Engine {
@@ -139,7 +146,39 @@ impl Engine {
         } else {
             PathBuf::new()
         };
-        if config.persist_index {
+
+        // SQLite backend: open (creating the database if missing). The initial
+        // fill happens on a background thread in `start`, like the mmap build.
+        // Cached (files, dirs); seeded from the database below so the very first
+        // frame reports the real numbers.
+        let counts_cache = Arc::new(RwLock::new(((0u64, 0u64), Instant::now())));
+
+        let sqlite = if config.storage == Storage::Sqlite {
+            match SqliteIndex::open(&config.db_dir()) {
+                Ok(idx) => {
+                    // Serve from the existing database immediately — `start`
+                    // re-validates it in the background, exactly like the mmap
+                    // path below. Without this the first frames would report an
+                    // empty index even though the data is already on disk.
+                    if let Ok((files, dirs)) = idx.counts() {
+                        *counts_cache.write().unwrap() = ((files, dirs), Instant::now());
+                        let mut s = status.write().unwrap();
+                        s.base_files = files;
+                        s.base_dirs = dirs;
+                        s.base_entries = (files + dirs) as usize;
+                    }
+                    Some(Arc::new(Mutex::new(idx)))
+                }
+                Err(e) => {
+                    eprintln!("sqlite index unavailable ({e}); falling back to the mmap index");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if config.persist_index && sqlite.is_none() {
             // Serve from yesterday's index immediately; a background rebuild
             // re-validates it against the live filesystem.
             match DiskIndex::load(&index_path) {
@@ -151,6 +190,7 @@ impl Engine {
         Engine {
             config,
             base,
+            sqlite,
             overlay: Arc::new(RwLock::new(Overlay::new())),
             status,
             roots,
@@ -159,12 +199,91 @@ impl Engine {
             pending,
             rebuilding: Arc::new(AtomicBool::new(false)),
             index_path,
+            counts_cache,
         }
+    }
+
+    /// Move whatever the watcher has collected into the database.
+    ///
+    /// One transaction per batch, which is why the overlay exists: per-event
+    /// commits to SQLite would be an order of magnitude slower.
+    fn flush_overlay(&self) {
+        let Some(db) = &self.sqlite else {
+            return;
+        };
+        if self.overlay.read().unwrap().pending_changes() == 0 {
+            return;
+        }
+        // Lock order is always database-then-overlay (see `spawn_rebuild`).
+        let Ok(mut db) = db.lock() else { return };
+        let (added, removed) = self.overlay.write().unwrap().take();
+        if let Err(e) = db.apply(&added, &removed) {
+            eprintln!(
+                "sqlite: applying {} change(s) failed: {e}",
+                added.len() + removed.len()
+            );
+        }
+    }
+
+    /// Whether the SQLite backend is active.
+    pub fn uses_sqlite(&self) -> bool {
+        self.sqlite.is_some()
     }
 
     /// Start the watcher and the initial index build.
     pub fn start(&mut self) {
         self.start_watcher();
+
+        // SQLite backend: create the database if it is missing (or its schema
+        // changed), otherwise serve from it at once and re-validate in the
+        // background — the same shape as the mmap path below.
+        if let Some(db) = self.sqlite.clone() {
+            let needs_rebuild = db.lock().map(|d| d.needs_rebuild()).unwrap_or(true);
+            if needs_rebuild {
+                let roots = Arc::clone(&self.roots);
+                let status = Arc::clone(&self.status);
+                let queue = self.queue.clone();
+                let respect_ignore = self.config.respect_ignore_files;
+                let counts_cache = Arc::clone(&self.counts_cache);
+                std::thread::Builder::new()
+                    .name("sqlite-build".into())
+                    .spawn(move || {
+                        status.write().unwrap().state = State::Indexing;
+                        let entries =
+                            build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                        let n = entries.len();
+                        if let Ok(mut d) = db.lock() {
+                            match d.rebuild(&entries) {
+                                Ok(()) => {
+                                    let (files, dirs) = d.counts().unwrap_or((0, 0));
+                                    *counts_cache.write().unwrap() =
+                                        ((files, dirs), Instant::now());
+                                    let mut s = status.write().unwrap();
+                                    s.base_entries = n;
+                                    s.base_files = files;
+                                    s.base_dirs = dirs;
+                                }
+                                Err(e) => eprintln!("sqlite: initial build failed: {e}"),
+                            }
+                        }
+                        trim_allocator();
+                        status.write().unwrap().state = State::Live;
+                    })
+                    .expect("failed to spawn sqlite-build thread");
+            } else {
+                if let Ok(d) = db.lock() {
+                    let (files, dirs) = d.counts().unwrap_or((0, 0));
+                    *self.counts_cache.write().unwrap() = ((files, dirs), Instant::now());
+                    let mut s = self.status.write().unwrap();
+                    s.base_entries = (files + dirs) as usize;
+                    s.base_files = files;
+                    s.base_dirs = dirs;
+                    s.state = State::Live;
+                }
+                self.spawn_rebuild();
+            }
+            return;
+        }
 
         let has_cache = self.config.persist_index && self.base.read().unwrap().is_some();
         if has_cache {
@@ -302,6 +421,44 @@ impl Engine {
     }
 
     fn spawn_rebuild(&self) {
+        if let Some(db) = self.sqlite.clone() {
+            let roots = Arc::clone(&self.roots);
+            let status = Arc::clone(&self.status);
+            let overlay = Arc::clone(&self.overlay);
+            let queue = self.queue.clone();
+            let rebuilding = Arc::clone(&self.rebuilding);
+            let counts_cache = Arc::clone(&self.counts_cache);
+            let respect_ignore = self.config.respect_ignore_files;
+            std::thread::Builder::new()
+                .name("sqlite-rebuild".into())
+                .spawn(move || {
+                    if rebuilding.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    let entries = build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                    let n = entries.len();
+                    if let Ok(mut d) = db.lock() {
+                        match d.rebuild(&entries) {
+                            Ok(()) => {
+                                let (files, dirs) = d.counts().unwrap_or((0, 0));
+                                *counts_cache.write().unwrap() = ((files, dirs), Instant::now());
+                                // Keep only deltas the walk could not have seen.
+                                overlay.write().unwrap().prune_against(|p| d.contains(p));
+                                let mut s = status.write().unwrap();
+                                s.base_entries = n;
+                                s.base_files = files;
+                                s.base_dirs = dirs;
+                            }
+                            Err(e) => eprintln!("sqlite: rebuild failed: {e}"),
+                        }
+                    }
+                    rebuilding.store(false, Ordering::SeqCst);
+                    trim_allocator();
+                })
+                .expect("failed to spawn sqlite-rebuild thread");
+            return;
+        }
+
         let roots = Arc::clone(&self.roots);
         let status = Arc::clone(&self.status);
         let base = Arc::clone(&self.base);
@@ -325,10 +482,20 @@ impl Engine {
                 );
             })
             .expect("failed to spawn rebuild thread");
-    }
+        }
 
     /// Compaction trigger: fold a large change overlay back into the disk file.
     fn maybe_compact(&self) {
+        if let Some(db) = &self.sqlite {
+            // SQLite: fold pending changes in, and fall back to a full rebuild
+            // (the "refresh") once the delta backlog gets large.
+            self.flush_overlay();
+            let dirty = db.lock().map(|d| d.dirty()).unwrap_or(0);
+            if dirty > REFRESH_AFTER_DIRTY && !self.rebuilding.load(Ordering::Relaxed) {
+                self.spawn_rebuild();
+            }
+            return;
+        }
         if !self.config.persist_index || self.rebuilding.load(Ordering::Relaxed) {
             return;
         }
@@ -365,6 +532,13 @@ impl Engine {
             ContentIndexStatus::Disabled
         };
         s.overlay_pending = self.overlay.read().unwrap().pending_changes();
+        if self.sqlite.is_some() {
+            let (files, dirs) = self.counts();
+            s.base_files = files;
+            s.base_dirs = dirs;
+            s.base_entries = (files + dirs) as usize;
+            return s;
+        }
         match self.base.read().unwrap().as_deref() {
             Some(b) => {
                 s.base_entries = b.len();
@@ -384,6 +558,9 @@ impl Engine {
     pub fn search(&self, q: &Query) -> Result<SearchResponse, String> {
         let t0 = Instant::now();
         let cq = CompiledQuery::compile(q)?;
+        if self.sqlite.is_some() {
+            return self.search_sqlite(&cq, t0);
+        }
         let limit = cq.limit;
         let want_content = cq.content.is_some();
         self.maybe_compact();
@@ -451,6 +628,62 @@ impl Engine {
         })
     }
 
+    /// SQLite twin of [`search`](Engine::search): pending changes are folded
+    /// into the database first, so a query never misses a file the watcher has
+    /// already seen.
+    fn search_sqlite(&self, cq: &CompiledQuery, t0: Instant) -> Result<SearchResponse, String> {
+        self.maybe_compact(); // flushes the overlay and applies the refresh policy
+        let db = self
+            .sqlite
+            .as_ref()
+            .ok_or_else(|| "sqlite backend missing".to_string())?;
+        let db = db.lock().map_err(|_| "sqlite index poisoned".to_string())?;
+        let limit = cq.limit;
+        let want_content = cq.content.is_some();
+        let cap = if want_content {
+            limit.max(CONTENT_FANOUT_CAP)
+        } else {
+            limit
+        };
+
+        let (results, truncated) = if want_content {
+            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""))?;
+            let candidates = db.candidates(cq, cap)?;
+            let matched = search_contents(
+                &candidates,
+                &pattern,
+                limit,
+                &self.cache,
+                self.queue.as_deref(),
+            );
+            let truncated = matched.len() >= limit;
+            let rows = matched
+                .into_iter()
+                .map(|p| {
+                    let m = db.meta_of(&p).unwrap_or_default();
+                    ResultRow {
+                        path: p,
+                        size: m.size,
+                        mtime: m.mtime,
+                        is_dir: m.is_dir,
+                    }
+                })
+                .collect();
+            (rows, truncated)
+        } else {
+            let hits = db.search(cq)?;
+            let truncated = hits.len() >= limit;
+            (hits, truncated)
+        };
+
+        Ok(SearchResponse {
+            results,
+            truncated,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+            indexed: db.counts().map(|(f, _)| f).unwrap_or(0),
+        })
+    }
+
     /// Iterate the base index (skipping overlay-removed paths, applying
     /// overlay metadata) plus overlay-only additions, keeping entries for
     /// which `f` returns `Some`. Bounded by `cap`.
@@ -462,6 +695,11 @@ impl Engine {
     /// [`search`]: Engine::search
     pub fn count(&self, q: &Query) -> Result<u64, String> {
         let cq = CompiledQuery::compile(q)?;
+        if let Some(db) = &self.sqlite {
+            self.flush_overlay();
+            let db = db.lock().map_err(|_| "sqlite index poisoned".to_string())?;
+            return db.count(&cq);
+        }
         let files_only = cq.content.is_some();
         let mut n: u64 = 0;
         {
@@ -549,6 +787,13 @@ impl Engine {
     }
 
     fn meta_of(&self, path: &Path) -> Meta {
+        if let Some(db) = &self.sqlite {
+            return db
+                .lock()
+                .ok()
+                .and_then(|d| d.meta_of(path))
+                .unwrap_or_default();
+        }
         let base = self.base.read().unwrap();
         let ov = self.overlay.read().unwrap();
         if let Some(m) = ov.added.get(path) {
@@ -564,6 +809,21 @@ impl Engine {
 
     /// (files, dirs) — base plus overlay deltas.
     pub fn counts(&self) -> (u64, u64) {
+        if let Some(db) = &self.sqlite {
+            {
+                let c = self.counts_cache.read().unwrap();
+                if c.1.elapsed() < Duration::from_secs(2) {
+                    return c.0;
+                }
+            }
+            self.flush_overlay();
+            let fresh = db
+                .lock()
+                .map(|d| d.counts().unwrap_or((0, 0)))
+                .unwrap_or((0, 0));
+            *self.counts_cache.write().unwrap() = (fresh, Instant::now());
+            return fresh;
+        }
         let base = self.base.read().unwrap();
         let ov = self.overlay.read().unwrap();
         let b = base.as_deref();

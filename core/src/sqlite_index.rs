@@ -128,19 +128,33 @@ impl SqliteIndex {
         self.conn
             .execute_batch(&format!(
                 "DELETE FROM files;
+                 DELETE FROM meta WHERE key IN ('built_at', 'complete');
                  INSERT INTO meta(key, value) VALUES('schema_version', '{SCHEMA_VERSION}')
                    ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
             ))
             .map_err(|e| e.to_string())
     }
 
-    /// True when the database has no usable rows (fresh, or schema replaced).
+    /// True once a full walk has been committed. Until then the database may
+    /// hold a partial index (an interrupted first build), which is why
+    /// completeness is recorded explicitly instead of being inferred from the
+    /// row count: a small-but-complete index is perfectly valid.
+    pub fn is_complete(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM meta WHERE key = 'complete' AND value = '1'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// True when the database cannot be trusted yet and must be built.
     pub fn needs_rebuild(&self) -> bool {
-        match self.count_all() {
-            Ok(0) => true,
-            Ok(_) => false,
-            Err(_) => true,
-        }
+        !self.is_complete()
     }
 
     pub fn count_all(&self) -> Result<u64, String> {
@@ -194,6 +208,14 @@ impl SqliteIndex {
         }
         tx.execute(
             "INSERT INTO meta(key, value) VALUES('built_at', strftime('%s','now'))
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        // Marked complete in the same transaction as the rows, so an aborted
+        // build can never look finished.
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES('complete', '1')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         )
@@ -293,6 +315,73 @@ impl SqliteIndex {
         Ok(out)
     }
 
+    /// Matching paths only — the candidate list a content search fans out over.
+    pub fn candidates(&self, cq: &CompiledQuery, cap: usize) -> Result<Vec<PathBuf>, String> {
+        let files_only = cq.content.is_some();
+        let (where_sql, args) = coarse_sql(cq, files_only);
+        let sql = format!("SELECT path, size, mtime, is_dir FROM files {where_sql} ORDER BY id");
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let path: String = row.get(0).map_err(|e| e.to_string())?;
+            let size: i64 = row.get(1).map_err(|e| e.to_string())?;
+            let mtime: i64 = row.get(2).map_err(|e| e.to_string())?;
+            let is_dir: i64 = row.get(3).map_err(|e| e.to_string())?;
+            let p = PathBuf::from(path);
+            if accepts(
+                cq,
+                &p,
+                Meta {
+                    size: size.max(0) as u64,
+                    mtime,
+                    is_dir: is_dir != 0,
+                },
+                files_only,
+            ) {
+                out.push(p);
+                if out.len() >= cap {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Metadata for one path, if it is indexed.
+    pub fn meta_of(&self, path: &Path) -> Option<Meta> {
+        self.conn
+            .query_row(
+                "SELECT size, mtime, is_dir FROM files WHERE path = ?1",
+                [path.to_string_lossy().as_ref()],
+                |r| {
+                    Ok(Meta {
+                        size: r.get::<_, i64>(0)?.max(0) as u64,
+                        mtime: r.get::<_, i64>(1)?,
+                        is_dir: r.get::<_, i64>(2)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn contains(&self, path: &Path) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                [path.to_string_lossy().as_ref()],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     /// How many rows match — the SQLite twin of `Engine::count`.
     pub fn count(&self, cq: &CompiledQuery) -> Result<u64, String> {
         let files_only = cq.content.is_some();
@@ -387,9 +476,7 @@ fn coarse_sql(cq: &CompiledQuery, files_only: bool) -> (String, Vec<Value>) {
         }
     }
     if cq.min_size.is_some() || cq.max_size.is_some() {
-        if !clauses.iter().any(|c| c == "is_dir = 0") {
-            clauses.push("is_dir = 0".to_string());
-        }
+        push_files_only(&mut clauses);
     }
     if let Some(min) = cq.min_size {
         clauses.push("size >= ?".to_string());
@@ -427,6 +514,13 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Add `is_dir = 0` unless an earlier clause already excludes directories.
+fn push_files_only(clauses: &mut Vec<String>) {
+    if !clauses.iter().any(|c| c == "is_dir = 0") {
+        clauses.push("is_dir = 0".to_string());
+    }
 }
 
 #[cfg(test)]
@@ -518,7 +612,7 @@ mod tests {
         let (i, dir) = idx("basic");
         assert_eq!(i.count_all().unwrap(), 4);
         assert_eq!(i.counts().unwrap(), (3, 1));
-        assert!(i.needs_rebuild() == false);
+        assert!(!i.needs_rebuild());
         assert_eq!(
             run(&i, &query(|_| {})).len(),
             3,
@@ -621,6 +715,40 @@ mod tests {
         // The update changed the size, so the size filter must see the new value.
         let big = run(&i, &query(|q| q.min_size = Some(9_000)));
         assert_eq!(big, vec!["/home/u/docs/report.pdf"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_partial_build_is_not_treated_as_complete() {
+        // An interrupted first build leaves rows behind; `complete` is what
+        // says whether they can be trusted.
+        let dir = tmpdir("partial");
+        {
+            let mut i = SqliteIndex::open(&dir).unwrap();
+            i.rebuild(&sample()).unwrap();
+            assert!(!i.needs_rebuild());
+            i.conn
+                .execute("DELETE FROM meta WHERE key = 'complete'", [])
+                .unwrap();
+        }
+        let reopened = SqliteIndex::open(&dir).unwrap();
+        assert_eq!(reopened.count_all().unwrap(), 4, "rows survived");
+        assert!(
+            reopened.needs_rebuild(),
+            "but the index must be rebuilt before it is served"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_empty_but_complete_index_is_valid() {
+        let dir = tmpdir("empty");
+        let mut i = SqliteIndex::open(&dir).unwrap();
+        i.rebuild(&[]).unwrap();
+        assert!(
+            !i.needs_rebuild(),
+            "a legitimately empty root must not rebuild on every start"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

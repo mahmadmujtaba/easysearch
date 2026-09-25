@@ -61,6 +61,17 @@ pub const DEFAULT_EXCLUDED_FSTYPES: &[&str] = &[
     "9p",
 ];
 
+/// Which storage backend holds the index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Storage {
+    /// A SQLite database in `db_dir` (the default).
+    #[default]
+    Sqlite,
+    /// The original memory-mapped file in `disk_index_dir`.
+    Mmap,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -77,6 +88,12 @@ pub struct Config {
     /// Keep the index on disk (memory-mapped) instead of entirely in RAM, and
     /// keep only recent filesystem changes in memory. See docs/scope.md §9.
     pub persist_index: bool,
+    /// Where the index lives: a SQLite database (the default, see
+    /// `docs/sqlite.md`) or the original memory-mapped file.
+    pub storage: Storage,
+    /// Directory holding the SQLite database (default:
+    /// `$XDG_CACHE_HOME/everything-linux/db`).
+    pub db_dir: Option<String>,
     /// Directory for the on-disk index (default: `$XDG_CACHE_HOME/everything-linux`).
     pub disk_index_dir: Option<String>,
     /// When the in-memory change overlay exceeds this many entries, it is
@@ -106,6 +123,8 @@ impl Default for Config {
             exclude_network: true,
             respect_ignore_files: true,
             persist_index: true,
+            storage: Storage::default(),
+            db_dir: None,
             disk_index_dir: None,
             overlay_compaction_threshold: 8192,
             exclude_fstypes: Vec::new(),
@@ -135,6 +154,18 @@ impl Config {
                     .unwrap_or_else(|| PathBuf::from("."))
             });
         base.join(CONFIG_DIR)
+    }
+
+    /// Effective directory for the SQLite database (the `db/` folder).
+    ///
+    /// Defaults to a `db` folder beside the mmap index, so a caller that
+    /// redirects `disk_index_dir` (tests, portable installs) redirects the
+    /// database with it.
+    pub fn db_dir(&self) -> PathBuf {
+        match &self.db_dir {
+            Some(d) => PathBuf::from(d),
+            None => self.disk_index_dir().join("db"),
+        }
     }
 
     /// Effective on-disk index directory.
