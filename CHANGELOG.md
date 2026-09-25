@@ -4,6 +4,24 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-09-26
+
+### Fixed
+
+- **A stale multi-selection.** The checked set was never pruned when the result
+  list changed, so after a new query or a tab switch the header kept reporting
+  “N selected” and Copy paths / Find duplicates in selection acted on files that
+  were no longer on screen. Selected paths not in the current results are now
+  dropped whenever results are assigned (and a query with no matches clears it).
+- **Two different numbers both labelled “files”.** The results header said
+  `N files indexed` using files **+ folders**, while the status bar said
+  `(N files)` using files only. The header now counts files, and the status bar's
+  total is labelled `Entries:` so the two can't be confused.
+- The duplicates window could look stuck on “comparing…” if egui was otherwise
+  idle when the scan finished; the UI now keeps repainting while a scan runs, and
+  progress is reported every 64 files instead of once per file (a 50 000-file
+  scan was sending 50 000 messages).
+
 ## [0.14.0] - 2026-09-26
 
 ### Added

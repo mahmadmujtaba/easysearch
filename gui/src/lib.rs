@@ -1376,6 +1376,7 @@ impl App {
         self.scroll_to = None;
         self.history_idx = None;
         self.last_edit = Instant::now();
+        self.prune_selection();
     }
 
     fn switch_tab(&mut self, i: usize) {
@@ -1478,6 +1479,16 @@ impl App {
         self.under = under;
         self.push_location();
         self.send_query();
+    }
+
+    /// Drop selected paths that are no longer in the result list.
+    ///
+    /// The selection is a set of paths, but the rows it refers to change with
+    /// every query and tab switch — without this the header would keep claiming
+    /// "N selected" and the bulk actions would act on files that are not on
+    /// screen any more.
+    fn prune_selection(&mut self) {
+        retain_visible(&mut self.checked, &self.results);
     }
 
     /// Cycle the sort for a column and re-sort the current results in place
@@ -2182,6 +2193,15 @@ fn quick_action(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Icon) -> bool {
     resp.clicked()
 }
 
+/// Keep only the selected paths that are still in the visible result set.
+fn retain_visible(checked: &mut HashSet<PathBuf>, results: &[ResultRow]) {
+    if checked.is_empty() {
+        return;
+    }
+    let visible: HashSet<&PathBuf> = results.iter().map(|r| &r.path).collect();
+    checked.retain(|p| visible.contains(p));
+}
+
 /// Lowercase hex, without allocating through `format!` per byte.
 fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -2281,7 +2301,11 @@ fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) ->
     let mut groups: Vec<DupGroup> = Vec::new();
 
     for (size, files) in sizes {
-        progress(done, total);
+        // Report sparsely: one message per file would flood the channel on a
+        // 50 000-candidate scan.
+        if done.is_multiple_of(64) {
+            progress(done, total);
+        }
         let mut by_partial: std::collections::HashMap<String, Vec<PathBuf>> =
             std::collections::HashMap::new();
         for f in files {
@@ -2289,7 +2313,9 @@ fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) ->
                 by_partial.entry(h).or_default().push(f);
             }
             done += 1;
-            progress(done, total);
+            if done.is_multiple_of(64) || done == total {
+                progress(done, total);
+            }
         }
         for (_, same) in by_partial {
             if same.len() < 2 {
@@ -2629,6 +2655,7 @@ impl eframe::App for App {
                         self.elapsed_ms = r.elapsed_ms;
                         self.error = None;
                         self.pending = false;
+                        self.prune_selection();
                         if let Some(sort) = self.sort {
                             let needle = self.last_sent.clone();
                             sort_results(&mut self.results, sort, &needle);
@@ -2758,6 +2785,13 @@ impl eframe::App for App {
                     }
                 }
             }
+        }
+
+        // Keep polling while a scan runs: if egui is otherwise idle nothing
+        // would wake it, and the duplicates window would sit on "comparing…"
+        // long after the scan had finished.
+        if self.dup_progress.is_some() {
+            ctx.request_repaint();
         }
 
         // Row context-menu commands, applied here so they can take `&mut self`
@@ -3771,8 +3805,7 @@ impl App {
     /// Results header: the summary line, sorting and row density.
     fn results_header(&mut self, ctx: &egui::Context) {
         let t = self.theme();
-        let (files, dirs) = self.engine.counts();
-        let indexed = files + dirs;
+        let (files, _dirs) = self.engine.counts();
         let shown = self.results.len();
         let total = self.counts.first().copied().unwrap_or(0).max(shown as u64);
         let checked = self.checked.len();
@@ -3792,7 +3825,7 @@ impl App {
                         format!(
                             "{} results • {} files indexed • {} ms",
                             human_count(total),
-                            human_count(indexed),
+                            human_count(files),
                             self.elapsed_ms
                         )
                     };
@@ -4983,7 +5016,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("Indexed: {}", human_count(files + dirs)))
+                    egui::RichText::new(format!("Entries: {}", human_count(files + dirs)))
                         .size(11.0)
                         .color(t.faint),
                 );
@@ -5996,6 +6029,27 @@ mod tests {
             Some(true)
         );
         assert_eq!(gtk_settings_dark_from("# nothing\n"), None);
+    }
+
+    #[test]
+    fn selection_is_pruned_to_the_visible_results() {
+        let row = |p: &str| ResultRow {
+            path: PathBuf::from(p),
+            size: 1,
+            mtime: 0,
+            is_dir: false,
+        };
+        let mut checked: HashSet<PathBuf> =
+            ["/a", "/b", "/gone"].iter().map(PathBuf::from).collect();
+
+        retain_visible(&mut checked, &[row("/a"), row("/b")]);
+        assert_eq!(checked.len(), 2, "the stale path is dropped");
+        assert!(!checked.contains(&PathBuf::from("/gone")));
+        assert!(checked.contains(&PathBuf::from("/a")));
+
+        // A new query with no matches must clear the selection outright.
+        retain_visible(&mut checked, &[]);
+        assert!(checked.is_empty());
     }
 
     #[test]
