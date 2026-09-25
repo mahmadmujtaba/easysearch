@@ -68,34 +68,38 @@ repeated content queries, and is kept fresh by the same event pipeline.
 
 ```
                      Rust workspace — one language, one crate family
-┌───────────────────────────  single process, one binary family  ───────────────────────────┐
+┌───────────────────────────  one binary family, two processes  ─────────────────────────────┐
 │                                                                                             │
 │   core/  (library crate: all search logic)                                                  │
-│   ├── indexer ── ignore::WalkParallel (cold walk) ──▶ on-disk index (mmap base)              │
-│   │      ▲                                                     │                             │
-│   │      └── notify crate (inotify) ◀── kernel events          │  create/delete/rename/edit │
-│   │                                  (create/delete/rename/edit) ▼                           │
-│   │                                       small in-memory change overlay (compacted in bg)   │
+│   ├── indexer ── ignore walk (cold walk) ──▶ SQLite database  db/index.db                   │
+│   │      ▲                                           │  sole writer, WAL mode             │
+│   │      └── notify crate (inotify) ◀─ kernel events ─┘  batched transactions               │
+│   │                                  (create/delete/rename/edit)                            │
+│   │                       small in-memory change overlay (flushed into the db per query)    │
 │   ├── matcher ── globset (pattern mode) + regex crate (regex mode) over indexed paths       │
 │   ├── content  ── grep-searcher + grep-regex + ignore (ripgrep engine, in-process)          │
 │   │                 └─ preprocessor hook (docx extraction)                                   │
 │   ├── content_index (OPTIONAL, default off) ── background extractor + RAM text cache        │
 │   │                 (bounded, LRU; kept fresh by the same watcher events)                    │
-│   └── queries  ── mmap base scan (zero-copy) ∪ overlay deltas                                │
+│   └── queries  ── SQL pushdown (dir/ext/size/mtime/hidden) + one shared predicate          │
+│                     ∪ pending overlay deltas                                                 │
 │                                                                                             │
-│   gui/  (eframe/egui — native, no web tech) ── links core ──▶ zero-IPC, instant search      │
-│   cli/  (clap)                              ── links core ──▶ scripted search / status       │
-│   daemon/ (tiny_http, optional)             ── links core ──▶ localhost HTTP API             │
-│                                                                                             │
-│   Single binary per frontend; core is a library so GUI/CLI/daemon share one codebase.       │
+│   app/  (one binary: everything-linux) ── starts or attaches to the daemon, runs the GUI     │
+│   daemon/ (tiny_http)  OWNS the index ── localhost HTTP/JSON, keeps the database current     │
+│   cli/  (clap)         in-process or --remote ── scripted search / status                   │
+│   gui/  (eframe/egui)  the UI ── reads via the daemon when one is running                   │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **No IPC in the default path**: GUI and CLI link `core/` directly — the index lives in
-  the same process, so queries are memory-speed with no serialization.
-- The optional `daemon/` exists only for scripted/remote use (binds `127.0.0.1`, read-only).
-- The GUI and the daemon can run simultaneously because the index is a `core/` data
-  structure each process builds for itself; no shared-state contention.
+- **One owner of the index.** The daemon is the only writer of the SQLite database and
+  keeps it current from kernel events; the GUI, CLI and any other client only read. WAL
+  mode means readers never block the writer.
+- **The default path does use IPC** — deliberately. `everything-linux` makes sure a daemon
+  is listening (re-executing itself with `--daemon`) and talks to it over localhost
+  HTTP/JSON. If a daemon cannot be started, the GUI falls back to an in-process engine, so
+  a single process is still a supported configuration (one writer either way).
+- The index is durable and shared: closing the GUI leaves the daemon indexing, and the next
+  start serves from the database immediately while it is re-validated in the background.
 
 ### 3.1 Tech stack decisions (2026-08-20, per user direction)
 
@@ -115,8 +119,8 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | Filesystem walk | **`ignore`** crate (gitignore-aware, parallel) | hand-rolled walkdir |
 | Realtime events | **`notify`** crate (inotify on Linux; ReadDirectoryChangesW / FSEvents elsewhere) | `inotifywait` subprocess (rejected: external dep, no cross-platform) |
 | Parallel search fan-out | **`rayon`** | hand-rolled threads |
-| Content text cache (optional) | in-RAM `HashMap` + byte-cap LRU (no DB) | SQLite/FTS (rejected: heavier, phase 3 if ever) |
-| Index persistence (low-RAM) | **`memmap2`** (mmap base index) + custom binary format | SQLite (rejected: heavier), full-RAM (rejected: 80 MiB) |
+| Content text cache (optional) | in-RAM `HashMap` + byte-cap LRU | — (the SQLite index is separate; FTS5 is the natural next step) |
+| Index persistence | **SQLite** (`rusqlite`, bundled) — WAL, one writer, SQL pushdown for filters | `memmap2` + custom binary format (kept as the `storage = "mmap"` escape hatch), full-RAM (rejected: 80 MiB) |
 | GUI | **`eframe`/`egui`** (immediate-mode, native, Win/Linux/macOS) | Slint, iced, gtk4-rs (all viable; egui = minimal deps + instant re-render per keystroke) |
 | CLI | **`clap`** | hand-rolled parser |
 | Optional daemon HTTP | **`tiny_http`** (small, stdlib-ish) | axum (heavier) |
@@ -146,7 +150,22 @@ Match is applied to each indexed path. Two modes, switchable per query:
 - `!term` excludes (Everything-compatible: `*.tmp !draft`).
 - Case-insensitive by default, case-sensitive toggle.
 - Hidden files/dirs excluded by default, toggle to include (`.git`, `.cache`, …).
-- Pattern matching runs over the in-memory index → sub-50 ms at 1M entries.
+- Pattern matching runs over the index → sub-50 ms at 1M entries. With the SQLite
+  backend the coarse dimensions below are pushed into SQL, so a filtered query does not
+  walk the whole table.
+
+**Filter dimensions** (all optional, all supported by the CLI, the HTTP API and the GUI's
+filter bar). They are enforced by the same predicate whether the query is a `search` or a
+`count`, so the two can never disagree:
+
+| Filter | Meaning |
+|---|---|
+| `under` | only paths inside a directory (component-wise prefix) |
+| `extensions` | only files whose final extension is listed (implies files-only) |
+| `min_size` / `max_size` | inclusive byte bounds (implies files-only) |
+| `modified_within_secs` | only files modified within the last N seconds |
+| `category` | All / Recent / Images / Documents / Code / Archives / Audio / Video / Large |
+| `include_hidden`, `include_dirs` | hidden files, folders in results |
 
 ### 4.2 Content search
 
@@ -291,7 +310,7 @@ small writes (so short SSE frames are never flushed).
 |---|---|
 | Binary size (stripped, `lto`+`strip`) | **< 10 MB** per binary |
 | Idle RSS, headless engine | **≈ 15 MiB** with the disk-backed index |
-| Index storage | **on disk** (memory-mapped; kernel page cache, reclaimable) |
+| Index storage | **on disk** — SQLite in `$XDG_CACHE_HOME/everything-linux/db/` (WAL; page cache reclaimable) |
 | Resident index structures | ≈ 4 MB hash table + small change overlay |
 | Backend idle CPU | **≈ 0 %** (event-driven; no polling loops) |
 | Cold index, 1M files | < 30 s; searchable from first second |
@@ -300,11 +319,12 @@ small writes (so short SSE frames are never flushed).
 | Content query (typical tree) | first result < 2 s; results streamed, cancellable |
 | Content index (when **enabled**) | + extracted text only (≤ 256 MB cap, LRU); **0 MB / 0 CPU when off** |
 
-**Memory architecture (v0.1.0):** the index bulk lives in a memory-mapped file
-(`~/.cache/everything-linux/index-v1.bin`); the watcher writes only a small
-in-memory overlay of recent changes, compacted into the file in the background.
-RAM-only mode (`persist_index: false`) keeps everything in memory. `malloc_trim`
-returns walk-transient pages to the kernel after each build.
+**Memory architecture (v0.13):** the index lives in a SQLite database
+(`~/.cache/everything-linux/db/index.db`, WAL mode) owned by the daemon; only a small
+in-memory overlay of recent changes is always resident, and it is folded into the database
+in one transaction before each query. `storage = "mmap"` in `config.json` switches back to
+the original memory-mapped file (`index-v1.bin`), and `persist_index = false` keeps nothing
+on disk at all. `malloc_trim` returns walk-transient pages to the kernel after each build.
 
 **Measured (v0.1.0, Debian 13, real `$HOME`, ≈137k files):** CLI binary 3.3 MB,
 GUI 12 MB; headless engine idle ≈ 15 MiB (vs ≈ 80 MiB before the disk-backed
@@ -312,55 +332,87 @@ index); warm start 0.6 s; filename query < 1 ms engine time; content query
 ≈ 23 ms. GUI ≈ 151 MiB incl. the Mesa GL stack (≈ 55 MiB) and the 23 MiB mmap
 index; remaining anonymous memory is egui UI state + allocator arena residual.
 
+**Measured (v0.13, KDE/Plasma Wayland, real `$HOME`, 100 479 entries):** GUI
+≈ 92 MiB and the daemon ≈ 51 MiB (≈ 143 MiB together); filename queries 1–26 ms;
+filtered queries 1–2 ms (SQL pushdown); content query ≈ 113 ms; a full build of
+the database takes a few seconds and 65 MB on disk. See `docs/pending.md` §6 for
+the measurement method.
+
 ## 10. GUI (egui) Specification
 
 **Display backends: Wayland-first, X11 second.** The frontend registers the
-`everything-linux` app id with the compositor (Wayland desktop integration).
-winit's selection is built-in and already Wayland-first: `WAYLAND_DISPLAY` set
-→ native Wayland (preferred, since an X11 display can exist under Wayland via
-XWayland), only `DISPLAY` set → X11 fallback. Force X11 by launching with
-`WAYLAND_DISPLAY` unset (`env -u WAYLAND_DISPLAY everything-gui`).
+`io.github.everythinglinux.EverythingForLinux` app id with the compositor (it matches the
+installed desktop entry, so the launcher and window icon line up). winit's selection is
+built-in and already Wayland-first: `WAYLAND_DISPLAY` set → native Wayland (preferred,
+since an X11 display can exist under Wayland via XWayland), only `DISPLAY` set → X11
+fallback. Force X11 by launching with `WAYLAND_DISPLAY` unset. See
+[`ui.md`](ui.md) for the user-facing guide; this section is the design summary.
 
-- **Search box** (top, focus-on-start): type → debounced live results (Everything-style).
-- **Toggle row:** regex | content | case-sensitive | hidden files | full-path match.
-- **Results list** (egui table/selectable rows): name, full path, size, mtime, type icon;
-  results stream in as computed.
-- **Status bar:** `12,438 files indexed · live · 0.02 s` + degraded-mode indicator +
-  content-index state (`off` / `indexing… 42%` / `cached`).
-- **Interactions:** double-click → open with default app (`xdg-open`); right-click menu →
-  open containing folder, copy path. Keyboard: ↑/↓/Enter.
-- Empty state: "Indexing… 68%" or "No results".
+Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/main1.png`):
+
+- **Menu bar:** File · Search · Filters · Tools · Settings · Help.
+- **Search tab strip:** one pill per open search, restored across restarts.
+- **Toolbar:** Back/Forward (walking the location history), Home, Index (rebuild),
+  Content Search, Regex, Recent, Saved — painted icons, active states.
+- **Search row:** the query field, a scope picker (Filenames / Full path / Contents), a
+  location picker, and the primary `Search` button.
+- **Filter bar:** Type, Size, Modified, Path, Ext chips, Case, Hidden, Clear Filters.
+  Every control drives a real engine filter (§4.1) — nothing decorative.
+- **Results header:** `N results · N files indexed · N ms`, `Sort by`
+  (Relevance/Name/Size/Modified) and Cozy/Compact row density.
+- **Three panes:** sidebar (a filter box, categories with live counts, saved searches,
+  indexed locations, Advanced Search) · results table (`#`, Name with breadcrumbs, Path,
+  coloured Type pill, Size, Modified, Match, Relevance, bulk-selection checkboxes) ·
+  right panel (Preview / Details tabs, with MIME type, permissions, creation time and an
+  on-demand SHA-256, plus Quick Actions).
+- **Footer:** view tabs (Results / Preview / Details / Search History), bulk actions
+  (Select All, Invert, Copy paths), recent-search chips, and a live status bar
+  (index state, system CPU and RAM, query stats, 100/110/125% zoom, keyboard hints).
+- **Interactions:** double-click or Enter → open with the default app (`xdg-open`);
+  right-click → Open, Open containing folder, Open in terminal, Copy path, Filter to this
+  folder. Relevance is a transparent heuristic: which query terms hit the *name* and how
+  (exact > prefix > substring), then path hits, with a small bonus for short names.
+- **Theming:** follows the desktop's light/dark scheme live (KDE `kdeglobals`, GTK
+  settings, or the XDG portal) and uses the system UI/mono fonts. Empty state suggests
+  what to search or reports indexing progress.
 - CLI mirror (`everything search "*.pdf"`) prints matched paths for scripting.
 
 ## 11. Project Layout (Cargo workspace)
 
 ```
 everything-for-linux/
-├── docs/scope.md              ← this document
-├── README.md                  ← install (build deps), usage, sysctl notes
-├── scripts/install-deps.sh    ← apt: rustc cargo build-essential pkg-config
-│                                libxkbcommon-dev libwayland-dev libgl1-mesa-dev docx2txt
+├── docs/                      ← scope.md (this), ui.md, config.md, api.md,
+│                                sqlite.md, packaging.md, pending.md
+├── README.md                  ← install, usage, configuration, footprint
+├── Makefile                   ← build/test/release/run, packaging, dist
+├── scripts/                   ← install-deps.sh, package-{deb,rpm,flatpak}.sh,
+│                                gen-cargo-sources.py
+├── packaging/                 ← desktop entry, AppStream metainfo, icons,
+│                                deb control template, rpm spec, flatpak manifest
+├── ui-screenshots/            ← design references and captures
 ├── Cargo.toml                 ← workspace
-├── core/                      ← library: indexer, watcher, matcher, content searcher
-│   └── src/{lib,indexer,watcher,matcher,content,config}.rs
-├── gui/                       ← eframe/egui frontend (links core)
-│   └── src/main.rs
-├── cli/                       ← clap frontend (links core)
-│   └── src/main.rs
-├── daemon/                    ← optional tiny_http frontend (links core)
-│   └── src/main.rs
-└── tests/                     ← integration tests (temp dirs, fake FS events)
+├── core/                      ← library: walker, watcher, matcher, content,
+│   └── src/                     content_index, disk_index (mmap), sqlite_index,
+│                                engine, backend, remote, config, api
+├── app/                       ← the single binary users run (GUI + daemon mode)
+├── gui/                       ← eframe/egui frontend (+ the system tray)
+├── cli/                       ← clap frontend
+├── daemon/                    ← tiny_http frontend: owns the index
+└── vendor/                    ← the arrayref shim (see Cargo.toml)
 ```
 
 ## 12. Delivery Phases
 
-| Phase | Contents | Exit criteria |
-|---|---|---|
-| **1 — MVP** | `core/`: cold walk (`ignore`) + live index (`notify`) + name search (glob+regex via `globset`/`regex`, AND/`!`, basename/full-path, hidden toggle) + content search (embedded `grep-searcher`, text/code, docx via preprocessor) + **optional background content index** (default off) + degraded mode. `gui/` (egui) with all toggles. `cli/`. Config file (default root `$HOME`, USB/external mounts excluded). | Searches `$HOME` live; create-a-file-then-search finds it in < 1 s; footprint budget met; builds on Debian 13 |
-| **2 — Polish** | Bundled docx extractor (drop `docx2txt` dep); daemon + HTTP API; tray icon + global hotkey; substring ranking (fzf-style); settings dialog; `.gitignore` handling UI | Feedback from real daily use |
-| **3 — Stretch** | fanotify watcher (no per-dir watch limits, needs privileges); multiline content regex; PDF/ODT extraction; fuzzy filename ranking; Windows/macOS builds | Only if requested |
+| Phase | Status |
+|---|---|
+| **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
+| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata). **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey, substring/fuzzy ranking, `.gitignore` management UI |
+| **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
+| **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
+| **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |
 
-**Phase 1 is the committed deliverable. Phases 2–3 are gated on user request.**
+What remains is tracked, itemised and prioritised in [`pending.md`](pending.md) —
+that document, not this one, is the live backlog.
 
 ## 13. Risks & Open Questions
 
@@ -379,6 +431,15 @@ are a fallback); docx extraction cost (only docx files, only when content search
 4. **Content search:** on-demand embedded ripgrep (always fresh) is the default **and** an
    **optional background content index** (default off) is in scope.
 5. **Removable/USB mounts:** ignored by default; opt-in via config.
+6. **SQLite index (v0.13.0) — reverses the original §3.1 decision.** The 2026-08-20
+   analysis rejected SQLite as “heavier” in favour of a custom mmap format. That was
+   right for the phase-1 goal (fastest possible filename scan) but it left the index as
+   a bespoke binary format with no real query language, so every new filter meant new
+   scan code and the GUI could not ask questions of the index. SQLite was adopted on
+   user direction in order to get durability, SQL pushdown for filters, and a foundation
+   for FTS5 content search. The mmap backend is retained behind `storage = "mmap"`, and
+   the honest trade-off (bare name queries are now slower; filtered ones are faster) is
+   recorded in [`sqlite.md`](sqlite.md).
 
 ---
 

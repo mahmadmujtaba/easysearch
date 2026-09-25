@@ -61,22 +61,31 @@ which identifiers to change before publishing.
 ## Usage
 
 ```sh
-# GUI
-./target/release/everything-gui
+# GUI + daemon in one binary (this is what end users run)
+make run                          # or: ./target/release/everything-linux
 
 # CLI
 ./target/release/everything search "*.pdf"              # glob patterns
 ./target/release/everything search "report 2026 !draft" # AND terms + exclude
 ./target/release/everything search --regex 'report[_-]\d{4}\.pdf$'
 ./target/release/everything search --content "TODO"     # search inside files
-./target/release/everything status                      # index state
+./target/release/everything search '*' --ext pdf,docx --min-size 1M
+./target/release/everything search '*.log' --modified-within 7d
+./target/release/everything search '*' --under /srv/data
+./target/release/everything status                      # index state, counts
 ```
 
-The GUI is a three-pane **Pro-Search** layout: a category sidebar (Recent,
-Images, Docs, Code, Archives, Audio, Video, Large files), a floating search bar
-with in-bar `.*`/`Aa` toggles and an options menu (`≡`), a results table with
-file-type badges, clickable breadcrumbs and hover actions, and a preview pane
-with image thumbnails and quick actions (Open / Copy Path / Terminal).
+The GUI follows the “FileSearch Pro” reference layout (see
+[`docs/ui.md`](docs/ui.md)): a menu bar and a labelled toolbar (Back/Forward through the
+location history, Home, Index, Content Search, Regex, Recent, Saved), a search row
+(query + scope + location + `Search`), a filter bar (Type / Size / Modified / Path /
+Ext / Case / Hidden), a results header with sorting and row density, then three
+panes — a sidebar (categories with live counts, saved searches, indexed locations),
+the results table (`#`, Name, Path, coloured type pill, Size, Modified, Match,
+Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
+quick actions. Under it: view tabs, bulk actions, recent searches and a live status
+bar (index state, CPU, RAM, query stats, 100/110/125% zoom). It follows the
+desktop's light/dark scheme live and uses your system fonts.
 
 Query semantics (Everything-style):
 
@@ -98,6 +107,8 @@ Query semantics (Everything-style):
   "exclude_network": true,
   "respect_ignore_files": true,
   "persist_index": true,
+  "storage": "sqlite",
+  "db_dir": null,
   "disk_index_dir": null,
   "overlay_compaction_threshold": 8192,
   "exclude_fstypes": [],
@@ -111,16 +122,22 @@ Query semantics (Everything-style):
 
 - **roots**: empty = `$HOME` of the user running the program. Add paths to
   index more (e.g. `["/home/me", "/srv/data"]`).
-- **persist_index**: `true` (default) keeps the index on disk (memory-mapped)
-  with only recent changes in RAM; `false` keeps the whole index in memory.
-- **disk_index_dir**: where the mapped index lives (default
-  `~/.cache/everything-linux`).
+- **storage**: `"sqlite"` (default) keeps the index in a SQLite database;
+  `"mmap"` uses the original memory-mapped file. See [`docs/sqlite.md`](docs/sqlite.md).
+- **db_dir**: where the SQLite database lives (default
+  `~/.cache/everything-linux/db`).
+- **persist_index**: `true` (default) keeps an index on disk with only recent
+  changes in RAM; `false` keeps everything in RAM (no database, no mmap file).
+- **disk_index_dir**: where the mmap index lives (default
+  `~/.cache/everything-linux`); the database defaults to a `db/` folder inside it.
 - **overlay_compaction_threshold**: how many pending changes trigger a
-  background compaction (default 8192).
+  background compaction (mmap backend).
 - **content_index_enabled**: `true` enables the background content cache
   (bounded, LRU; keeps repeated content queries fast).
 - A global ignore file at `~/.config/everything-linux/ignore` adds extra
   exclusions.
+
+Every key, with its default and effect, is documented in [`docs/config.md`](docs/config.md).
 
 ## Non-essential folders
 
@@ -165,31 +182,47 @@ sudo sysctl fs.inotify.max_user_watches=1048576   # persists until reboot
 # make permanent: echo 'fs.inotify.max_user_watches=1048576' | sudo tee /etc/sysctl.d/90-inotify.conf
 ```
 
-## Low-memory index (how it stays small)
+## Where the index lives (and why RAM stays low)
 
-The index is designed to keep RAM low by using the filesystem:
+The index is a **SQLite database** in `~/.cache/everything-linux/db/`
+(`index.db`, WAL mode), owned by the daemon — the only writer:
 
-- The bulk of the index (paths + metadata) is serialized into a compact binary
-  file at `~/.cache/everything-linux/index-v1.bin` and **memory-mapped** —
-  cold pages cost zero RSS and are evicted by the kernel under pressure; warm
-  pages live in the reclaimable page cache.
-- Only a small **change overlay** (recent creates/edits/deletes from the
-  watcher) and a compact hash table (~4 MB) stay resident. Queries scan the
-  mapped file zero-copy.
-- When the overlay grows (default 8192 entries), it is **compacted** into the
-  file in the background. Startup is instant: the previous index is mapped on
-  launch while a background rebuild re-validates it.
+- The bulk of the index is on disk; only a small **change overlay** of recent
+  creates/edits/deletes stays resident. The overlay is folded into the database
+  in one transaction before each query, so a query never misses a change the
+  watcher has already seen.
+- **Startup is instant.** A complete database is served immediately while a
+  background pass re-validates it against the live filesystem. The database is
+  created from a full walk when it is missing, when the schema version changes,
+  or when a previous build was interrupted (a `complete` marker is written in the
+  same transaction as the rows, so a partial index is never mistaken for a small
+  complete one).
+- If the delta backlog grows past 20 000 changes, a **full rebuild** replaces
+  replaying a very long delta stream.
+- `storage = "mmap"` in the config switches back to the original memory-mapped
+  file (`index-v1.bin`, zero-copy scan) and `persist_index = false` keeps nothing
+  on disk at all. Details and the trade-offs: [`sqlite.md`](docs/sqlite.md).
 
-Measured on a real `$HOME` (≈137k files): headless engine idle ≈ **15 MiB**
-(was ≈ 80 MiB with the original in-RAM index); warm start ~0.6 s; filename
-query < 1 ms. The GUI adds the native window/GL stack (~55 MiB on this box).
+Measured on a real `$HOME`: ≈ 15 MiB idle for the headless engine (mmap mode, ≈137k
+files); on 100 479 entries the SQLite daemon sits at ≈ 51 MiB and the GUI at ≈ 92 MiB,
+with filename queries at 1–26 ms and filtered queries at 1–2 ms (SQL pushdown).
+The GUI adds the native window/GL stack.
 
 ## Footprint (budget)
 
-- binaries < 10 MB (stripped, LTO; GUI ≈ 12 MB)
-- idle RAM ≈ 15 MiB headless; index on disk (mmap), overlay in RAM
+- binaries < 10 MB (stripped, LTO; the GUI binary is ≈ 12 MB)
+- idle RAM ≈ 15 MiB headless; the index is on disk, only the change overlay is in RAM
 - idle CPU ≈ 0 % (event-driven)
 - filename query at 1M entries < 50 ms; content queries stream results
 
-See [`docs/scope.md`](docs/scope.md) for the full scope, design rationale, and
-realtime/freshness guarantees.
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/scope.md`](docs/scope.md) | Scope, architecture, search semantics, realtime guarantees, footprint budget, delivery phases |
+| [`docs/ui.md`](docs/ui.md) | Using the GUI: layout, filters, saved searches, shortcuts, relevance scoring |
+| [`docs/config.md`](docs/config.md) | Every `config.json` key, its default and its effect |
+| [`docs/api.md`](docs/api.md) | The daemon's HTTP/JSON API |
+| [`docs/sqlite.md`](docs/sqlite.md) | The SQLite index: schema, flush/refresh policy, trade-offs |
+| [`docs/packaging.md`](docs/packaging.md) | Building `.deb`, `.rpm` and Flatpak packages |
+| [`docs/pending.md`](docs/pending.md) | What is still outstanding, prioritised |

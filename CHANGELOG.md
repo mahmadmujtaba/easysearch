@@ -4,6 +4,37 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-09-26
+
+Documentation brought back in line with the code — the design documents still
+described the v0.1.0 architecture (a memory-mapped index and a three-pane UI).
+
+### Added
+
+- **`docs/ui.md`** — a guide to the GUI: the layout, query syntax, what every
+  filter maps to, the columns, the (now written-down) relevance heuristic,
+  saved searches, the shortcut table, theming, and the known limits.
+- **`docs/config.md`** — every `config.json` key with its default and effect,
+  plus the list of related files and their locations.
+- A **Documentation** index in the README.
+
+### Changed
+
+- **`docs/scope.md`**: the architecture diagram and notes now describe the daemon
+  owning a SQLite index with clients reading through it (the default path *does*
+  use IPC, deliberately); §4 gained the filter dimensions (location, extension,
+  size, recency); §9's storage rows and memory paragraph describe SQLite; §10 is
+  a design summary of the current GUI; §11 the real project layout; §12 records
+  phase status. The reversed SQLite decision is written up in §13 rather than
+  deleted, with the reason.
+- **`README.md`**: the UI description, the index location and the configuration
+  section (which now documents `storage` and `db_dir`).
+
+### Fixed
+
+- Three README links pointed at `ui.md`/`sqlite.md`/`config.md` without the
+  `docs/` prefix, and the in-app shortcut list was missing `Ctrl+A`.
+
 ## [0.13.1] - 2026-09-25
 
 ### Fixed

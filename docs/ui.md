@@ -1,0 +1,159 @@
+# Using the GUI
+
+The window follows the “FileSearch Pro” reference layout
+(`ui-screenshots/main1.png`). This guide explains every part of it and what is
+real underneath.
+
+## Window layout
+
+```
+menu bar        File · Search · Filters · Tools · Settings · Help
+search tabs     one pill per open search (restored on restart)      [ + ]
+toolbar         Back Forward Home Index | Content Search Regex | Recent Saved
+search row      Search: [ query ]  [ scope ▾ ] [ location ▾ ]  [ ⌕ Search ]
+filter bar      Type Size Modified Path Ext: Case Hidden   [ ✕ Clear Filters ]
+results header  31 results · 100,477 files indexed · 2 ms   Sort by ▾  Cozy Compact
+┌───────────────┬───────────────────────────────────────────┬──────────────────┐
+│ sidebar       │ results table                             │ preview panel    │
+│ categories    │ #  Name  Path  Type  Size  Modified  Match  │ Preview │ Details│
+│ saved search  │                                             │ details + actions│
+│ locations     │                                             │                  │
+│ advanced      │                                             │                  │
+└───────────────┴───────────────────────────────────────────┴──────────────────┘
+view tabs       Results · Preview · Details · Search History | bulk actions
+recent row      Recent searches: chips…                          Clear
+status bar      Indexing: idle (86,100 files) CPU RAM Zoom | Query Search time Indexed  hints
+```
+
+## Searching
+
+Query syntax (Everything-compatible):
+
+| You type | Meaning |
+|---|---|
+| `report` | substring match on the file name (`draft` matches `draft.pdf`) |
+| `*.pdf` | glob (`*`, `?`, `[abc]`) |
+| `report 2026` | several terms are **ANDed** |
+| `!draft` | **excludes** matches |
+| `^src/` | path prefix (with the *Full path* scope) |
+| `report[_-]\d{4}` | a regex, when `Regex` is on |
+
+**Scope** (the picker next to the search box) decides *what* the query is matched
+against: **Filenames** (default), **Full path**, or **Contents** (inside files,
+via the embedded ripgrep engine — always read live, never stale).
+
+**Location** (and the sidebar's *Indexed Locations*) restricts the search to one
+directory; Back/Forward in the toolbar walk your location history.
+
+## Filters
+
+Every control in the filter bar maps to a real engine filter, applied by the same
+predicate whether the app is counting or listing:
+
+| Control | Underlying filter |
+|---|---|
+| **Type** | `category`: All / Recent / Images / Documents / Code / Archives / Audio / Video / Large files |
+| **Size** | inclusive byte bounds (`< 1 MB`, `1–100 MB`, `100 MB–1 GB`, `> 1 GB`) |
+| **Modified** | modified within Today / Past week / Past month / Past year |
+| **Path** | `under` — only paths inside a directory |
+| **Ext:** | only these extensions (implies files-only) |
+| **Case** / **Hidden** | case-sensitive matching; include dot-files |
+| **✕ Clear Filters** | resets all of the above (enabled only when something is set) |
+
+## Results
+
+Columns: `#` row number · **Name** (with a type badge and, in Cozy density, a
+clickable breadcrumb) · **Path** (parent, shortened — hover for the full path) ·
+**Type** pill · **Size** · **Modified** · **Match** (which query terms this hit
+satisfied) · **Relevance** (score + bar).
+
+**Relevance is a documented heuristic, not a black box.** Terms that match the
+file *name* score highest — exact match, then prefix, then substring — with
+matches anywhere in the path scoring less; a small bonus goes to short names
+because they are usually the more specific hit; a query with no positive terms
+scores everything equally. The best possible score is 100%. Use `Sort by →
+Relevance` (the default) to order by it.
+
+Header clicks sort by Name / Size / Modified; clicking again reverses, a third
+time clears the sort. **Cozy / Compact** switch the row density (two-line rows
+with breadcrumbs, or one compact line).
+
+Right-click a row for: Open · Open containing folder · Open in terminal · Copy
+path · Filter to this folder. Double-click (or Enter) opens with the default app.
+
+## Sidebar
+
+- **Search Everywhere** — filters the sidebar lists themselves.
+- **Categories** — All files / Recent / Images / Documents / Code / Archives /
+  Audio / Video / Large files, each with a **live count** for the current query.
+- **Saved searches** — name a query + filters and reuse it later (`+` saves the
+  current one; the toolbar's *Saved* button and the Tools menu open the manager,
+  where you can Apply or Delete).
+- **Indexed locations** — one-click scoping to Home, Desktop, Documents,
+  Downloads, Pictures, Music, Videos, Workspace, Projects (whichever exist).
+- **Advanced search** — *Include folders* (folders in results), plus the current
+  content-index state (read-only; it is configured in `config.json`).
+- **TIPS** — a collapsible cheat-sheet; its state is remembered.
+
+## Search tabs and history
+
+Each tab keeps its own query and filters, and everything is restored the next
+time you start the app. The **Recent searches** row shows recent queries as
+chips (click to re-run); they are also mirrored in the tray menu, and Ctrl+A
+selects every result row for bulk actions (Select All / Invert / Copy paths).
+
+## Right-hand panel
+
+- **Preview** — image thumbnails for pictures, monospace text for text/code
+  files, and folder/empty notes otherwise.
+- **Details** — Name · Path · Size (with exact bytes) · Modified · Created
+  (filesystem birth time where the filesystem records one, else `—`) · MIME type
+  (from the extension) · Permissions · **SHA-256** (computed on demand for files
+  up to 512 MB, so opening Details on a huge file never stalls the UI).
+- **Quick actions** — Open · Reveal · Copy path · Terminal.
+
+The **view tabs** above the status bar switch the main area between *Results*,
+*Preview*, *Details* and *Search History*.
+
+## Status bar
+
+Live index state (`Indexing: idle (86,100 files)` or a progress spinner),
+system **CPU** and **RAM**, the number of results and the search time, the total
+indexed entries, the **UI zoom** (100% / 110% / 125% — also in Settings), and the
+current keyboard hints. Hover any result's row for its full path.
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` | Navigate results |
+| `Enter` | Open the selected file |
+| Double-click | Open a result |
+| `Esc` | Clear the search |
+| `Ctrl+F` | Focus the search box |
+| `Ctrl+A` | Select all result rows (when the search box is not focused) |
+| `Ctrl+T` / `Ctrl+W` | New tab / close tab |
+| `Ctrl+Tab` | Next tab |
+| `Ctrl+1…9` | Select tab |
+| `↑` `↓` in an empty search box | Cycle search history |
+
+## Theming and fonts
+
+The app follows your desktop's light/dark setting **live** — switching the scheme
+in the desktop settings flips the app without a restart (it reads KDE's
+`kdeglobals`, GTK's `settings.ini`, or the XDG portal). It draws with your system
+UI font and a system monospace font, falling back to bundled fonts for glyphs the
+system font lacks. You can override the theme in Settings, or pin it with
+`"dark": true|false` in `gui.json`.
+
+## Notes and limits
+
+- A **0-byte file** shows “No text preview for this file” rather than an empty
+  document.
+- The **content index** (the optional in-RAM text cache) has no UI switch yet;
+  set `content_index_enabled` in `config.json` and restart. See
+  [`config.md`](config.md).
+- The **Fuzzy** and **Duplicate Finder** buttons from the reference design are
+  deliberately absent rather than present-but-dead; so are Tags and Rename/Delete.
+  [`pending.md`](pending.md) §4 lists them.
+- The tray icon offers Open, the recent-searches list, and Quit.

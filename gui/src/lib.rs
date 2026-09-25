@@ -2872,6 +2872,7 @@ impl App {
                     ("Double-click", "Open a result"),
                     ("Esc", "Clear the search"),
                     ("Ctrl+F", "Focus the search box"),
+                    ("Ctrl+A", "Select all results"),
                     ("Ctrl+T", "New tab"),
                     ("Ctrl+W", "Close tab"),
                     ("Ctrl+Tab", "Next tab"),
