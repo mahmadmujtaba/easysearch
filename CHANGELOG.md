@@ -4,6 +4,56 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-25
+
+A UI overhaul to the “FileSearch Pro” reference design (see
+`ui-screenshots/main1.png`): the dense single-bar window is replaced by a menu
+bar, a labelled toolbar, a search row, a filter bar and a results header, over a
+three-pane body and a view/status footer.
+
+### Added
+
+- **Labelled toolbar** — Back/Forward (walking the location history), Home,
+  Index (rebuild), Content Search, Regex, Recent and Saved, each with a
+  hand-painted icon (no icon font, no emoji) and an active state.
+- **Search row** — the query field, a scope picker (Filenames / Full path /
+  Contents), a location picker, and a primary `Search` button.
+- **Filter bar** — Type, Size, Modified, Path, Ext (with extension chips), Case,
+  Hidden and `Clear Filters`. These drive real engine filters: extensions,
+  inclusive size bounds and modified-within recency.
+- **Results header** — `N results • N files indexed • N ms`, a `Sort by` menu
+  (Relevance, Name, Size, Modified) and Cozy/Compact row density.
+- **New result columns** — `#`, Name (two-line with breadcrumbs in Cozy), Path,
+  a coloured Type pill, Size, Modified, `Match` (which query terms this hit
+  matched) and `Relevance` (a 0–100 score with a bar). Row numbers and
+  bulk-selection checkboxes are included.
+- **Preview panel** — Preview/Details tabs. Details shows Name, Path, Size with
+  exact bytes, Modified, Created (filesystem birth time), MIME type,
+  Permissions and SHA-256 (computed on demand for files up to 512 MB, via
+  `sha256sum`). Quick Actions: Open, Reveal, Copy path, Terminal.
+- **View tab strip and bulk actions** — Results / Preview / Details / Search
+  History, with Select All, Invert and Copy paths over the checkbox selection.
+- **Recent searches** chip row, and **saved searches** (toolbar, Tools menu and
+  sidebar) persisted in the GUI preferences.
+- **Sidebar sections** — a “Search Everywhere” box that filters the lists, the
+  categories with live counts, saved searches, indexed locations, and Advanced
+  Search (Include folders, plus the content-index state).
+- **Status bar** — index state, live system CPU and RAM (from `/proc`), query
+  result count, search time, indexed entries, UI zoom and keyboard hints.
+- `Ctrl+A` selects every result row.
+
+### Changed
+
+- The old in-bar `.*`/`Aa` toggles, the bottom zoom/type/folders strip and the
+  per-row hover actions are gone; they are replaced by the toolbar, the filter
+  bar, the status-bar zoom and the row context menu (which still offers Open,
+  Open containing folder, Open in terminal and Copy path).
+
+### Fixed
+
+- The element that removed the old bottom strip also closed the `impl App`
+  block; the file no longer fails to parse.
+
 ## [0.11.0] - 2026-09-24
 
 ### Added

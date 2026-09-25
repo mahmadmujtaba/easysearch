@@ -172,6 +172,9 @@ const MONO_FONT_PREFERENCE: &[&str] = &[
 
 const RECENT_AGE_SECS: i64 = 7 * 24 * 3600;
 const LARGE_MIN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+/// Largest file we will hash for the Details tab (a hash of a huge file would
+/// stall the UI thread).
+const MAX_HASH_BYTES: u64 = 512 * 1024 * 1024;
 
 const CATEGORIES: &[(&str, Category)] = &[
     ("All files", Category::All),
@@ -831,7 +834,7 @@ impl ViewTab {
 }
 
 /// A saved search: a name plus the whole query configuration.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SavedSearch {
     name: String,
@@ -840,19 +843,6 @@ struct SavedSearch {
     regex_mode: bool,
     case_sensitive: bool,
     under: Option<String>,
-}
-
-impl Default for SavedSearch {
-    fn default() -> Self {
-        SavedSearch {
-            name: String::new(),
-            query: String::new(),
-            content_mode: false,
-            regex_mode: false,
-            case_sensitive: false,
-            under: None,
-        }
-    }
 }
 
 fn size_index(s: SizeFilter) -> usize {
@@ -941,6 +931,8 @@ struct App {
     sys_cpu: f32,
     sys_ram_used_kb: u64,
     sys_ram_total_kb: u64,
+    /// Previous `/proc/stat` (busy, total) jiffies, for the CPU delta.
+    sys_prev: (u64, u64),
     limit: usize,
     results: Vec<ResultRow>,
     truncated: bool,
@@ -1120,6 +1112,7 @@ impl App {
             sys_cpu: 0.0,
             sys_ram_used_kb: 0,
             sys_ram_total_kb: 0,
+            sys_prev: (0, 0),
             limit: 500,
             results: start.results,
             truncated: start.truncated,
@@ -1583,7 +1576,6 @@ enum Icon {
     Content,
     Clock,
     Bookmark,
-    Folder,
     Terminal,
     Reveal,
     Open,
@@ -1643,20 +1635,6 @@ fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui
                     p(0.0, 0.3),
                     p(-0.55, 0.9),
                     p(-0.55, -0.9),
-                ],
-                stroke,
-            ));
-        }
-        Icon::Folder => {
-            painter.add(egui::Shape::line(
-                vec![
-                    p(-0.9, 0.75),
-                    p(-0.9, -0.5),
-                    p(-0.25, -0.5),
-                    p(0.0, -0.25),
-                    p(0.9, -0.25),
-                    p(0.9, 0.75),
-                    p(-0.9, 0.75),
                 ],
                 stroke,
             ));
@@ -1913,6 +1891,20 @@ fn section_title(t: &Theme, title: &str) -> egui::RichText {
         .color(t.faint)
 }
 
+/// Format a KiB amount the way the status bar wants it (`6.2 GB`).
+fn human_kb(kb: u64) -> String {
+    const MB: u64 = 1024;
+    const GB: u64 = 1024 * MB;
+    if kb == 0 {
+        return "—".to_string();
+    }
+    if kb >= GB {
+        format!("{:.1} GB", kb as f64 / GB as f64)
+    } else {
+        format!("{:.0} MB", kb as f64 / MB as f64)
+    }
+}
+
 /// Group thousands: `85613` → `85,613`.
 fn human_count(n: u64) -> String {
     let digits = n.to_string();
@@ -1924,33 +1916,6 @@ fn human_count(n: u64) -> String {
         out.push(ch);
     }
     out
-}
-
-/// Small rounded stat tile: a big value over a muted caption.
-fn mini_stat(ui: &mut egui::Ui, t: &Theme, caption: &str, value: &str, width: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 48.0), egui::Sense::hover());
-    let radius = egui::CornerRadius::same(9);
-    ui.painter().rect_filled(rect, radius, t.card);
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        egui::Stroke::new(1.0_f32, t.stroke),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        egui::pos2(rect.min.x + 10.0, rect.min.y + 9.0),
-        egui::Align2::LEFT_TOP,
-        value,
-        egui::FontId::new(17.0, egui::FontFamily::Proportional),
-        t.text,
-    );
-    ui.painter().text(
-        egui::pos2(rect.min.x + 10.0, rect.max.y - 9.0),
-        egui::Align2::LEFT_BOTTOM,
-        caption,
-        egui::FontId::new(10.0, egui::FontFamily::Proportional),
-        t.faint,
-    );
 }
 
 /// A small pill chip, used for the sidebar's quick locations.
@@ -2109,42 +2074,6 @@ fn magnifier(ui: &mut egui::Ui, color: egui::Color32) {
     );
 }
 
-/// Compact toggle pill for the in-bar `.*` / `Aa` switches.
-fn toggle(ui: &mut egui::Ui, t: &Theme, value: &mut bool, text: &str, tip: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
-    let radius = egui::CornerRadius::same(6);
-    let selected = *value;
-    let fill = if selected {
-        t.accent_soft()
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, radius, fill);
-    if selected {
-        ui.painter().rect_stroke(
-            rect,
-            radius,
-            egui::Stroke::new(1.0_f32, t.accent.gamma_multiply(0.55)),
-            egui::StrokeKind::Inside,
-        );
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::new(12.0, egui::FontFamily::Monospace),
-        if selected { t.accent } else { t.dim },
-    );
-    let clicked = resp.clicked();
-    resp.on_hover_text(tip);
-    if clicked {
-        *value = !*value;
-    }
-    clicked
-}
-
 /// Rounded file-type chip shown at the start of every result row.
 fn type_chip(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::Response {
     let color = type_color(t, path, is_dir);
@@ -2168,6 +2097,186 @@ fn type_chip(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::R
 }
 
 /// Short uppercase token inside a type chip (extension, or a category word).
+/// A bordered action button with a painted icon, used by Quick Actions.
+fn quick_action(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Icon) -> bool {
+    let font = egui::FontId::new(11.0, egui::FontFamily::Proportional);
+    let tw = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), t.text)
+        .size()
+        .x;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2((tw + 36.0).max(86.0), 26.0),
+        egui::Sense::click(),
+    );
+    let hovered = resp.hovered();
+    let radius = egui::CornerRadius::same(6);
+    ui.painter()
+        .rect_filled(rect, radius, if hovered { t.hover } else { t.card });
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0_f32, if hovered { t.accent } else { t.stroke }),
+        egui::StrokeKind::Inside,
+    );
+    paint_icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.min.x + 15.0, rect.center().y),
+            egui::vec2(13.0, 13.0),
+        ),
+        icon,
+        if hovered { t.accent } else { t.dim },
+    );
+    ui.painter().text(
+        egui::pos2(rect.min.x + 27.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        t.text,
+    );
+    resp.clicked()
+}
+
+/// SHA-256 of a file, via coreutils' `sha256sum` (keeps the dependency list
+/// down; there is no hashing crate in the tree).
+fn sha256_of(path: &Path) -> Option<String> {
+    let out = Command::new("sha256sum").arg(path).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(|h| h.to_string())
+}
+
+/// `rwxr-xr-x (0755)` for a path, or `—` when it cannot be read.
+fn file_perms(path: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(md) => {
+            let mode = md.permissions().mode();
+            let mut s = String::new();
+            for shift in [6u32, 3, 0] {
+                let bits = (mode >> shift) & 0o7;
+                s.push(if bits & 4 != 0 { 'r' } else { '-' });
+                s.push(if bits & 2 != 0 { 'w' } else { '-' });
+                s.push(if bits & 1 != 0 { 'x' } else { '-' });
+            }
+            format!("{s} ({:04o})", mode & 0o7777)
+        }
+        Err(_) => "—".to_string(),
+    }
+}
+
+/// Creation (birth) time where the filesystem records one, else `—`. ext4,
+/// btrfs and xfs do; many others do not.
+fn file_created(path: &Path) -> String {
+    std::fs::metadata(path)
+        .and_then(|m| m.created())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| human_time(d.as_secs() as i64))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+/// A best-effort MIME type from the extension (no libmagic dependency).
+fn mime_for(path: &Path, is_dir: bool) -> String {
+    if is_dir {
+        return "inode/directory".to_string();
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("pdf") => "application/pdf",
+        Some("doc") => "application/msword",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("xls") => "application/vnd.ms-excel",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("ppt") => "application/vnd.ms-powerpoint",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("odt") => "application/vnd.oasis.opendocument.text",
+        Some("ods") => "application/vnd.oasis.opendocument.spreadsheet",
+        Some("txt") | Some("log") => "text/plain",
+        Some("md") => "text/markdown",
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        Some("yaml") | Some("yml") => "application/yaml",
+        Some("toml") => "application/toml",
+        Some("html") | Some("htm") => "text/html",
+        Some("css") => "text/css",
+        Some("js") => "text/javascript",
+        Some("ts") => "application/typescript",
+        Some("sh") => "application/x-shellscript",
+        Some("zip") => "application/zip",
+        Some("gz") => "application/gzip",
+        Some("tar") => "application/x-tar",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("flac") => "audio/flac",
+        Some("mp4") => "video/mp4",
+        Some("mkv") => "video/x-matroska",
+        Some("webm") => "video/webm",
+        Some("rs") => "text/x-rust",
+        Some("py") => "text/x-python",
+        Some("go") => "text/x-go",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+/// Small rounded pill naming a file's type (PDF, DOCX, MD, DIR, …).
+fn type_pill(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::Response {
+    let color = type_color(t, path, is_dir);
+    let galley = ui.painter().layout_no_wrap(
+        chip_label(path, is_dir),
+        egui::FontId::new(10.0, egui::FontFamily::Proportional),
+        color,
+    );
+    let pad = egui::vec2(7.0, 3.0);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
+    let radius = egui::CornerRadius::same(4);
+    ui.painter().rect_filled(rect, radius, t.chip_fill(color));
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().galley(rect.min + pad, galley, color);
+    resp
+}
+
+/// The parent directory of a path, shortened to its last two components so it
+/// fits a narrow column (`…/SAB/SDD`).
+fn short_dir(path: &Path) -> String {
+    let Some(parent) = path.parent() else {
+        return String::new();
+    };
+    let comps: Vec<String> = parent
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            std::path::Component::RootDir => Some("/".to_string()),
+            _ => None,
+        })
+        .collect();
+    match comps.len() {
+        0 => String::new(),
+        1 | 2 => comps.join("/"),
+        n => format!("…/{}/{}", comps[n - 2], comps[n - 1]),
+    }
+}
+
 fn chip_label(path: &Path, is_dir: bool) -> String {
     if is_dir {
         return "DIR".to_string();
@@ -2217,83 +2326,6 @@ fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
     ui.painter().circle_filled(rect.center(), 4.0, color);
 }
 
-#[derive(Clone, Copy)]
-enum RowAction {
-    Folder,
-    Copy,
-    Terminal,
-}
-
-/// Compact drawn action button for a result row (no emoji, so it aligns and
-/// renders identically on every system).
-fn action_button(ui: &mut egui::Ui, t: &Theme, kind: RowAction, tip: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
-    let hovered = resp.hovered();
-    if hovered {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(6), t.hover);
-    }
-    let stroke = egui::Stroke::new(1.3_f32, if hovered { t.accent } else { t.dim });
-    let c = rect.center();
-    match kind {
-        RowAction::Folder => {
-            let body =
-                egui::Rect::from_min_size(egui::pos2(c.x - 7.0, c.y - 3.5), egui::vec2(14.0, 10.0));
-            ui.painter().rect_stroke(
-                body,
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            let tab =
-                egui::Rect::from_min_size(egui::pos2(c.x - 7.0, c.y - 6.0), egui::vec2(6.0, 3.0));
-            ui.painter().rect_stroke(
-                tab,
-                egui::CornerRadius::same(1),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        RowAction::Copy => {
-            let back =
-                egui::Rect::from_min_size(egui::pos2(c.x - 6.0, c.y - 6.0), egui::vec2(9.0, 11.0));
-            let front =
-                egui::Rect::from_min_size(egui::pos2(c.x - 2.0, c.y - 3.0), egui::vec2(9.0, 11.0));
-            ui.painter().rect_stroke(
-                back,
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            ui.painter()
-                .rect_filled(front, egui::CornerRadius::same(2), t.panel);
-            ui.painter().rect_stroke(
-                front,
-                egui::CornerRadius::same(2),
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        RowAction::Terminal => {
-            ui.painter().text(
-                c,
-                egui::Align2::CENTER_CENTER,
-                ">_",
-                egui::FontId::new(11.0, egui::FontFamily::Monospace),
-                if hovered { t.accent } else { t.dim },
-            );
-        }
-    }
-    let clicked = resp.clicked();
-    resp.on_hover_text(tip);
-    clicked
-}
-
-/// Load the UI and monospace system fonts.
-///
-/// Uses fontconfig (`fc-list`) to resolve each preferred family to a concrete
-/// file, then picks the smallest upright, normal-weight, single-face candidate.
-/// This deliberately avoids scanning every installed font (previously ~3,000
 /// files, which cost ~14 MiB) and avoids huge `.ttc` collections — loading
 /// `Inter.ttc` copied 12 MiB and, because a collection's face 0 is not
 /// necessarily Regular, could also pick the wrong weight.
@@ -2416,6 +2448,7 @@ impl eframe::App for App {
             }
         }
         self.status = self.engine.status_snapshot();
+        self.refresh_sys_stats();
 
         if self.query != self.last_sent {
             self.dirty = true;
@@ -2556,6 +2589,13 @@ impl eframe::App for App {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A)) {
+            // Only while the search field does not have focus, so text selection
+            // inside the box keeps working.
+            if !ctx.memory(|m| m.has_focus(search_id())) {
+                self.checked = self.results.iter().map(|r| r.path.clone()).collect();
+            }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::T)) {
             self.new_tab();
@@ -2894,7 +2934,7 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("Edit", |ui| {
+                    ui.menu_button("Search", |ui| {
                         let changed = ui
                             .checkbox(&mut self.content_mode, "Match contents")
                             .changed()
@@ -2914,7 +2954,7 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("View", |ui| {
+                    ui.menu_button("Filters", |ui| {
                         if ui
                             .checkbox(&mut self.prefs.show_preview, "Preview pane")
                             .changed()
@@ -2943,6 +2983,21 @@ impl App {
                             self.dark = false;
                             self.apply_style(ctx);
                             self.prefs.save();
+                        }
+                    });
+                    ui.menu_button("Tools", |ui| {
+                        if ui.button("Rebuild index").clicked() {
+                            self.engine.rebuild();
+                            ui.close_menu();
+                        }
+                        if ui.button("Save current search…").clicked() {
+                            self.show_save = true;
+                            self.save_name = self.query.clone();
+                            ui.close_menu();
+                        }
+                        if ui.button("Saved searches…").clicked() {
+                            self.show_saved = true;
+                            ui.close_menu();
                         }
                     });
                     ui.menu_button("Settings", |ui| {
@@ -3253,6 +3308,7 @@ impl App {
                             ui.close_menu();
                         }
                     })
+                    .response
                     .on_hover_text("Where the query is matched");
 
                     // Location.
@@ -3280,6 +3336,7 @@ impl App {
                             }
                         }
                     })
+                    .response
                     .on_hover_text("Restrict the search to one directory");
 
                     if primary_button(ui, &t, "Search", Some(Icon::Content)) {
@@ -3311,7 +3368,7 @@ impl App {
                     ui.menu_button(self.category_label(), |ui| {
                         ui.set_min_width(170.0);
                         for (label, cat) in CATEGORIES {
-                            if ui.selectable_label(self.category == *cat, label).clicked() {
+                            if ui.selectable_label(self.category == *cat, *label).clicked() {
                                 self.category = *cat;
                                 changed = true;
                                 ui.close_menu();
@@ -3519,7 +3576,6 @@ impl App {
                             self.prefs.save();
                         }
                         ui.add_space(10.0);
-                        ui.label(bar_label(&t, "Sort by:"));
                         let sort_label = match self.sort {
                             None | Some(Sort::Relevance(_)) => "Relevance",
                             Some(Sort::Name(_)) => "Name",
@@ -3546,6 +3602,7 @@ impl App {
                                 }
                             }
                         });
+                        ui.label(bar_label(&t, "Sort by:"));
                     });
                 });
             });
@@ -3642,69 +3699,245 @@ impl App {
         let t = self.theme();
         egui::SidePanel::left("sidebar")
             .resizable(true)
-            .default_width(228.0)
-            .min_width(180.0)
-            .max_width(340.0)
+            .default_width(236.0)
+            .min_width(190.0)
+            .max_width(360.0)
             .frame(
                 egui::Frame::new()
                     .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(12, 12)),
+                    .inner_margin(egui::Margin::symmetric(10, 10)),
             )
             .show(ctx, |ui| {
-                // Header and the two match tiles stay pinned; only the lists
-                // below scroll, so the brand and the numbers never scroll away.
-                self.sidebar_header(ui);
-                ui.add_space(10.0);
-                self.sidebar_stats(ui);
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(4.0);
+                // The sidebar's own filter box (it filters the lists below).
+                egui::Frame::new()
+                    .fill(t.card)
+                    .corner_radius(egui::CornerRadius::same(7))
+                    .inner_margin(egui::Margin::symmetric(8, 3))
+                    .stroke(egui::Stroke::new(1.0_f32, t.stroke))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            magnifier(ui, t.faint);
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sidebar_filter)
+                                    .hint_text(
+                                        egui::RichText::new("Search Everywhere").color(t.faint),
+                                    )
+                                    .font(egui::FontId::new(12.0, egui::FontFamily::Proportional))
+                                    .desired_width(ui.available_width() - 6.0)
+                                    .margin(egui::vec2(2.0, 2.0))
+                                    .frame(false),
+                            );
+                        });
+                    });
+                ui.add_space(9.0);
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         self.sidebar_categories(ui, &t);
-
-                        ui.add_space(14.0);
+                        ui.add_space(12.0);
+                        self.sidebar_saved(ui, &t);
+                        ui.add_space(12.0);
                         self.sidebar_locations(ui, &t);
-
-                        ui.add_space(14.0);
-                        self.sidebar_options(ui, &t);
-
-                        ui.add_space(14.0);
+                        ui.add_space(12.0);
+                        self.sidebar_advanced(ui, &t);
+                        ui.add_space(12.0);
                         self.sidebar_tips(ui, &t);
                     });
 
-                ui.add_space(4.0);
+                ui.add_space(2.0);
                 ui.separator();
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(self.backend_label.clone())
-                        .size(10.5)
-                        .color(t.faint),
-                );
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    self.live_badge(ui);
+                    ui.label(
+                        egui::RichText::new(self.backend_label.clone())
+                            .size(10.0)
+                            .color(t.faint),
+                    );
+                });
             });
     }
 
-    /// Brand + a live-index pill at the top of the sidebar.
-    fn sidebar_header(&self, ui: &mut egui::Ui) {
-        let t = self.theme();
+    /// Does a sidebar label pass the sidebar's own filter box?
+    fn sidebar_matches(&self, haystack: &str) -> bool {
+        let f = self.sidebar_filter.trim().to_lowercase();
+        f.is_empty() || haystack.to_lowercase().contains(&f)
+    }
+
+    /// Category rows with live per-category result counts.
+    fn sidebar_categories(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "CATEGORIES"));
+        ui.add_space(5.0);
+        let mut chosen: Option<Category> = None;
+        for (i, (label, cat)) in CATEGORIES.iter().enumerate() {
+            if !self.sidebar_matches(label) {
+                continue;
+            }
+            let selected = self.category == *cat;
+            let count = self
+                .counts
+                .get(i)
+                .map(|c| human_count(*c))
+                .unwrap_or_else(|| "—".to_string());
+            if nav_item(ui, t, category_color(t, cat), label, Some(&count), selected).clicked() {
+                chosen = Some(if selected { Category::All } else { *cat });
+            }
+        }
+        if let Some(c) = chosen {
+            self.category = c;
+            self.send_query();
+        }
+    }
+
+    /// The user's saved searches.
+    fn sidebar_saved(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        let mut open_save = false;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("⚡").size(16.0).color(t.accent));
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new("Everything")
-                    .size(14.5)
-                    .strong()
-                    .color(t.text),
-            );
+            ui.label(section_title(t, "SAVED SEARCHES"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.live_badge(ui);
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("+").size(13.0).color(t.accent))
+                            .frame(false),
+                    )
+                    .on_hover_text("Save the current search")
+                    .clicked()
+                {
+                    open_save = true;
+                }
             });
         });
+        if open_save {
+            self.show_save = true;
+            self.save_name = self.query.clone();
+        }
+        ui.add_space(5.0);
+        if self.prefs.saved.is_empty() {
+            ui.label(
+                egui::RichText::new("Nothing saved yet.")
+                    .size(10.5)
+                    .color(t.faint),
+            );
+            return;
+        }
+        let mut apply: Option<usize> = None;
+        for (i, s) in self.prefs.saved.iter().enumerate() {
+            if !self.sidebar_matches(&s.name) {
+                continue;
+            }
+            let active = self.query == s.query;
+            if nav_item(ui, t, t.warn, &s.name, None, active).clicked() {
+                apply = Some(i);
+            }
+        }
+        if let Some(i) = apply {
+            self.apply_saved(i);
+        }
     }
 
-    /// “LIVE” / “INDEXING” pill; the dot pulses while the first pass runs.
+    /// Quick “search only here” locations.
+    fn sidebar_locations(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "INDEXED LOCATIONS"));
+        ui.add_space(5.0);
+        let locs = locations();
+        let mut pick: Option<Option<String>> = None;
+        for (label, path) in &locs {
+            let s = path.to_string_lossy().into_owned();
+            if !self.sidebar_matches(label) && !self.sidebar_matches(&s) {
+                continue;
+            }
+            let active = self.under.as_deref() == Some(s.as_str());
+            if nav_item(ui, t, t.kind_dir, label, None, active).clicked() {
+                pick = Some(if active { None } else { Some(s) });
+            }
+        }
+        // An active filter that is not one of the quick locations.
+        if let Some(under) = self.under.clone()
+            && !locs.iter().any(|(_, p)| p.to_string_lossy() == under)
+        {
+            ui.add_space(4.0);
+            if nav_item(ui, t, t.accent, &location_label(&under), None, true).clicked() {
+                pick = Some(None);
+            }
+        }
+        if let Some(under) = &self.under {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(under.clone()).size(10.0).color(t.faint));
+        }
+        if let Some(p) = pick {
+            self.set_under(p);
+        }
+    }
+
+    /// Options that change what the index contains (not just how it is queried).
+    fn sidebar_advanced(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "ADVANCED SEARCH"));
+        ui.add_space(5.0);
+        if opt_check(ui, t, &mut self.prefs.include_dirs, "Include folders") {
+            self.prefs.save();
+            self.send_query();
+        }
+        let cache = match &self.status.content_index {
+            ContentIndexStatus::Enabled { entries, bytes, .. } => {
+                format!("on · {} files · {} MiB", entries, bytes / (1024 * 1024))
+            }
+            ContentIndexStatus::Disabled => "off".to_string(),
+        };
+        ui.add_space(3.0);
+        ui.label(
+            egui::RichText::new(format!("Content index: {cache}"))
+                .size(10.5)
+                .color(t.faint),
+        )
+        .on_hover_text(
+            "The optional background content cache is configured in \
+             ~/.config/everything-linux/config.json (content_index_enabled) and \
+             takes effect on restart.",
+        );
+    }
+
+    /// Collapsible cheat-sheet; its open state is persisted.
+    fn sidebar_tips(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        let open = self.prefs.sidebar_tips;
+        let arrow = if open { "▾" } else { "▸" };
+        let resp = ui.add(
+            egui::Button::new(
+                egui::RichText::new(format!("{arrow}  TIPS"))
+                    .size(10.5)
+                    .strong()
+                    .color(t.faint),
+            )
+            .frame(false),
+        );
+        if resp.clicked() {
+            self.prefs.sidebar_tips = !open;
+            self.prefs.save();
+        }
+        if open {
+            ui.add_space(5.0);
+            for (token, meaning) in [
+                ("*.pdf", "glob pattern"),
+                ("a b", "all terms"),
+                ("!draft", "exclude"),
+                ("^src/", "path prefix"),
+                (".*", "regex mode"),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(token)
+                            .monospace()
+                            .size(10.5)
+                            .color(t.dim),
+                    );
+                    ui.label(egui::RichText::new(meaning).size(10.5).color(t.faint));
+                });
+            }
+        }
+    }
+
+    /// “LIVE” / “INDEX” pill; the dot pulses while the first pass runs.
     fn live_badge(&self, ui: &mut egui::Ui) {
         let t = self.theme();
         let live = self.status.state == State::Live;
@@ -3741,158 +3974,8 @@ impl App {
         }
     }
 
-    /// Two tiles: matching files for the current query, and what is shown.
-    fn sidebar_stats(&self, ui: &mut egui::Ui) {
-        let t = self.theme();
-        let matches = self.counts.first().copied().unwrap_or(0);
-        let shown = self.results.len() as u64;
-        let indexed = self.engine.counts().0;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
-            mini_stat(ui, &t, "matches", &human_count(matches), w);
-            mini_stat(ui, &t, "shown", &human_count(shown), w);
-        });
-        ui.add_space(7.0);
-        ui.label(
-            egui::RichText::new(format!("{} files indexed", human_count(indexed)))
-                .size(10.5)
-                .color(t.faint),
-        );
-    }
-
-    /// Category rows with live per-category result counts.
-    fn sidebar_categories(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        ui.label(section_title(t, "CATEGORIES"));
-        ui.add_space(6.0);
-        let mut chosen: Option<Category> = None;
-        for (i, (label, cat)) in CATEGORIES.iter().enumerate() {
-            let selected = self.category == *cat;
-            let count = self
-                .counts
-                .get(i)
-                .map(|c| human_count(*c))
-                .unwrap_or_else(|| "—".to_string());
-            if nav_item(ui, t, category_color(t, cat), label, Some(&count), selected).clicked() {
-                chosen = Some(if selected { Category::All } else { *cat });
-            }
-        }
-        if let Some(c) = chosen {
-            self.category = c;
-            self.send_query();
-        }
-    }
-
-    /// Quick “search only here” chips, plus a clear control when a filter is on.
-    fn sidebar_locations(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        let locs = locations();
-        let mut clear = false;
-        ui.horizontal(|ui| {
-            ui.label(section_title(t, "LOCATIONS"));
-            if self.under.is_some() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("Clear").size(10.5).color(t.accent),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
-                        clear = true;
-                    }
-                });
-            }
-        });
-        ui.add_space(6.0);
-        let mut pick: Option<Option<String>> = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
-            for (label, path) in &locs {
-                let s = path.to_string_lossy().into_owned();
-                let active = self.under.as_deref() == Some(s.as_str());
-                if chip(ui, t, label, active).clicked() {
-                    pick = Some(if active { None } else { Some(s) });
-                }
-            }
-        });
-        if let Some(sel) = pick {
-            self.set_under(sel);
-        }
-        // A filter that is not one of the quick locations (restored or custom).
-        if let Some(under) = self.under.clone()
-            && !locs.iter().any(|(_, p)| p.to_string_lossy() == under)
-        {
-            ui.add_space(7.0);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("▸").size(12.0).color(t.accent));
-                ui.label(
-                    egui::RichText::new(location_label(&under))
-                        .size(12.0)
-                        .color(t.text),
-                );
-            });
-        }
-        if clear {
-            self.set_under(None);
-        }
-    }
-
-    /// Search toggles, mirroring the in-bar options.
-    fn sidebar_options(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        ui.label(section_title(t, "SEARCH OPTIONS"));
-        ui.add_space(6.0);
-        let mut changed = false;
-        changed |= opt_check(ui, t, &mut self.content_mode, "Match contents");
-        changed |= opt_check(ui, t, &mut self.regex_mode, "Regex");
-        changed |= opt_check(ui, t, &mut self.case_sensitive, "Case-sensitive");
-        changed |= opt_check(ui, t, &mut self.hidden, "Hidden files");
-        changed |= opt_check(ui, t, &mut self.full_path, "Full-path match");
-        if changed {
-            self.send_query();
-        }
-    }
-
-    /// Collapsible cheat-sheet; its open state is persisted.
-    fn sidebar_tips(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        let open = self.prefs.sidebar_tips;
-        let arrow = if open { "▾" } else { "▸" };
-        let resp = ui.add(
-            egui::Button::new(
-                egui::RichText::new(format!("{arrow}  TIPS"))
-                    .size(10.5)
-                    .strong()
-                    .color(t.faint),
-            )
-            .frame(false),
-        );
-        if resp.clicked() {
-            self.prefs.sidebar_tips = !open;
-            self.prefs.save();
-        }
-        if open {
-            ui.add_space(6.0);
-            for (token, meaning) in [
-                ("*.pdf", "glob pattern"),
-                ("a b", "all terms"),
-                ("!draft", "exclude"),
-                ("^src/", "path prefix"),
-                (".*", "regex mode"),
-            ] {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(token)
-                            .monospace()
-                            .size(11.0)
-                            .color(t.dim),
-                    );
-                    ui.label(egui::RichText::new(meaning).size(11.0).color(t.faint));
-                });
-            }
-        }
-    }
-
+    /// The results table: `# / Name / Path / Type / Size / Modified / Match /
+    /// Relevance`, with bulk-selection checkboxes.
     fn results_table(&mut self, ui: &mut egui::Ui) {
         if let Some(err) = &self.error {
             ui.add_space(24.0);
@@ -3909,10 +3992,12 @@ impl App {
 
         let ctx = ui.ctx().clone();
         let t = self.theme();
+        let needle = self.last_sent.clone();
+        let cozy = self.density.row_height() > 36.0;
 
         // Column widths are recomputed from the available width every frame so
         // the layout stays stable when the UI zoom (or the window) changes. The
-        // metadata columns keep a fixed size; the Name column takes the rest.
+        // metadata columns keep a fixed size; `Name` takes what is left.
         //
         // This deliberately avoids `TableBuilder::resizable`, which caches each
         // column's width in points after the first frame (including the
@@ -3920,31 +4005,52 @@ impl App {
         // changed the available width, the total overflowed and the Size /
         // Modified / Actions columns were pushed off-screen.
         let spacing = ui.spacing().item_spacing.x;
-        let size_w = 92.0_f32;
-        let mod_w = 148.0_f32;
-        let act_w = 92.0_f32;
-        let fixed = size_w + mod_w + act_w + spacing * 3.0;
-        let name_w = (ui.available_width() - fixed - 2.0).max(80.0);
+        let check_w = 24.0_f32;
+        let num_w = 28.0_f32;
+        let path_w = 142.0_f32;
+        let type_w = 58.0_f32;
+        let size_w = 74.0_f32;
+        let mod_w = 92.0_f32;
+        let match_w = 120.0_f32;
+        let rel_w = 74.0_f32;
+        let fixed =
+            check_w + num_w + path_w + type_w + size_w + mod_w + match_w + rel_w + spacing * 8.0;
+        let name_w = (ui.available_width() - fixed - 2.0).max(90.0);
 
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click()) // rows must sense clicks, not just hover
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::exact(check_w))
+            .column(Column::exact(num_w))
             .column(Column::exact(name_w))
+            .column(Column::exact(path_w))
+            .column(Column::exact(type_w))
             .column(Column::exact(size_w))
             .column(Column::exact(mod_w))
-            .column(Column::exact(act_w));
+            .column(Column::exact(match_w))
+            .column(Column::exact(rel_w));
         if let Some(target) = self.scroll_to.take() {
             table = table.scroll_to_row(target, Some(egui::Align::Center));
         }
 
         table
-            .header(34.0, |mut header| {
+            .header(28.0, |mut header| {
+                header.col(|_| {});
+                header.col(|ui| {
+                    ui.label(egui::RichText::new("#").size(10.5).color(t.faint));
+                });
                 header.col(|ui| {
                     if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked()
                     {
                         self.toggle_sort(Sort::Name(true));
                     }
+                });
+                header.col(|ui| {
+                    ui.label(egui::RichText::new("Path").size(11.0).color(t.faint));
+                });
+                header.col(|ui| {
+                    ui.label(egui::RichText::new("Type").size(11.0).color(t.faint));
                 });
                 header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3965,51 +4071,93 @@ impl App {
                     });
                 });
                 header.col(|ui| {
+                    ui.label(egui::RichText::new("Match").size(11.0).color(t.faint));
+                });
+                header.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("Actions").size(11.5).color(t.faint));
+                        if sort_button(ui, "Relevance", self.sort, |s| {
+                            matches!(s, Sort::Relevance(_))
+                        })
+                        .clicked()
+                        {
+                            self.toggle_sort(Sort::Relevance(false));
+                        }
                     });
                 });
             })
             .body(|body| {
                 let rows = self.results.len();
                 let selected = self.selected;
-                body.rows(48.0, rows, |mut row| {
+                let row_h = self.density.row_height();
+                body.rows(row_h, rows, |mut row| {
                     let i = row.index();
                     row.set_selected(i == selected);
                     let r = &self.results[i];
-                    let mut actions: Option<(bool, bool, bool)> = None;
-                    // Row geometry (x-start + y-range) captured from column 1,
-                    // used for whole-row hover detection in the actions column.
-                    let mut row_left: Option<f32> = None;
-                    let mut row_y: Option<egui::Rangef> = None;
+                    let rel = relevance_score(&r.path, &needle);
+                    let terms = matched_terms(&r.path, &needle);
+                    let name = r
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| r.path.display().to_string());
+                    let mut toggle: Option<PathBuf> = None;
 
+                    // Bulk selection.
+                    row.col(|ui| {
+                        let mut on = self.checked.contains(&r.path);
+                        if ui.add(egui::Checkbox::without_text(&mut on)).changed() {
+                            toggle = Some(r.path.clone());
+                        }
+                    });
+                    // Row number.
+                    row.col(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new((i + 1).to_string())
+                                    .size(10.5)
+                                    .color(t.faint),
+                            );
+                        });
+                    });
+                    // Name (two-line when cozy).
                     row.col(|ui| {
                         let rect = ui.max_rect();
-                        row_left = Some(rect.min.x);
-                        row_y = Some(rect.y_range());
                         if i == selected {
                             let bar = egui::Rect::from_min_size(
-                                egui::pos2(rect.min.x, rect.top() + 7.0),
-                                egui::vec2(3.0, rect.height() - 14.0),
+                                egui::pos2(rect.min.x, rect.top() + 5.0),
+                                egui::vec2(3.0, (rect.height() - 10.0).max(6.0)),
                             );
                             ui.painter()
                                 .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
                         }
                         ui.horizontal(|ui| {
                             type_chip(ui, &t, &r.path, r.is_dir);
-                            ui.add_space(2.0);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 1.0;
-                                let name = r
-                                    .path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| r.path.display().to_string());
+                            ui.add_space(3.0);
+                            if cozy {
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    ui.label(egui::RichText::new(name).strong().color(t.text));
+                                    breadcrumb_ui(ui, &r.path, t.faint);
+                                });
+                            } else {
                                 ui.label(egui::RichText::new(name).strong().color(t.text));
-                                breadcrumb_ui(ui, &r.path, t.faint);
-                            });
+                            }
                         });
                     });
+                    // Path.
+                    row.col(|ui| {
+                        ui.label(
+                            egui::RichText::new(short_dir(&r.path))
+                                .size(11.0)
+                                .color(t.dim),
+                        )
+                        .on_hover_text(r.path.display().to_string());
+                    });
+                    // Type.
+                    row.col(|ui| {
+                        type_pill(ui, &t, &r.path, r.is_dir);
+                    });
+                    // Size.
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
@@ -4022,52 +4170,49 @@ impl App {
                             );
                         });
                     });
+                    // Modified.
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(egui::RichText::new(human_time(r.mtime)).color(t.dim));
                         });
                     });
+                    // Which query terms this hit matched.
+                    row.col(|ui| {
+                        if terms.is_empty() {
+                            ui.label(egui::RichText::new("—").size(11.0).color(t.faint));
+                        } else {
+                            for term in terms.iter().take(2) {
+                                ui.label(
+                                    egui::RichText::new(*term)
+                                        .size(10.5)
+                                        .monospace()
+                                        .color(t.accent),
+                                );
+                            }
+                        }
+                    });
+                    // Relevance.
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let hovered = match (row_left, row_y) {
-                                (Some(lx), Some(yr)) => {
-                                    let r2 = ui.max_rect();
-                                    let full = egui::Rect::from_min_max(
-                                        egui::pos2(lx, yr.min),
-                                        egui::pos2(r2.max.x, yr.max),
-                                    );
-                                    ui.rect_contains_pointer(full)
-                                }
-                                _ => false,
-                            };
-                            if hovered {
-                                if action_button(
-                                    ui,
-                                    &t,
-                                    RowAction::Folder,
-                                    "Open containing folder",
-                                ) {
-                                    actions = Some((
-                                        true,
-                                        actions.is_some_and(|a| a.1),
-                                        actions.is_some_and(|a| a.2),
-                                    ));
-                                }
-                                if action_button(ui, &t, RowAction::Copy, "Copy path") {
-                                    actions = Some((
-                                        actions.is_some_and(|a| a.0),
-                                        true,
-                                        actions.is_some_and(|a| a.2),
-                                    ));
-                                }
-                                if action_button(ui, &t, RowAction::Terminal, "Open in terminal") {
-                                    actions = Some((
-                                        actions.is_some_and(|a| a.0),
-                                        actions.is_some_and(|a| a.1),
-                                        true,
-                                    ));
-                                }
-                            }
+                            ui.label(egui::RichText::new(format!("{rel}%")).size(10.5).color(
+                                if rel >= 70 {
+                                    t.good
+                                } else if rel >= 40 {
+                                    t.dim
+                                } else {
+                                    t.faint
+                                },
+                            ));
+                            let (bar, _) =
+                                ui.allocate_exact_size(egui::vec2(32.0, 4.0), egui::Sense::hover());
+                            ui.painter()
+                                .rect_filled(bar, egui::CornerRadius::same(2), t.stroke);
+                            let filled = egui::Rect::from_min_size(
+                                bar.min,
+                                egui::vec2(bar.width() * (rel as f32 / 100.0), bar.height()),
+                            );
+                            ui.painter()
+                                .rect_filled(filled, egui::CornerRadius::same(2), t.accent);
                         });
                     });
 
@@ -4078,19 +4223,10 @@ impl App {
                     if row_resp.clicked() {
                         self.selected = i;
                     }
-                    match actions {
-                        Some((folder, copy, term)) => {
-                            if folder {
-                                App::open_folder(&r.path);
-                            }
-                            if copy {
-                                ctx.copy_text(r.path.display().to_string());
-                            }
-                            if term {
-                                App::open_terminal(&r.path);
-                            }
+                    if let Some(p) = toggle {
+                        if !self.checked.remove(&p) {
+                            self.checked.insert(p);
                         }
-                        None => {}
                     }
                     row_resp.context_menu(|ui| {
                         if ui.button("Open").clicked() {
@@ -4106,7 +4242,13 @@ impl App {
                             ui.close_menu();
                         }
                         if ui.button("Copy path").clicked() {
-                            ui.ctx().copy_text(r.path.display().to_string());
+                            ctx.copy_text(r.path.display().to_string());
+                            ui.close_menu();
+                        }
+                        if ui.button("Filter to this folder").clicked() {
+                            if let Some(parent) = r.path.parent() {
+                                ctx.copy_text(parent.display().to_string());
+                            }
                             ui.close_menu();
                         }
                     });
@@ -4193,9 +4335,11 @@ impl App {
         });
     }
 
+    /// Right-hand panel: a Preview / Details switch over quick actions.
     fn preview_panel(&mut self, ui: &mut egui::Ui) {
         let t = self.theme();
-        let Some(pv) = &self.preview else {
+
+        let Some(path) = self.preview.as_ref().map(|p| p.path.clone()) else {
             ui.add_space(64.0);
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -4212,128 +4356,208 @@ impl App {
             });
             return;
         };
+        let is_dir = self.preview.as_ref().is_some_and(|p| p.is_dir);
+        let size = self.preview.as_ref().map(|p| p.size).unwrap_or(0);
+        let mtime = self.preview.as_ref().map(|p| p.mtime).unwrap_or(0);
 
-        let name = pv
-            .path
+        // The SHA-256 is only computed when the Details tab is open, once per
+        // selection, and only for files small enough to hash quickly.
+        if self.panel_tab == PanelTab::Details
+            && !is_dir
+            && size <= MAX_HASH_BYTES
+            && self.hash.as_ref().map(|(p, _)| p.as_path()) != Some(path.as_path())
+        {
+            self.hash = sha256_of(&path).map(|h| (path.clone(), h));
+        }
+
+        let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            type_chip(ui, &t, &pv.path, pv.is_dir);
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(name).strong().size(15.0).color(t.text));
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(type_label(&pv.path, pv.is_dir))
-                    .size(12.5)
-                    .color(t.dim),
-            );
-            ui.label(egui::RichText::new("·").size(12.5).color(t.faint));
-            ui.label(
-                egui::RichText::new(human_size(pv.size))
-                    .size(12.5)
-                    .color(t.dim),
-            );
-            ui.label(egui::RichText::new("·").size(12.5).color(t.faint));
-            ui.label(
-                egui::RichText::new(human_time(pv.mtime))
-                    .size(12.5)
-                    .color(t.dim),
-            );
-        });
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(pv.path.display().to_string())
-                .size(12.0)
-                .monospace()
-                .color(t.faint),
-        );
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if ui.button("Open").clicked() {
-                App::open(&pv.path);
-            }
-            if ui.button("Copy path").clicked() {
-                ui.ctx().copy_text(pv.path.display().to_string());
-            }
-            if ui
-                .button("Terminal")
-                .on_hover_text("Open a terminal in this folder")
-                .clicked()
-            {
-                App::open_terminal(&pv.path);
-            }
-        });
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(10.0);
+            .unwrap_or_else(|| path.display().to_string());
 
-        if pv.is_dir {
-            ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("Folder").size(14.0).color(t.dim));
-                ui.add_space(10.0);
-                if ui.button("Open in file manager").clicked() {
-                    App::open(&pv.path);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            type_chip(ui, &t, &path, is_dir);
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(&name).strong().size(14.0).color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new(egui::RichText::new("✕").size(12.0)).frame(false))
+                    .on_hover_text("Hide the preview pane")
+                    .clicked()
+                {
+                    self.prefs.show_preview = false;
+                    self.prefs.save();
+                }
+                if ui
+                    .add(egui::Button::new(egui::RichText::new("⧉").size(12.0)).frame(false))
+                    .on_hover_text("Open in the default application")
+                    .clicked()
+                {
+                    App::open(&path);
                 }
             });
-            return;
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(type_label(&path, is_dir))
+                    .size(11.5)
+                    .color(t.dim),
+            );
+            ui.label(egui::RichText::new("·").size(11.5).color(t.faint));
+            ui.label(
+                egui::RichText::new(human_size(size))
+                    .size(11.5)
+                    .color(t.dim),
+            );
+            ui.label(egui::RichText::new("·").size(11.5).color(t.faint));
+            ui.label(
+                egui::RichText::new(human_time(mtime))
+                    .size(11.5)
+                    .color(t.dim),
+            );
+        });
+        ui.add_space(7.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (tab, label) in [
+                (PanelTab::Preview, "Preview"),
+                (PanelTab::Details, "Details"),
+            ] {
+                if ui.selectable_label(self.panel_tab == tab, label).clicked() {
+                    self.panel_tab = tab;
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        match self.panel_tab {
+            PanelTab::Preview => {
+                let image = self.preview.as_ref().and_then(|p| p.image.clone());
+                let text_empty = self.preview.as_ref().is_none_or(|p| p.text.is_empty());
+                if is_dir {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        ui.label(egui::RichText::new("Folder").size(14.0).color(t.dim));
+                    });
+                } else if let Some(tex) = image {
+                    ui.vertical_centered(|ui| {
+                        ui.add(
+                            egui::Image::new(&tex)
+                                .max_size(egui::vec2(ui.available_width().min(420.0), 420.0))
+                                .corner_radius(10),
+                        );
+                    });
+                } else if text_empty {
+                    ui.label(
+                        egui::RichText::new("No text preview for this file.")
+                            .size(12.0)
+                            .color(t.faint),
+                    );
+                } else if let Some(pv) = self.preview.as_ref() {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .max_height(ui.available_height() - 120.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(&pv.text)
+                                    .monospace()
+                                    .size(11.5)
+                                    .color(t.dim),
+                            );
+                        });
+                }
+            }
+            PanelTab::Details => {
+                let perms = file_perms(&path);
+                let created = file_created(&path);
+                let mime = mime_for(&path, is_dir);
+                let hash = self
+                    .hash
+                    .as_ref()
+                    .filter(|(p, _)| p == &path)
+                    .map(|(_, h)| h.clone())
+                    .unwrap_or_else(|| {
+                        if is_dir || size > MAX_HASH_BYTES {
+                            "not computed".to_string()
+                        } else {
+                            "(available in `sha256sum`)".to_string()
+                        }
+                    });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(ui.available_height() - 130.0)
+                    .show(ui, |ui| {
+                        detail_row(ui, &t, "Name", &name);
+                        detail_row(ui, &t, "Path", &path.display().to_string());
+                        detail_row(
+                            ui,
+                            &t,
+                            "Size",
+                            &if is_dir {
+                                "—".to_string()
+                            } else {
+                                format!("{} ({size} bytes)", human_size(size))
+                            },
+                        );
+                        detail_row(ui, &t, "Modified", &human_time(mtime));
+                        detail_row(ui, &t, "Created", &created);
+                        detail_row(ui, &t, "MIME type", &mime);
+                        detail_row(ui, &t, "Permissions", &perms);
+                        detail_row(ui, &t, "SHA-256", &hash);
+                    });
+            }
         }
-        if let Some(tex) = &pv.image {
-            ui.vertical_centered(|ui| {
-                ui.add(
-                    egui::Image::new(tex)
-                        .max_size(egui::vec2(ui.available_width().min(320.0), 320.0))
-                        .corner_radius(10),
-                );
-            });
-            return;
-        }
-        if pv.text.is_empty() {
-            ui.label(egui::RichText::new("No preview (binary or too large)").color(t.faint));
-            return;
-        }
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(&pv.text)
-                        .monospace()
-                        .size(12.0)
-                        .color(t.dim),
-                );
-            });
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(section_title(&t, "QUICK ACTIONS"));
+        ui.add_space(5.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+            if quick_action(ui, &t, "Open", Icon::Open) {
+                App::open(&path);
+            }
+            if quick_action(ui, &t, "Reveal", Icon::Reveal) {
+                App::open_folder(&path);
+            }
+            if quick_action(ui, &t, "Copy path", Icon::Bookmark) {
+                ui.ctx().copy_text(path.display().to_string());
+            }
+            if quick_action(ui, &t, "Terminal", Icon::Terminal) {
+                App::open_terminal(&path);
+            }
+        });
     }
 
+    /// Status bar: index state, live CPU/RAM, query stats, zoom and shortcuts.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let t = self.theme();
+        let (files, dirs) = self.engine.counts();
         ui.horizontal(|ui| {
-            // Live-index indicator (pulses while indexing).
             match self.status.state {
                 State::Starting | State::Indexing => {
                     let a = ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32;
                     status_dot(ui, t.warn.gamma_multiply(0.5 + 0.5 * a));
                     ui.label(
-                        egui::RichText::new(format!("Indexing… {} files", self.engine.counts().0))
-                            .color(t.faint)
-                            .size(12.0),
+                        egui::RichText::new(format!("Indexing… {} files", human_count(files)))
+                            .size(11.5)
+                            .color(t.warn),
                     );
                 }
                 State::Live => {
                     status_dot(ui, t.good);
                     ui.label(
-                        egui::RichText::new("Live")
-                            .color(t.good)
-                            .size(12.0)
-                            .strong(),
-                    );
-                    let (files, dirs) = self.engine.counts();
-                    ui.label(
-                        egui::RichText::new(format!("{files} files · {dirs} folders"))
-                            .color(t.faint)
-                            .size(12.0),
+                        egui::RichText::new(format!(
+                            "Indexing: idle ({} files)",
+                            human_count(files)
+                        ))
+                        .size(11.5)
+                        .color(t.dim),
                     );
                 }
             }
@@ -4343,13 +4567,13 @@ impl App {
                 } else {
                     "· periodic rebuild".to_string()
                 };
-                ui.label(egui::RichText::new(txt).color(t.warn).size(12.0));
+                ui.label(egui::RichText::new(txt).color(t.warn).size(11.5));
             }
             if self.status.overlay_pending > 0 {
                 ui.label(
                     egui::RichText::new(format!("· {} pending", self.status.overlay_pending))
-                        .color(t.faint)
-                        .size(12.0),
+                        .size(11.5)
+                        .color(t.faint),
                 );
             }
             if let ContentIndexStatus::Enabled {
@@ -4368,43 +4592,401 @@ impl App {
                             String::new()
                         }
                     ))
-                    .color(t.faint)
-                    .size(12.0),
+                    .size(11.5)
+                    .color(t.faint),
                 );
             }
+
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!("CPU: {:.0}%", self.sys_cpu))
+                    .size(11.0)
+                    .color(t.faint),
+            );
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!(
+                    "RAM: {} / {}",
+                    human_kb(self.sys_ram_used_kb),
+                    human_kb(self.sys_ram_total_kb)
+                ))
+                .size(11.0)
+                .color(t.faint),
+            );
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut label = format!(
-                    "{} result{}",
-                    self.results.len(),
-                    if self.results.len() == 1 { "" } else { "s" }
-                );
-                if self.truncated {
-                    label.push('+');
-                }
-                if self.elapsed_ms > 0 {
-                    label.push_str(&format!("  ·  {} ms", self.elapsed_ms));
-                }
-                ui.label(egui::RichText::new(label).color(t.dim).size(12.0));
-                ui.separator();
-                let (backend_text, backend_color) = if self.engine.connected() {
-                    (self.backend_label.clone(), t.faint)
-                } else {
-                    (format!("{} · unreachable", self.backend_label), t.bad)
-                };
                 ui.label(
-                    egui::RichText::new(backend_text)
-                        .color(backend_color)
-                        .size(12.0),
+                    egui::RichText::new(
+                        "↑↓ navigate · Enter open · Ctrl+F search · Ctrl+A select all · Esc clear",
+                    )
+                    .size(10.5)
+                    .color(t.faint),
+                );
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("Indexed: {}", human_count(files + dirs)))
+                        .size(11.0)
+                        .color(t.faint),
                 );
                 ui.separator();
                 ui.label(
-                    egui::RichText::new("↑↓ navigate · Enter open · Ctrl+T tab")
-                        .color(t.faint)
-                        .size(12.0),
+                    egui::RichText::new(format!("Search time: {} ms", self.elapsed_ms))
+                        .size(11.0)
+                        .color(t.faint),
                 );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Query: {} results",
+                        human_count(self.results.len() as u64)
+                    ))
+                    .size(11.0)
+                    .color(t.faint),
+                );
+                ui.separator();
+                for level in ZOOM_LEVELS.iter().rev() {
+                    if ui
+                        .selectable_label(
+                            (self.prefs.zoom - *level).abs() < 0.001,
+                            egui::RichText::new(format!("{:.0}%", level * 100.0)).size(10.5),
+                        )
+                        .clicked()
+                    {
+                        self.prefs.zoom = *level;
+                        ui.ctx().set_zoom_factor(*level);
+                        self.prefs.save();
+                    }
+                }
+                ui.label(bar_label(&t, "Zoom"));
             });
         });
     }
+
+    /// Sample system CPU and RAM for the status bar (throttled to every 2 s).
+    fn refresh_sys_stats(&mut self) {
+        if self.sys_at.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.sys_at = Instant::now();
+        if let Ok(text) = std::fs::read_to_string("/proc/stat")
+            && let Some(line) = text.lines().next()
+        {
+            let vals: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|v| v.parse().ok())
+                .collect();
+            if vals.len() >= 5 {
+                let idle = vals[3] + vals.get(4).copied().unwrap_or(0);
+                let total: u64 = vals.iter().sum();
+                let (prev_busy, prev_total) = self.sys_prev;
+                if prev_total != 0 && total > prev_total {
+                    let dt = (total - prev_total) as f32;
+                    let db = (total - idle).saturating_sub(prev_busy) as f32;
+                    self.sys_cpu = (db / dt * 100.0).clamp(0.0, 100.0);
+                }
+                self.sys_prev = (total - idle, total);
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string("/proc/meminfo") {
+            let mut total = 0u64;
+            let mut avail = 0u64;
+            for line in text.lines() {
+                let value = || {
+                    line.split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(0)
+                };
+                if line.starts_with("MemTotal:") {
+                    total = value();
+                } else if line.starts_with("MemAvailable:") {
+                    avail = value();
+                }
+            }
+            self.sys_ram_total_kb = total;
+            self.sys_ram_used_kb = total.saturating_sub(avail);
+        }
+    }
+
+    /// The view tab strip above the status bar, plus the bulk-action controls.
+    fn view_tabs(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let n = self.results.len();
+        egui::TopBottomPanel::bottom("viewtabs")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for v in ViewTab::ALL {
+                        if ui.selectable_label(self.view == *v, v.label()).clicked() {
+                            self.view = *v;
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                !self.checked.is_empty(),
+                                egui::Button::new(egui::RichText::new("Copy paths").size(11.5)),
+                            )
+                            .on_hover_text("Copy the selected paths to the clipboard")
+                            .clicked()
+                        {
+                            let mut paths: Vec<String> = self
+                                .results
+                                .iter()
+                                .filter(|r| self.checked.contains(&r.path))
+                                .map(|r| r.path.display().to_string())
+                                .collect();
+                            paths.sort();
+                            ui.ctx().copy_text(paths.join("\n"));
+                        }
+                        if ui
+                            .add_enabled(
+                                n > 0,
+                                egui::Button::new(egui::RichText::new("Invert").size(11.5)),
+                            )
+                            .clicked()
+                        {
+                            let all: Vec<PathBuf> =
+                                self.results.iter().map(|r| r.path.clone()).collect();
+                            for p in all {
+                                if !self.checked.remove(&p) {
+                                    self.checked.insert(p);
+                                }
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                n > 0,
+                                egui::Button::new(egui::RichText::new("Select All").size(11.5)),
+                            )
+                            .clicked()
+                        {
+                            self.checked = self.results.iter().map(|r| r.path.clone()).collect();
+                        }
+                        ui.label(bar_label(&t, "Bulk Actions:"));
+                    });
+                });
+            });
+    }
+
+    /// The recent-searches chip row.
+    fn recent_row(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let history = self.prefs.history.clone();
+        egui::TopBottomPanel::bottom("recent")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(10, 3)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(bar_label(&t, "Recent searches:"));
+                    if history.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                "nothing yet — press Enter in the search box to keep one",
+                            )
+                            .size(11.0)
+                            .color(t.faint),
+                        );
+                    }
+                    for q in history.iter().take(8) {
+                        if chip(ui, &t, q, false).clicked() {
+                            self.run_query(q);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !history.is_empty()
+                            && ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("Clear").size(11.0))
+                                        .frame(false),
+                                )
+                                .clicked()
+                        {
+                            self.prefs.clear_history();
+                            self.sync_history();
+                        }
+                    });
+                });
+            });
+    }
+
+    /// Manager for saved searches.
+    fn saved_dialog(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let mut open = self.show_saved;
+        let mut apply: Option<usize> = None;
+        let mut delete: Option<usize> = None;
+        egui::Window::new("Saved searches")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                if self.prefs.saved.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No saved searches yet.")
+                            .size(12.0)
+                            .color(t.dim),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Set up a query and filters, then use \"Save current search…\".",
+                        )
+                        .size(11.0)
+                        .color(t.faint),
+                    );
+                }
+                for (i, s) in self.prefs.saved.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&s.name).strong().color(t.text));
+                        ui.label(
+                            egui::RichText::new(if s.query.is_empty() {
+                                "(all files)"
+                            } else {
+                                s.query.as_str()
+                            })
+                            .size(11.0)
+                            .color(t.dim),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Delete").clicked() {
+                                delete = Some(i);
+                            }
+                            if ui.small_button("Apply").clicked() {
+                                apply = Some(i);
+                            }
+                        });
+                    });
+                }
+                ui.separator();
+                if ui.button("Save current search…").clicked() {
+                    self.show_save = true;
+                    self.save_name = self.query.clone();
+                }
+            });
+        if let Some(i) = delete {
+            self.prefs.saved.remove(i);
+            self.prefs.save();
+        }
+        if let Some(i) = apply {
+            self.apply_saved(i);
+        }
+        self.show_saved = open;
+    }
+
+    /// Name-and-save popup for the current query.
+    fn save_search_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_save {
+            return;
+        }
+        let t = self.theme();
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new("Save current search")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(340.0)
+            .show(ctx, |ui| {
+                ui.label(bar_label(&t, "Name"));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.save_name)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("e.g. Work invoices"),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    save = true;
+                }
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Query: {}   |   Type: {}   |   Location: {}",
+                        if self.query.is_empty() {
+                            "(all files)"
+                        } else {
+                            self.query.as_str()
+                        },
+                        self.category_label(),
+                        match &self.under {
+                            None => "everywhere".to_string(),
+                            Some(p) => location_label(p),
+                        }
+                    ))
+                    .size(11.0)
+                    .color(t.faint),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if save {
+            let name = {
+                let n = self.save_name.trim();
+                if n.is_empty() {
+                    if self.query.is_empty() {
+                        "All files".to_string()
+                    } else {
+                        self.query.clone()
+                    }
+                } else {
+                    n.to_string()
+                }
+            };
+            self.prefs.saved.retain(|s| s.name != name);
+            self.prefs.saved.push(SavedSearch {
+                name,
+                query: self.query.clone(),
+                content_mode: self.content_mode,
+                regex_mode: self.regex_mode,
+                case_sensitive: self.case_sensitive,
+                under: self.under.clone(),
+            });
+            if self.prefs.saved.len() > 50 {
+                self.prefs.saved.remove(0);
+            }
+            self.prefs.save();
+            self.save_name.clear();
+            self.show_save = false;
+            self.show_saved = true;
+        } else if cancel {
+            self.show_save = false;
+        }
+    }
+
+    /// Apply a saved search to the live query.
+    fn apply_saved(&mut self, i: usize) {
+        let Some(s) = self.prefs.saved.get(i).cloned() else {
+            return;
+        };
+        self.query = s.query;
+        self.content_mode = s.content_mode;
+        self.regex_mode = s.regex_mode;
+        self.case_sensitive = s.case_sensitive;
+        if self.under != s.under {
+            self.under = s.under;
+            self.push_location();
+        }
+        self.history_idx = None;
+        self.prefs.commit_query(&self.query.clone());
+        self.sync_history();
+        self.send_query();
+    }
+}
 
 fn breadcrumb_ui(ui: &mut egui::Ui, path: &Path, dim: egui::Color32) {
     let Some(parent) = path.parent() else { return };

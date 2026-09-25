@@ -79,13 +79,13 @@ Both scripts fail fast with install instructions when their tool is missing, so
   `--share=network` if you want to `curl` it from outside.
 - **Flatpak: only `$HOME` is visible.** Grant `--filesystem=host:ro` to search
   the rest of the disk.
-- **Empty files preview as "No preview (binary or too large)".** A 0-byte text
-  file (`test.md`) hits the "no preview" branch instead of showing an empty
-  document. Cosmetic, but wrong.
+- **Empty files have no preview.** A 0-byte text file shows “No text preview
+  for this file.” rather than an empty document.
 - **The optional content index has no switch.** `content_index_enabled` exists
   and works, but is only read from `~/.config/everything-linux/config.json` —
-  there is no CLI flag and no GUI toggle. Note that file does **not** exist on
-  this machine yet, so the app is running entirely on defaults.
+  there is no CLI flag and no GUI toggle (the sidebar shows its state read-only).
+  Note that file does **not** exist on this machine yet, so the app is running
+  entirely on defaults.
 - **`everything-gui` is still built but no longer packaged.** If you add a
   binary or a `dlopen`ed library, update three places in step:
   `GUI_DEPENDS` in `scripts/package-deb.sh`, the `Requires:` sonames in
@@ -97,7 +97,28 @@ Both scripts fail fast with install instructions when their tool is missing, so
 
 ---
 
-## 4. Measured footprint (for reference)
+## 4. UI reference: what was not built
+
+The window was rebuilt to the layout in `ui-screenshots/main1.png`. These parts
+of that reference are **not** implemented, so they are absent rather than faked:
+
+| Reference element | Status |
+| --- | --- |
+| `Duplicate Finder` toolbar button | Not built (would be a whole feature) |
+| `Fuzzy` toolbar button | Not built (needs fuzzy ranking in the engine) |
+| `Tags` tab, tag chips, bulk `Tag` action | Not built (needs a tag store) |
+| `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
+| `Created` **column** in the table | Deferred: birth time is shown in the Details tab, but a table column would need `btime` stored in the on-disk index (a format change) |
+| `Full Text (content + name)` scope | Offered as `Filenames` / `Full path` / `Contents` instead: the engine ANDs name and content, so an OR mode needs an engine change |
+| Per-location counts in the sidebar | Locations are listed with their paths; only the categories carry live counts |
+| `Follow symlinks` advanced checkbox | Not built (the walker does not follow symlinks) |
+| `Content: Any` filter | Not built (no meaningful second value today) |
+
+The reference also has a single tab strip; this app keeps its **multi-search
+tabs** above the toolbar as well (an earlier explicit request), and uses the
+bottom strip for view switching.
+
+## 5. Measured footprint (for reference)
 
 Taken on this machine: KDE/Plasma on Wayland, release build, ~85 000 files,
 ~45 s after launch (index settled).
@@ -120,7 +141,7 @@ and its copy of the index from the resident set.
 
 ---
 
-## 5. Not started (deliberately deferred)
+## 6. Not started (deliberately deferred)
 
 From [`scope.md` §12](scope.md#12-delivery-phases). Phase 1 is the committed
 deliverable; these are gated on request:
@@ -139,7 +160,7 @@ deliverable; these are gated on request:
 
 ---
 
-## 6. Repo & tooling gaps
+## 7. Repo & tooling gaps
 
 - **No CI.** There is no `.github/`, `.gitlab-ci.yml` or similar. Nothing runs
   the test suite or the packaging scripts automatically; `cargo test
@@ -149,3 +170,9 @@ deliverable; these are gated on request:
 - **`packaging/flatpak/cargo-sources.json` *is* committed** (491 crates,
   generated from `Cargo.lock`). It must be regenerated — `make cargo-sources` —
   whenever dependencies change, or the Flatpak build will fail offline.
+- **Screenshots could not be captured** while the 0.12.0 UI was being built:
+  KWin's screenshot DBus service stopped replying
+  (`KWin screenshot request failed: Did not receive a reply`), for `spectacle`
+  and with the app closed too. The redesign was therefore verified by building,
+  running and reading the layout code, not visually — it is worth a look on
+  first launch.
