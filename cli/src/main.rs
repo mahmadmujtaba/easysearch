@@ -5,7 +5,9 @@
 //! when no GUI is involved.
 
 use clap::{Parser, Subcommand};
+use everything_core::update::{CurlFetcher, Stage, UpdateConfig, Updater};
 use everything_core::{Backend, Config, Query, State};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -75,6 +77,28 @@ enum Command {
     Status,
     /// Start the engine (and wait for the index) — useful for warm-up
     Index,
+    /// Update this installation in place over HTTPS (no .deb/.rpm)
+    #[command(name = "self-update")]
+    SelfUpdate {
+        /// Only check for a newer release; download/install nothing
+        #[arg(long)]
+        check: bool,
+        /// Install without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Override the release manifest URL
+        #[arg(long, value_name = "URL")]
+        manifest: Option<String>,
+        /// Override the trusted Ed25519 public key (hex)
+        #[arg(long, value_name = "HEX")]
+        pubkey: Option<String>,
+        /// Install into this directory (default: the running binary's)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Stop a running daemon afterwards so it starts the new binary
+        #[arg(long)]
+        restart_daemon: bool,
+    },
 }
 
 fn main() {
@@ -207,7 +231,152 @@ fn main() {
                 eprintln!("warning: index did not reach Live state");
             }
         }
+        Command::SelfUpdate {
+            check,
+            yes,
+            manifest,
+            pubkey,
+            dir,
+            restart_daemon,
+        } => self_update(
+            check,
+            yes,
+            manifest,
+            pubkey,
+            dir,
+            restart_daemon,
+            cli.remote,
+        ),
     }
+}
+
+/// `everything self-update`: check a signed HTTPS manifest and, with consent,
+/// replace the installed binaries in place. See `docs/updates.md`.
+#[allow(clippy::too_many_arguments)]
+fn self_update(
+    check: bool,
+    yes: bool,
+    manifest: Option<String>,
+    pubkey: Option<String>,
+    dir: Option<PathBuf>,
+    restart_daemon: bool,
+    remote: Option<String>,
+) {
+    if UpdateConfig::disabled() {
+        eprintln!("updates are disabled (EVERYTHING_NO_UPDATE is set)");
+        return;
+    }
+
+    let mut config = UpdateConfig::default().with_env();
+    if let Some(url) = manifest {
+        config.manifest_url = url;
+    }
+    if let Some(key) = pubkey {
+        config.public_key_hex = Some(key);
+    }
+    if let Some(dir) = dir {
+        config.install_names = everything_core::update::installed_binaries(&dir);
+        config.install_dir = Some(dir);
+    }
+
+    let updater = Updater::new(config);
+    let fetch = CurlFetcher::new();
+    println!("current version: {}", updater.config().current_version);
+    println!("checking {} …", updater.config().manifest_url);
+
+    let available = match updater.check(&fetch) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            println!(
+                "up to date ({} is the newest release)",
+                updater.config().current_version
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!(
+        "update available: {} (you have {})",
+        available.version,
+        updater.config().current_version
+    );
+    if !available.notes.trim().is_empty() {
+        println!("\n{}", available.notes.trim());
+    }
+    if check {
+        return;
+    }
+    if !yes && !confirm("install it now?") {
+        println!("cancelled");
+        return;
+    }
+
+    let mut last_stage: Option<Stage> = None;
+    let result = updater.install(&available, &fetch, &mut |stage, done, total| {
+        if last_stage != Some(stage) {
+            last_stage = Some(stage);
+            eprint!("\r{:<12}", stage_label(stage));
+        }
+        if stage == Stage::Downloading && total > 0 {
+            let pct = (done * 100 / total).min(100);
+            eprint!(
+                "\r{:<12} {pct:>3}% ({} / {})",
+                stage_label(stage),
+                done,
+                total
+            );
+        }
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+    });
+    eprintln!();
+
+    match result {
+        Ok(report) => {
+            println!("installed {}:", report.version);
+            for f in &report.files {
+                println!("  {}", f.display());
+            }
+            if restart_daemon && stop_daemon(remote.as_deref()) {
+                println!("stopped the running daemon — it will restart on the next launch");
+            }
+            if report.restart_required {
+                println!("restart the app (and daemon) to run the new version");
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn stage_label(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Downloading => "download",
+        Stage::Verifying => "verify",
+        Stage::Installing => "install",
+    }
+}
+
+/// Prompt on stderr and read a yes/no answer from stdin.
+fn confirm(prompt: &str) -> bool {
+    eprint!("{prompt} [y/N] ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Ask a daemon (the one on `--remote`, else the default address) to stop.
+fn stop_daemon(remote: Option<&str>) -> bool {
+    let addr = remote.unwrap_or(everything_core::api::DEFAULT_ADDR);
+    everything_core::remote::request(addr, "POST", "/v1/shutdown", Some(b"{}")).is_ok()
 }
 
 /// Run `parse` on a flag value, printing a clear error and exiting non-zero on

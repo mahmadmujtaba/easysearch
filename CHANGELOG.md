@@ -4,6 +4,39 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-09-26
+
+### Added
+
+- **In-place self-updates over the internet** — no `.deb`/`.rpm`, no package
+  manager, no reinstall. A release publishes a signed `manifest.json` (plus a
+  detached Ed25519 signature); the app fetches it over HTTPS only, verifies the
+  signature against a public key compiled into the binary, checks each download's
+  SHA-256, and `rename()`s the new binaries over the running ones (atomic, and
+  safe while the old binary is executing). Every step fails closed: no key, no
+  signature, a non-HTTPS URL, a bad hash, or a not-newer version all mean
+  *nothing is written*. Assets are raw binaries, so there is no archive to
+  unpack. See [`docs/updates.md`](docs/updates.md).
+- **GUI: Help ▸ Check for updates…** opens a *Software update* window (release
+  notes, progress bar, **Install update**, **Restart now**). A quiet check runs at
+  launch at most once a day, and a `⬆ v… available` badge appears beside the
+  version in the status bar. Both are configurable in **Settings ▸ Updates**.
+- **CLI: `everything self-update`** (`--check`, `--yes`, `--manifest`,
+  `--pubkey`, `--dir`, `--restart-daemon`).
+- **`scripts/release-sign.sh`** builds the manifest from `target/release/*`,
+  signs it with `openssl`, and verifies its own signature before you ship it.
+- **`POST /v1/shutdown`** on the daemon, so an in-place update can stop the old
+  daemon and let the relaunched app start the new one.
+- **The running version in the status bar** (bottom-right, next to the hints).
+- **Focus follows the pointer.** Clicking anywhere outside the search field now
+  drops its keyboard focus, so ↑/↓/PgUp/PgDn/Enter drive the results list; typing
+  any printable key immediately re-grabs the field and starts a new query.
+
+### Changed
+
+- The status bar's right-hand block now shows the version, and — when one is
+  known — a click-through badge for the available update.
+
 ## [0.14.1] - 2026-09-26
 
 ### Fixed

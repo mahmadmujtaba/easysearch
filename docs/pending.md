@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.11.0** (2026-09-24), in rough priority order. Everything
+Outstanding items at **v0.15.0** (2026-09-26), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -176,7 +176,7 @@ deliverable; these are gated on request:
 
 - **No CI.** There is no `.github/`, `.gitlab-ci.yml` or similar. Nothing runs
   the test suite or the packaging scripts automatically; `cargo test
-  --workspace` (42 tests) and `make validate-packaging` are manual.
+  --workspace` and `make validate-packaging` are manual.
 - **`dist/` is gitignored**, so the `.deb`, the shareable single binary and any
   future `.rpm`/`.flatpak` are never committed — they are build outputs only.
 - **`packaging/flatpak/cargo-sources.json` *is* committed** (491 crates,
@@ -188,3 +188,25 @@ deliverable; these are gated on request:
   and with the app closed too. The redesign was therefore verified by building,
   running and reading the layout code, not visually — it is worth a look on
   first launch.
+
+---
+
+## 9. Self-update — what is deliberately not done yet
+
+The in-place updater is complete and tested end-to-end (13 unit tests plus a
+manual run against real `openssl`-signed artifacts); see
+[`updates.md`](updates.md). These pieces are intentionally outside the repo or
+not yet built:
+
+- **No release host is configured.** `DEFAULT_MANIFEST_URL` is a placeholder
+  GitHub path. Point it (or `EVERYTHING_UPDATE_URL`) at the real host.
+- **No public release has been signed yet.** The keypair exists and its public
+  half is compiled into the binary; the private half lives at
+  `~/.config/everything-linux/release-signing-key.pem` (never committed). Back it
+  up — losing it means future updates are refused by existing installs.
+- **Manual release step.** Nothing runs `scripts/release-sign.sh`
+  automatically; wire it into CI when there is one.
+- **No key rotation / revocation.** Changing the key needs a rebuild with the new
+  public key embedded; a follow-up could accept a signed *key-change* manifest.
+- **Only Linux ELF binaries.** The manifest is per-target, but no Windows/macOS
+  packaging exists (see §7).

@@ -84,6 +84,15 @@ impl Backend {
         }
     }
 
+    /// Stop a remote daemon (no-op in-process). Returns true if a daemon was
+    /// asked to stop — useful before relaunching onto a newly installed binary.
+    pub fn shutdown(&self) -> bool {
+        match self {
+            Backend::Local(_) => false,
+            Backend::Remote(r) => r.shutdown().is_ok(),
+        }
+    }
+
     /// Number of entries matching `q`, without shipping them (used for the
     /// sidebar's per-category counts).
     pub fn count(&self, q: &Query) -> Result<u64, String> {

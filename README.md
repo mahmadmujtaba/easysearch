@@ -12,8 +12,10 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
   accelerates repeated queries (default off).
 - **Everything-style queries**: `*.pdf`, `invoice 2026`, `!draft`, regex mode,
   case toggle, hidden files, basename or full-path matching.
-- **Lightweight**: no GC, no runtime, no database. See the footprint budget in
-  [`docs/scope.md`](docs/scope.md).
+- **Self-updating**: check a signed HTTPS manifest and replace the binaries in
+  place — no `.deb`/`.rpm`, no reinstall. See [`docs/updates.md`](docs/updates.md).
+- **Lightweight**: no GC, no runtime, no bundled web engine. See the footprint
+  budget in [`docs/scope.md`](docs/scope.md).
 
 ## Components
 
@@ -58,6 +60,27 @@ which identifiers to change before publishing.
 > identifiers, known rough edges, measured footprint — is tracked in
 > [`docs/pending.md`](docs/pending.md).
 
+## Updating
+
+Packages are for the first install; updates happen in place over the network.
+The GUI checks quietly at launch (**Help ▸ Check for updates…** to do it now) and
+can install and restart onto the new build; the CLI can do the same:
+
+```sh
+./target/release/everything self-update --check
+./target/release/everything self-update
+```
+
+A release publishes a `manifest.json` signed with Ed25519 plus a SHA-256 per
+asset. The client fetches it over **HTTPS only**, verifies the signature against
+a public key compiled into the binary, verifies every download's checksum, and
+only then `rename()`s the new binaries over the old ones (atomic, and safe while
+the old binary is running). Anything that fails — a bad signature, a mismatched
+hash, a cleartext URL, a version that is not newer — means nothing is written.
+
+To publish a release, see [`docs/updates.md`](docs/updates.md) and
+[`scripts/release-sign.sh`](scripts/release-sign.sh).
+
 ## Usage
 
 ```sh
@@ -73,6 +96,8 @@ make run                          # or: ./target/release/everything-linux
 ./target/release/everything search '*.log' --modified-within 7d
 ./target/release/everything search '*' --under /srv/data
 ./target/release/everything status                      # index state, counts
+./target/release/everything self-update --check         # is a newer release out?
+./target/release/everything self-update                 # install it in place
 ```
 
 The GUI follows the “FileSearch Pro” reference layout (see

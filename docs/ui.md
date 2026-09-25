@@ -164,8 +164,11 @@ The **view tabs** above the status bar switch the main area between *Results*,
 
 Live index state (`Indexing: idle (86,100 files)` or a progress spinner),
 system **CPU** and **RAM**, the number of results and the search time, the total
-indexed entries, the **UI zoom** (100% / 110% / 125% — also in Settings), and the
-current keyboard hints. Hover any result's row for its full path.
+indexed entries, the **UI zoom** (100% / 110% / 125% — also in Settings), the
+current keyboard hints, and — at the far right — the **running version**
+(`v0.15.0`). When a newer release is known, an `⬆ v… available` badge sits beside
+the version and opens **Help ▸ Check for updates…** (see
+[`updates.md`](updates.md)). Hover any result's row for its full path.
 
 ## Keyboard shortcuts
 
@@ -182,6 +185,11 @@ current keyboard hints. Hover any result's row for its full path.
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+1…9` | Select tab |
 | `↑` `↓` in an empty search box | Cycle search history |
+
+**Focus follows the pointer.** Clicking anywhere outside the search field drops
+its keyboard focus, so `↑`/`↓`/`PgUp`/`PgDn`/`Enter` act on the results; the
+first printable key you type then re-grabs the field and starts a new query, so
+you never have to click back into it.
 
 ## Theming and fonts
 

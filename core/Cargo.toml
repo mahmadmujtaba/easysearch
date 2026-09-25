@@ -19,3 +19,5 @@ rayon = "1"
 memmap2 = "0.9"
 libc = "0.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+ed25519-dalek = "2"
+sha2 = "0.11.0"

@@ -38,18 +38,20 @@ impl Remote {
         let poll_addr = addr.clone();
         std::thread::Builder::new()
             .name("daemon-poll".into())
-            .spawn(move || loop {
-                match request(&poll_addr, "GET", "/v1/status", None) {
-                    Ok(body) => match serde_json::from_slice::<StatusReport>(&body) {
-                        Ok(report) => {
-                            *poll_report.write().unwrap() = Some(report);
-                            poll_connected.store(true, Ordering::Relaxed);
-                        }
+            .spawn(move || {
+                loop {
+                    match request(&poll_addr, "GET", "/v1/status", None) {
+                        Ok(body) => match serde_json::from_slice::<StatusReport>(&body) {
+                            Ok(report) => {
+                                *poll_report.write().unwrap() = Some(report);
+                                poll_connected.store(true, Ordering::Relaxed);
+                            }
+                            Err(_) => poll_connected.store(false, Ordering::Relaxed),
+                        },
                         Err(_) => poll_connected.store(false, Ordering::Relaxed),
-                    },
-                    Err(_) => poll_connected.store(false, Ordering::Relaxed),
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
                 }
-                std::thread::sleep(POLL_INTERVAL);
             })
             .ok();
 
@@ -84,6 +86,12 @@ impl Remote {
 
     pub fn rebuild(&self) -> Result<(), String> {
         request(&self.addr, "POST", "/v1/rebuild", Some(b"{}")).map(|_| ())
+    }
+
+    /// Ask the daemon to stop (it exits). Used when restarting onto a freshly
+    /// installed binary; a later `ensure_daemon` starts the new one.
+    pub fn shutdown(&self) -> Result<(), String> {
+        request(&self.addr, "POST", "/v1/shutdown", Some(b"{}")).map(|_| ())
     }
 
     /// Number of entries matching `q` (the daemon counts without shipping rows).

@@ -11,6 +11,7 @@
 //!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
 //! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
+//! POST /v1/shutdown → {"ok":true}, then the daemon stops (and exits)
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
 //!                              returned when it changes (or on timeout)
 //! ```
@@ -30,6 +31,7 @@ use everything_core::remote::percent_decode;
 use everything_core::{Engine, Query};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -41,6 +43,9 @@ pub struct Daemon {
     started: Instant,
     version: String,
     inflight: AtomicUsize,
+    /// Set by [`Daemon::serve_forever`]; lets `POST /v1/shutdown` stop the
+    /// accept loop (used to restart onto a freshly installed binary).
+    server: OnceLock<Arc<Server>>,
 }
 
 impl Daemon {
@@ -50,11 +55,13 @@ impl Daemon {
             started: Instant::now(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             inflight: AtomicUsize::new(0),
+            server: OnceLock::new(),
         })
     }
 
     /// Accept connections until the server stops, one thread per request.
     pub fn serve_forever(self: Arc<Self>, server: Arc<Server>) {
+        let _ = self.server.set(Arc::clone(&server));
         let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
         for request in server.incoming_requests() {
             while self.inflight.load(Ordering::Relaxed) >= MAX_CONCURRENCY {
@@ -124,6 +131,10 @@ impl Daemon {
                 self.engine.rebuild();
                 (200, r#"{"ok":true}"#.to_string())
             }
+            (Method::Post, "/v1/shutdown") => {
+                self.request_shutdown();
+                (200, r#"{"ok":true}"#.to_string())
+            }
             (Method::Get, "/") => (200, self.health_json()),
             _ => (404, err_json(&format!("no route for {method} {path}"))),
         };
@@ -132,6 +143,18 @@ impl Daemon {
             .with_header(header("Content-Type", "application/json; charset=utf-8"));
         if let Err(e) = request.respond(response) {
             eprintln!("daemon: failed to send response: {e}");
+        }
+    }
+
+    /// Stop serving (after the response has gone out) so `run_forever` returns
+    /// and the process exits. Used by an in-place update to drop the old binary.
+    fn request_shutdown(&self) {
+        if let Some(server) = self.server.get() {
+            let server = Arc::clone(server);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                server.unblock();
+            });
         }
     }
 

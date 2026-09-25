@@ -20,6 +20,7 @@ pub mod overlay;
 pub mod remote;
 pub mod roots;
 pub mod sqlite_index;
+pub mod update;
 pub mod walker;
 pub mod watcher;
 
@@ -28,3 +29,4 @@ pub use config::Config;
 pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
 pub use matcher::{Category, CompiledQuery, Query};
 pub use remote::Remote;
+pub use update::{Available, Fetcher, InstallReport, Stage, UpdateConfig, UpdateError, Updater};
