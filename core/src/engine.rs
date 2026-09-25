@@ -601,7 +601,7 @@ impl Engine {
 ///
 /// `files_only` forces directories out even when `include_dirs` is set (content
 /// search only ever looks inside files).
-fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
+pub(crate) fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
     if meta.is_dir && (files_only || !cq.include_dirs) {
         return false;
     }

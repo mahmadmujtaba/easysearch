@@ -118,7 +118,15 @@ The reference also has a single tab strip; this app keeps its **multi-search
 tabs** above the toolbar as well (an earlier explicit request), and uses the
 bottom strip for view switching.
 
-## 5. Measured footprint (for reference)
+## 5. SQLite index — in progress
+
+The index is being moved to a SQLite database in a `db/` folder, written by the
+daemon and read by the GUI. The storage module (`core/src/sqlite_index.rs`) is
+built and tested but **not yet wired into the engine**; the app still runs on
+the mmap index. Design, trade-offs, the wiring plan and three open decisions are
+in [`sqlite.md`](sqlite.md).
+
+## 6. Measured footprint (for reference)
 
 Taken on this machine: KDE/Plasma on Wayland, release build, ~85 000 files,
 ~45 s after launch (index settled).
@@ -141,7 +149,7 @@ and its copy of the index from the resident set.
 
 ---
 
-## 6. Not started (deliberately deferred)
+## 7. Not started (deliberately deferred)
 
 From [`scope.md` §12](scope.md#12-delivery-phases). Phase 1 is the committed
 deliverable; these are gated on request:
@@ -160,7 +168,7 @@ deliverable; these are gated on request:
 
 ---
 
-## 7. Repo & tooling gaps
+## 8. Repo & tooling gaps
 
 - **No CI.** There is no `.github/`, `.gitlab-ci.yml` or similar. Nothing runs
   the test suite or the packaging scripts automatically; `cargo test

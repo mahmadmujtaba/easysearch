@@ -18,3 +18,4 @@ notify = "7"
 rayon = "1"
 memmap2 = "0.9"
 libc = "0.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }

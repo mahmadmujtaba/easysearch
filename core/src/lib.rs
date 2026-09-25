@@ -19,6 +19,7 @@ pub mod matcher;
 pub mod overlay;
 pub mod remote;
 pub mod roots;
+pub mod sqlite_index;
 pub mod walker;
 pub mod watcher;
 
