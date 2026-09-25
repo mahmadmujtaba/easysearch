@@ -60,6 +60,21 @@ predicate whether the app is counting or listing:
 | **Case** / **Hidden** | case-sensitive matching; include dot-files |
 | **✕ Clear Filters** | resets all of the above (enabled only when something is set) |
 
+## Ignoring files
+
+Indexing honours `.gitignore` and `.ignore` files found in the tree, plus a
+global list at `~/.config/everything-linux/ignore`. Both are managed without
+hand-editing:
+
+- **Tools ▸ Ignore files…** opens an editor for the global list (`.gitignore`
+syntax; `**/node_modules/` matches at any depth) with **Save & rebuild**,
+**Reload** and **Rebuild index**.
+- **Settings ▸ Indexing** toggles whether ignore files are consulted at all.
+
+The toggle is **live**: it is pushed to the running engine (or, over
+`POST /v1/ignore`, to the daemon) and followed by a rebuild, so it takes effect
+immediately rather than at the next restart.
+
 ## Results
 
 Columns: `#` row number · **Name** (with a type badge and, in Cozy density, a

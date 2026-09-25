@@ -85,7 +85,8 @@ Both scripts fail fast with install instructions when their tool is missing, so
   and works, but is only read from `~/.config/everything-linux/config.json` —
   there is no CLI flag and no GUI toggle (the sidebar shows its state read-only).
   Note that file does **not** exist on this machine yet, so the app is running
-  entirely on defaults.
+  entirely on defaults. (The *ignore-files* setting is no longer in this
+  category: v0.16.0 gave it a GUI editor and a live `POST /v1/ignore` toggle.)
 - **`everything-gui` is still built but no longer packaged.** If you add a
   binary or a `dlopen`ed library, update three places in step:
   `GUI_DEPENDS` in `scripts/package-deb.sh`, the `Requires:` sonames in
@@ -162,7 +163,7 @@ deliverable; these are gated on request:
 - Bundled docx extractor (drop the `docx2txt` dependency)
 - Global hotkey
 - Substring / fuzzy filename ranking (fzf-style)
-- `.gitignore` handling UI
+- ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)
 
 **Phase 3 — stretch**
 - `fanotify` watcher (no per-directory watch limits; needs privileges)

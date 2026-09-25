@@ -1008,6 +1008,13 @@ struct App {
     update_rx: Option<mpsc::Receiver<UpdateMsg>>,
     /// Version of a newer release, once known (drives the status-bar badge).
     update_banner: Option<String>,
+    // --- ignore files -----------------------------------------------------
+    /// The “Ignore files” window is open.
+    show_ignore: bool,
+    /// Edit buffer for the global ignore file.
+    ignore_text: String,
+    /// Transient status line shown inside the ignore window.
+    ignore_msg: Option<String>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
     /// Fingerprint of the desktop theme files, to follow system theme changes.
@@ -1219,6 +1226,9 @@ impl App {
             update_ui: UpdateUi::Idle,
             update_rx: None,
             update_banner: None,
+            show_ignore: false,
+            ignore_text: String::new(),
+            ignore_msg: None,
             pending_cmds: Vec::new(),
             theme_fp: theme_fingerprint(),
             theme_at: Instant::now(),
@@ -2881,7 +2891,8 @@ impl eframe::App for App {
             || self.show_save
             || self.show_saved
             || self.show_dups
-            || self.show_update;
+            || self.show_update
+            || self.show_ignore;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -3088,6 +3099,7 @@ impl eframe::App for App {
         self.save_search_dialog(ctx);
         self.duplicates_window(ctx);
         self.update_dialog(ctx);
+        self.ignore_dialog(ctx);
     }
 
     /// Persist open tabs and history on shutdown (eframe calls this on exit and
@@ -3236,6 +3248,20 @@ impl App {
                     .changed()
                 {
                     self.send_query();
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Indexing").strong());
+                let mut respect = self.status.respect_ignore_files;
+                if ui
+                    .checkbox(&mut respect, "Honor `.gitignore` / `.ignore` files")
+                    .on_hover_text("Off: index everything, ignoring ignore files entirely.")
+                    .changed()
+                {
+                    self.engine.set_respect_ignore(respect);
+                    self.status.respect_ignore_files = respect;
+                }
+                if ui.button("Edit ignore files…").clicked() {
+                    self.open_ignore_dialog();
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Configuration").strong());
@@ -3396,6 +3422,10 @@ impl App {
                     ui.menu_button("Tools", |ui| {
                         if ui.button("Rebuild index").clicked() {
                             self.engine.rebuild();
+                            ui.close_menu();
+                        }
+                        if ui.button("Ignore files…").clicked() {
+                            self.open_ignore_dialog();
                             ui.close_menu();
                         }
                         if ui.button("Save current search…").clicked() {
@@ -5376,6 +5406,145 @@ impl App {
         }
         if do_restart {
             self.restart_into_new_version();
+        }
+    }
+
+    // --- ignore files -----------------------------------------------------
+
+    fn open_ignore_dialog(&mut self) {
+        self.load_ignore_text();
+        self.ignore_msg = None;
+        self.show_ignore = true;
+    }
+
+    fn load_ignore_text(&mut self) {
+        let path = everything_core::walker::global_ignore_file();
+        self.ignore_text = std::fs::read_to_string(&path).unwrap_or_default();
+    }
+
+    /// The “Ignore files” window: toggle honoring ignore files, and edit the
+    /// global ignore list (Tools ▸ Ignore files…).
+    fn ignore_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_ignore {
+            return;
+        }
+        let t = self.theme();
+        let path = everything_core::walker::global_ignore_file();
+        let mut open = true;
+        let mut close = false;
+        let mut save = false;
+        let mut reload = false;
+        let mut rebuild = false;
+        let mut toggle: Option<bool> = None;
+        egui::Window::new("Ignore files")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(580.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Folders matching these patterns are skipped while indexing — build \
+                         trees, caches, virtualenvs. Patterns use .gitignore syntax, matched \
+                         relative to the search root; use a `**/` prefix to match at any depth.",
+                    )
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                ui.add_space(8.0);
+                let mut respect = self.status.respect_ignore_files;
+                if ui
+                    .checkbox(
+                        &mut respect,
+                        "Honor `.gitignore` / `.ignore` files while indexing",
+                    )
+                    .on_hover_text(
+                        "Off: index everything — ignore files (and this list) are not consulted.",
+                    )
+                    .changed()
+                {
+                    toggle = Some(respect);
+                }
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Global ignore file").strong());
+                ui.label(
+                    egui::RichText::new(path.display().to_string())
+                        .monospace()
+                        .size(11.0)
+                        .color(t.faint),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .max_height(230.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                        egui::TextEdit::multiline(&mut self.ignore_text)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(10)
+                            .hint_text(
+                                "# one pattern per line, e.g.\n**/node_modules/\n**/.cache/\n*.tmp",
+                            ),
+                    );
+                    });
+                if let Some(msg) = &self.ignore_msg {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(msg).size(11.5).color(t.dim));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Save & rebuild")
+                        .on_hover_text("Write the file (creating it if needed) and reindex.")
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui.button("Reload").clicked() {
+                        reload = true;
+                    }
+                    if ui.button("Rebuild index").clicked() {
+                        rebuild = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        self.show_ignore = open && !close;
+        if reload {
+            self.load_ignore_text();
+            self.ignore_msg = Some("Reloaded from disk.".to_string());
+        }
+        if let Some(on) = toggle {
+            self.engine.set_respect_ignore(on);
+            // Mirror it at once so the checkbox does not flicker while a remote
+            // daemon's status is still in flight.
+            self.status.respect_ignore_files = on;
+            self.ignore_msg = Some(if on {
+                "Honoring ignore files — reindexing…".to_string()
+            } else {
+                "Not consulting ignore files — reindexing…".to_string()
+            });
+        }
+        if rebuild {
+            self.engine.rebuild();
+            self.ignore_msg = Some("Rebuilding the index…".to_string());
+        }
+        if save {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::write(&path, self.ignore_text.as_bytes()) {
+                Ok(()) => {
+                    self.engine.rebuild();
+                    self.ignore_msg = Some(format!("Saved {} — reindexing…", path.display()));
+                }
+                Err(e) => {
+                    self.ignore_msg = Some(format!("Cannot write {}: {e}", path.display()));
+                }
+            }
         }
     }
 

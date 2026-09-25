@@ -4,6 +4,21 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-09-26
+
+### Added
+
+- **An ignore-files UI (Phase 2).** **Tools ▸ Ignore files…** edits the global
+  ignore list (`~/.config/everything-linux/ignore`, `.gitignore` syntax) with
+  **Save & rebuild** / **Reload** / **Rebuild index**, and **Settings ▸ Indexing**
+  toggles whether `.gitignore`/`.ignore` files are honoured at all.
+- **The toggle is live.** `Engine::set_respect_ignore` updates an atomic flag and
+  rebuilds; the daemon exposes it as `POST /v1/ignore` and reports the current
+  value as `status.respect_ignore_files`, so the GUI can change it on a remote
+  daemon and read back the truth. Previously the setting could only be changed by
+  hand-editing `config.json` and restarting.
+- `everything_core::walker::global_ignore_file()` exposes the ignore-file path.
+
 ## [0.15.1] - 2026-09-26
 
 ### Fixed

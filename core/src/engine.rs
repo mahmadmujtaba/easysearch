@@ -71,6 +71,10 @@ pub struct Status {
     pub base_entries: usize,
     pub base_files: u64,
     pub base_dirs: u64,
+    /// Whether `.gitignore`/`.ignore` files (and the global ignore file) are
+    /// honoured while walking. Live-toggleable via [`Engine::set_respect_ignore`].
+    #[serde(default)]
+    pub respect_ignore_files: bool,
 }
 
 impl Default for Status {
@@ -85,6 +89,7 @@ impl Default for Status {
             base_entries: 0,
             base_files: 0,
             base_dirs: 0,
+            respect_ignore_files: true,
         }
     }
 }
@@ -110,6 +115,9 @@ pub struct Engine {
     /// Cached (files, dirs) for the SQLite backend: `counts()` runs on every UI
     /// frame, and an aggregate over the whole table is not per-frame work.
     counts_cache: Arc<RwLock<((u64, u64), Instant)>>,
+    /// Whether ignore files are honoured. Read once per walk/rebuild, so a change
+    /// takes effect on the next rebuild; see [`Engine::set_respect_ignore`].
+    respect_ignore: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -125,6 +133,7 @@ impl Engine {
             base_entries: 0,
             base_files: 0,
             base_dirs: 0,
+            respect_ignore_files: config.respect_ignore_files,
         }));
         let cache = Arc::new(ContentIndex::new(
             config.content_index_enabled,
@@ -189,6 +198,8 @@ impl Engine {
             }
         }
 
+        let respect_ignore_files = config.respect_ignore_files;
+
         Engine {
             config,
             base,
@@ -202,6 +213,7 @@ impl Engine {
             rebuilding: Arc::new(AtomicBool::new(false)),
             index_path,
             counts_cache,
+            respect_ignore: Arc::new(AtomicBool::new(respect_ignore_files)),
         }
     }
 
@@ -232,6 +244,23 @@ impl Engine {
         self.sqlite.is_some()
     }
 
+    /// Turn honoring of `.gitignore`/`.ignore` files (and the global ignore file)
+    /// on or off. `rebuild` folds the change into the index right away.
+    pub fn set_respect_ignore(&self, on: bool, rebuild: bool) {
+        self.respect_ignore.store(on, Ordering::Relaxed);
+        if let Ok(mut s) = self.status.write() {
+            s.respect_ignore_files = on;
+        }
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// Current value of the ignore-files setting.
+    pub fn respect_ignore(&self) -> bool {
+        self.respect_ignore.load(Ordering::Relaxed)
+    }
+
     /// Start the watcher and the initial index build.
     pub fn start(&mut self) {
         self.start_watcher();
@@ -245,7 +274,7 @@ impl Engine {
                 let roots = Arc::clone(&self.roots);
                 let status = Arc::clone(&self.status);
                 let queue = self.queue.clone();
-                let respect_ignore = self.config.respect_ignore_files;
+                let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
                 let counts_cache = Arc::clone(&self.counts_cache);
                 std::thread::Builder::new()
                     .name("sqlite-build".into())
@@ -298,7 +327,7 @@ impl Engine {
             let queue = self.queue.clone();
             let overlay = Arc::clone(&self.overlay);
             let base = Arc::clone(&self.base);
-            let respect_ignore = self.config.respect_ignore_files;
+            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
             let persist = self.config.persist_index;
             let index_path = self.index_path.clone();
             std::thread::Builder::new()
@@ -338,7 +367,7 @@ impl Engine {
         let cache = Arc::clone(&self.cache);
         let queue = self.queue.clone();
         let secs = self.config.degraded_rescan_secs.max(5);
-        let respect_ignore = self.config.respect_ignore_files;
+        let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
 
         // Degraded mode: the kernel watcher failed (usually exhausted watch
         // limits). Fall back to periodic full rebuilds.
@@ -353,7 +382,7 @@ impl Engine {
             let queue = self.queue.clone();
             let rebuilding = Arc::clone(&self.rebuilding);
             let persist = self.config.persist_index;
-            let respect_ignore = self.config.respect_ignore_files;
+            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
             Arc::new(move || {
                 status.write().unwrap().degraded = true;
                 if started.swap(true, Ordering::SeqCst) {
@@ -430,7 +459,7 @@ impl Engine {
             let queue = self.queue.clone();
             let rebuilding = Arc::clone(&self.rebuilding);
             let counts_cache = Arc::clone(&self.counts_cache);
-            let respect_ignore = self.config.respect_ignore_files;
+            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
             std::thread::Builder::new()
                 .name("sqlite-rebuild".into())
                 .spawn(move || {
@@ -467,7 +496,7 @@ impl Engine {
         let overlay = Arc::clone(&self.overlay);
         let queue = self.queue.clone();
         let rebuilding = Arc::clone(&self.rebuilding);
-        let respect_ignore = self.config.respect_ignore_files;
+        let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
         let index_path = self.index_path.clone();
         std::thread::Builder::new()
             .name("index-rebuild".into())
@@ -523,6 +552,7 @@ impl Engine {
 
     pub fn status_snapshot(&self) -> Status {
         let mut s = self.status.read().unwrap().clone();
+        s.respect_ignore_files = self.respect_ignore.load(Ordering::Relaxed);
         s.content_index = if self.cache.enabled() {
             let (entries, bytes) = self.cache.stats();
             ContentIndexStatus::Enabled {

@@ -93,6 +93,16 @@ impl Backend {
         }
     }
 
+    /// Turn honoring of ignore files on/off (in-process engine, or the daemon).
+    pub fn set_respect_ignore(&self, on: bool) {
+        match self {
+            Backend::Local(e) => e.set_respect_ignore(on, true),
+            Backend::Remote(r) => {
+                let _ = r.set_respect_ignore(on);
+            }
+        }
+    }
+
     /// Number of entries matching `q`, without shipping them (used for the
     /// sidebar's per-category counts).
     pub fn count(&self, q: &Query) -> Result<u64, String> {

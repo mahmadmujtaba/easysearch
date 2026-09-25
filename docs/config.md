@@ -88,6 +88,12 @@ starting point:
 cp .gitignore ~/.config/everything-linux/ignore
 ```
 
+There is a GUI for this (no hand-editing required): **Tools ▸ Ignore files…**
+edits the file with a **Save & rebuild** button, and **Settings ▸ Indexing**
+toggles `respect_ignore_files`. The toggle is **live**: it is pushed to the
+running engine (or the daemon, over `POST /v1/ignore`) and followed by a rebuild,
+so it takes effect without restarting anything.
+
 ## Related files
 
 | Path | Contents |

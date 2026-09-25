@@ -94,6 +94,12 @@ impl Remote {
         request(&self.addr, "POST", "/v1/shutdown", Some(b"{}")).map(|_| ())
     }
 
+    /// Turn ignore-file handling on/off in the daemon (rebuilding its index).
+    pub fn set_respect_ignore(&self, on: bool) -> Result<(), String> {
+        let body = format!("{{\"respect\":{on},\"rebuild\":true}}");
+        request(&self.addr, "POST", "/v1/ignore", Some(body.as_bytes())).map(|_| ())
+    }
+
     /// Number of entries matching `q` (the daemon counts without shipping rows).
     pub fn count(&self, q: &Query) -> Result<u64, String> {
         let payload = serde_json::to_vec(q).map_err(|e| e.to_string())?;

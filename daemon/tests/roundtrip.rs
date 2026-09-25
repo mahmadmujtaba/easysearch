@@ -116,6 +116,37 @@ fn remote_backend_searches_over_http() {
 }
 
 #[test]
+fn ignore_setting_round_trips_over_http() {
+    let dir = TestDir::new("ignore");
+    let root = dir.0.clone();
+    std::fs::write(root.join("keep.txt"), "x").unwrap();
+
+    let addr = start_daemon(&root);
+    assert!(
+        wait_live_http(&addr, Duration::from_secs(30)),
+        "daemon index never became live"
+    );
+
+    let status = || {
+        let body = request(&addr, "GET", "/v1/status", None).unwrap();
+        serde_json::from_slice::<StatusReport>(&body)
+            .unwrap()
+            .status
+            .respect_ignore_files
+    };
+
+    // The default config honors ignore files.
+    assert!(status(), "ignore files should be honored by default");
+
+    // The client toggles it off; the daemon reports the new value.
+    Backend::remote(&addr).set_respect_ignore(false);
+    assert!(!status(), "the toggle should have taken effect");
+
+    Backend::remote(&addr).set_respect_ignore(true);
+    assert!(status(), "the toggle should be reversible");
+}
+
+#[test]
 fn rest_api_shapes_are_stable() {
     let dir = TestDir::new("rest");
     let root = dir.0.clone();

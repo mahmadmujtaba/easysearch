@@ -406,7 +406,7 @@ everything-for-linux/
 | Phase | Status |
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
-| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata). **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey, substring/fuzzy ranking, `.gitignore` management UI |
+| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), **`.gitignore` management UI (v0.16.0)**. **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey, substring/fuzzy ranking |
 | **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |

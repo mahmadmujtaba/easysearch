@@ -11,6 +11,7 @@
 //!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
 //! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
+//! POST /v1/ignore   → {"respect":bool,"rebuild":bool} → {"ok":true}
 //! POST /v1/shutdown → {"ok":true}, then the daemon stops (and exits)
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
 //!                              returned when it changes (or on timeout)
@@ -30,8 +31,8 @@ use everything_core::api::{
 use everything_core::remote::percent_decode;
 use everything_core::{Engine, Query};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -134,6 +135,26 @@ impl Daemon {
             (Method::Post, "/v1/shutdown") => {
                 self.request_shutdown();
                 (200, r#"{"ok":true}"#.to_string())
+            }
+            (Method::Post, "/v1/ignore") => {
+                let mut body = String::new();
+                match request.as_reader().read_to_string(&mut body) {
+                    Ok(_) => {
+                        let value: serde_json::Value =
+                            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                        let respect = value
+                            .get("respect")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        let rebuild = value
+                            .get("rebuild")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        self.engine.set_respect_ignore(respect, rebuild);
+                        (200, r#"{"ok":true}"#.to_string())
+                    }
+                    Err(e) => (400, err_json(&format!("cannot read body: {e}"))),
+                }
             }
             (Method::Get, "/") => (200, self.health_json()),
             _ => (404, err_json(&format!("no route for {method} {path}"))),

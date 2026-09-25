@@ -241,12 +241,18 @@ pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, respect_ignore: bool) -> 
     dirs
 }
 
-/// Path of the global ignore file at `~/.config/everything-linux/ignore`.
-/// Patterns use gitignore syntax, matched relative to the working directory
-/// (or use `**/` prefixes to match anywhere).
+/// Path of the global ignore file (`~/.config/everything-linux/ignore`),
+/// whether or not it exists yet. Patterns use gitignore syntax, matched
+/// relative to the working directory (or use `**/` prefixes to match anywhere).
+pub fn global_ignore_file() -> PathBuf {
+    crate::config::xdg_config_dir()
+        .join("everything-linux")
+        .join("ignore")
+}
+
+/// The global ignore file, when it exists.
 fn global_ignore_path() -> Option<PathBuf> {
-    let base = crate::config::xdg_config_dir();
-    let path = base.join("everything-linux").join("ignore");
+    let path = global_ignore_file();
     path.is_file().then_some(path)
 }
 
