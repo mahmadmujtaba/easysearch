@@ -78,8 +78,22 @@ Header clicks sort by Name / Size / Modified; clicking again reverses, a third
 time clears the sort. **Cozy / Compact** switch the row density (two-line rows
 with breadcrumbs, or one compact line).
 
-Right-click a row for: Open · Open containing folder · Open in terminal · Copy
-path · Filter to this folder. Double-click (or Enter) opens with the default app.
+Right-click a row for the full menu — it acts on the whole **selection** when the
+row is part of one, otherwise on the row alone:
+
+| Item | Notes |
+|---|---|
+| Open · Open containing folder · Open in terminal | |
+| Copy path / **Copy N paths** · Copy name / **Copy N names** | one per line, sorted |
+| Show in Details panel | selects the row and switches the panel |
+| Filter to this folder | sets the location filter to the row's directory |
+| Search for this name | new query for `*stem*` |
+| Add to / Remove from selection | |
+| Select all results · Invert selection · Clear selection | |
+| **Find duplicates in results…** | scans the whole result set |
+| **Find duplicates in selection (N)** | scans only the checked rows (needs 2+) |
+
+Double-click (or Enter) opens with the default app.
 
 ## Sidebar
 
@@ -101,6 +115,37 @@ Each tab keeps its own query and filters, and everything is restored the next
 time you start the app. The **Recent searches** row shows recent queries as
 chips (click to re-run); they are also mirrored in the tray menu, and Ctrl+A
 selects every result row for bulk actions (Select All / Invert / Copy paths).
+
+## Finding duplicates
+
+Right-click a result and choose **Find duplicates in results…** (or, with rows
+checked, **Find duplicates in selection**) to look for files with *identical
+contents*. The scan runs on a background thread — the window reports how many
+candidate files it is comparing — and results appear grouped, largest waste
+first:
+
+```
+3 copies · 14.6 MiB each · 29.2 MiB wasted        [Select in results] [Copy paths]
+   Solution Design Document - DMT V1.7.pdf   …/Workspace/SAB/SDD      [Reveal]
+   Solution Design Document - DMT V1.7.pdf   …/OneDrive/Attachments   [Reveal]
+   Solution Design Document - DMT V1.7.pdf   …/Downloads              [Reveal]
+```
+
+How it decides, and what it deliberately skips:
+
+1. Only **files** are considered, and **empty files are ignored** (every empty
+   file is trivially identical to every other — pure noise).
+2. Files are grouped by **size** first, so unique sizes cost nothing.
+3. Survivors are compared by **size + the first 64 KiB**.
+4. Only those are **hashed in full** (SHA-256), and groups of more than one are
+   reported. Two files that share a long prefix but differ later are therefore
+   *not* reported as duplicates.
+5. A scan looks at at most 50 000 candidates; if it hits that cap the window says
+   **“scan capped”**.
+
+Progress is cancellable-by-replacement: starting a new scan discards the old
+one's result. Nothing is ever deleted for you — the window only selects, copies
+and reveals.
 
 ## Right-hand panel
 
@@ -132,6 +177,7 @@ current keyboard hints. Hover any result's row for its full path.
 | `Esc` | Clear the search |
 | `Ctrl+F` | Focus the search box |
 | `Ctrl+A` | Select all result rows (when the search box is not focused) |
+| Right-click a row | The full context menu (see *Results*) |
 | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+1…9` | Select tab |

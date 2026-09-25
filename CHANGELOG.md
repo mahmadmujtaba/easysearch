@@ -4,6 +4,34 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-09-26
+
+### Added
+
+- **A full right-click menu on results**, which acts on the whole multi-selection
+  when the clicked row is part of it and on that row otherwise: Open · Open
+  containing folder · Open in terminal · Copy path(s) · Copy name(s) · Show in
+  Details panel · Filter to this folder · Search for this name · Add to / Remove
+  from selection · Select all · Invert · Clear selection · and the duplicate
+  scans below.
+- **Find duplicates in results** (and *in selection*): groups files with
+  identical contents and shows what is reclaimable, largest waste first, with
+  Select-in-results / Copy paths / Reveal per group. Three passes, cheapest
+  first — group by size, then compare size + the first 64 KiB, then hash the
+  survivors in full (SHA-256) — so the expensive pass runs over the smallest set.
+  Files sharing a long prefix but differing later are correctly *not* reported.
+  Empty files are ignored, the scan runs on a background thread with progress,
+  and it is capped at 50 000 candidates (the window says “scan capped”). Nothing
+  is ever deleted for you.
+- `sha2` is now a dependency, so hashing happens in-process.
+
+### Changed
+
+- The Details panel's SHA-256 no longer shells out to `sha256sum`; it is computed
+  in-process, which also removes a coreutils dependency at runtime.
+- “Filter to this folder” previously copied the folder path to the clipboard
+  instead of filtering; it now sets the location filter as its name promises.
+
 ## [0.13.2] - 2026-09-26
 
 Documentation brought back in line with the code — the design documents still

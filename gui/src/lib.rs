@@ -980,6 +980,16 @@ struct App {
     counts_rx: mpsc::Receiver<Counts>,
     /// Throttle so typing does not trigger a facet recount per keystroke.
     counts_at: Instant,
+    // --- duplicate scans --------------------------------------------------
+    dup_tx: mpsc::Sender<DupRequest>,
+    dup_rx: mpsc::Receiver<DupMsg>,
+    /// Only the newest scan's messages are accepted.
+    dup_gen: u64,
+    dup_progress: Option<(usize, usize)>,
+    dups: Option<DupReport>,
+    show_dups: bool,
+    /// Row context-menu actions, applied after the panels are drawn.
+    pending_cmds: Vec<RowCmd>,
     /// Fingerprint of the desktop theme files, to follow system theme changes.
     theme_fp: u64,
     theme_at: Instant,
@@ -1083,6 +1093,33 @@ impl App {
             Density::Comfortable
         };
         let start_under = start.under.clone();
+        // Background worker: duplicate scans. Only the newest request matters,
+        // and a scan may take seconds on big result sets, so it never runs on
+        // the UI thread. Progress is reported so the window can say so.
+        let (dup_tx, dup_rx) = mpsc::channel::<DupMsg>();
+        let (dup_req_tx, dup_req_rx) = mpsc::channel::<DupRequest>();
+        {
+            std::thread::Builder::new()
+                .name("duplicates".into())
+                .spawn(move || {
+                    while let Ok(mut req) = dup_req_rx.recv() {
+                        while let Ok(newer) = dup_req_rx.try_recv() {
+                            req = newer;
+                        }
+                        let generation = req.generation;
+                        let tx = dup_tx.clone();
+                        let mut progress = move |done: usize, total: usize| {
+                            let _ = tx.send(DupMsg::Progress(generation, done, total));
+                        };
+                        let report = find_duplicates(&req.paths, &mut progress);
+                        if dup_tx.send(DupMsg::Done(generation, report)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .expect("failed to spawn duplicates thread");
+        }
+
         let mut app = App {
             engine: backend,
             prefs,
@@ -1151,6 +1188,13 @@ impl App {
             counts_tx: count_req_tx,
             counts_rx,
             counts_at: Instant::now(),
+            dup_tx: dup_req_tx,
+            dup_rx,
+            dup_gen: 0,
+            dup_progress: None,
+            dups: None,
+            show_dups: false,
+            pending_cmds: Vec::new(),
             theme_fp: theme_fingerprint(),
             theme_at: Instant::now(),
             theme_detect_at: Instant::now(),
@@ -2138,17 +2182,189 @@ fn quick_action(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Icon) -> bool {
     resp.clicked()
 }
 
-/// SHA-256 of a file, via coreutils' `sha256sum` (keeps the dependency list
-/// down; there is no hashing crate in the tree).
-fn sha256_of(path: &Path) -> Option<String> {
-    let out = Command::new("sha256sum").arg(path).output().ok()?;
-    if !out.status.success() {
-        return None;
+/// Lowercase hex, without allocating through `format!` per byte.
+fn hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0x0f) as usize] as char);
     }
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(|h| h.to_string())
+    s
+}
+
+/// SHA-256 of a file, as hex. `limit` caps how many bytes are read, which is
+/// what makes the duplicate finder's first pass cheap.
+fn hash_file(path: &Path, limit: Option<u64>) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut left = limit.unwrap_or(u64::MAX);
+    while left > 0 {
+        let want = if left >= buf.len() as u64 {
+            buf.len()
+        } else {
+            left as usize
+        };
+        let n = std::io::Read::read(&mut file, &mut buf[..want]).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        left = left.saturating_sub(n as u64);
+    }
+    Some(hex(&hasher.finalize()))
+}
+
+/// SHA-256 of a whole file, for the Details panel.
+fn sha256_of(path: &Path) -> Option<String> {
+    hash_file(path, None)
+}
+
+/// A set of files with byte-identical contents.
+struct DupGroup {
+    size: u64,
+    paths: Vec<PathBuf>,
+}
+
+/// The result of a duplicate scan.
+struct DupReport {
+    groups: Vec<DupGroup>,
+    /// Candidate files (same size as at least one other).
+    candidates: usize,
+    /// Files that needed a full-content hash. Empty files are ignored: every
+    /// empty file is trivially "identical" to every other, which is noise.
+    hashed: usize,
+    extra_bytes: u64,
+    /// Set when the candidate list was cut short (see `DUP_CANDIDATE_CAP`).
+    capped: bool,
+}
+
+/// How many candidate files one scan will look at, so a huge result set can
+/// never turn a right-click into an unbounded disk read.
+const DUP_CANDIDATE_CAP: usize = 50_000;
+/// Bytes compared in the cheap first pass (size + first 64 KiB).
+const DUP_PARTIAL: u64 = 64 * 1024;
+
+/// Find files with identical contents among `paths`.
+///
+/// Three passes, cheapest first: group by size, then by size + the first 64 KiB,
+/// and only then hash the survivors in full — so the expensive pass runs over the
+/// smallest possible set. `progress(checked, total)` is called as it goes.
+fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) -> DupReport {
+    let capped = paths.len() > DUP_CANDIDATE_CAP;
+    let paths = if capped {
+        &paths[..DUP_CANDIDATE_CAP]
+    } else {
+        paths
+    };
+
+    let mut by_size: std::collections::HashMap<u64, Vec<PathBuf>> =
+        std::collections::HashMap::new();
+    for p in paths {
+        if let Ok(md) = std::fs::metadata(p)
+            && md.is_file()
+            && md.len() > 0
+        {
+            by_size.entry(md.len()).or_default().push(p.clone());
+        }
+    }
+    let mut sizes: Vec<(u64, Vec<PathBuf>)> =
+        by_size.into_iter().filter(|(_, v)| v.len() > 1).collect();
+    // Largest first: those are the duplicates that waste the most space.
+    sizes.sort_by_key(|(size, _)| std::cmp::Reverse(*size));
+    let total: usize = sizes.iter().map(|(_, v)| v.len()).sum();
+    let candidates = total;
+    let mut done = 0usize;
+    let mut hashed = 0usize;
+    let mut groups: Vec<DupGroup> = Vec::new();
+
+    for (size, files) in sizes {
+        progress(done, total);
+        let mut by_partial: std::collections::HashMap<String, Vec<PathBuf>> =
+            std::collections::HashMap::new();
+        for f in files {
+            if let Some(h) = hash_file(&f, Some(DUP_PARTIAL)) {
+                by_partial.entry(h).or_default().push(f);
+            }
+            done += 1;
+            progress(done, total);
+        }
+        for (_, same) in by_partial {
+            if same.len() < 2 {
+                continue;
+            }
+            let mut by_full: std::collections::HashMap<String, Vec<PathBuf>> =
+                std::collections::HashMap::new();
+            for f in same {
+                if let Some(h) = hash_file(&f, None) {
+                    by_full.entry(h).or_default().push(f);
+                    hashed += 1;
+                }
+            }
+            for (_, mut dup) in by_full {
+                if dup.len() < 2 {
+                    continue;
+                }
+                dup.sort();
+                groups.push(DupGroup { size, paths: dup });
+            }
+        }
+    }
+
+    groups.sort_by_key(|g| std::cmp::Reverse(g.size * (g.paths.len() as u64 - 1)));
+    let extra_bytes = groups
+        .iter()
+        .map(|g| g.size * (g.paths.len() as u64 - 1))
+        .sum();
+    DupReport {
+        groups,
+        candidates,
+        hashed,
+        extra_bytes,
+        capped,
+    }
+}
+
+/// A duplicate scan request (the newest one wins).
+struct DupRequest {
+    generation: u64,
+    paths: Vec<PathBuf>,
+}
+
+enum DupMsg {
+    Progress(u64, usize, usize),
+    Done(u64, DupReport),
+}
+
+/// An action chosen from a result row's context menu. Collected while the table
+/// is being drawn and applied afterwards, because applying needs `&mut self`
+/// while the rows borrow the result list.
+enum RowCmd {
+    Open(PathBuf),
+    Folder(PathBuf),
+    Terminal(PathBuf),
+    /// `selection: true` = act on the whole checked set, not just this row.
+    CopyPaths {
+        path: PathBuf,
+        selection: bool,
+    },
+    CopyNames {
+        path: PathBuf,
+        selection: bool,
+    },
+    Details(PathBuf),
+    FilterTo(PathBuf),
+    SearchName(PathBuf),
+    AddToSelection(PathBuf),
+    RemoveFromSelection(PathBuf),
+    SelectAll,
+    Invert,
+    ClearSelection,
+    FindDuplicates {
+        selection: bool,
+    },
 }
 
 /// `rwxr-xr-x (0755)` for a path, or `—` when it cannot be read.
@@ -2527,6 +2743,32 @@ impl eframe::App for App {
             }
         }
 
+        while let Ok(msg) = self.dup_rx.try_recv() {
+            match msg {
+                DupMsg::Progress(gen_id, done, total) => {
+                    if gen_id == self.dup_gen {
+                        self.dup_progress = Some((done, total));
+                    }
+                }
+                DupMsg::Done(gen_id, report) => {
+                    if gen_id == self.dup_gen {
+                        self.dups = Some(report);
+                        self.dup_progress = None;
+                        self.show_dups = true;
+                    }
+                }
+            }
+        }
+
+        // Row context-menu commands, applied here so they can take `&mut self`
+        // and the window context (for the clipboard).
+        if !self.pending_cmds.is_empty() {
+            let cmds = std::mem::take(&mut self.pending_cmds);
+            for cmd in cmds {
+                self.apply_row_cmd(cmd, ctx);
+            }
+        }
+
         let search_focused = ctx.memory(|m| m.has_focus(search_id()));
 
         if self.search_was_focused && !search_focused && !self.query.is_empty() && !self.pending {
@@ -2706,6 +2948,7 @@ impl eframe::App for App {
             self.saved_dialog(ctx);
         }
         self.save_search_dialog(ctx);
+        self.duplicates_window(ctx);
     }
 
     /// Persist open tabs and history on shutdown (eframe calls this on exit and
@@ -4004,7 +4247,6 @@ impl App {
             return;
         }
 
-        let ctx = ui.ctx().clone();
         let t = self.theme();
         let needle = self.last_sent.clone();
         let cozy = self.density.row_height() > 36.0;
@@ -4242,27 +4484,113 @@ impl App {
                             self.checked.insert(p);
                         }
                     }
+                    // The menu acts on the whole selection when this row is part
+                    // of it, otherwise on the row alone.
+                    let n_sel = self.checked.len();
+                    let in_sel = self.checked.contains(&r.path);
+                    let multi = in_sel && n_sel > 1;
                     row_resp.context_menu(|ui| {
+                        ui.set_min_width(250.0);
+                        if multi {
+                            ui.label(
+                                egui::RichText::new(format!("{n_sel} files selected"))
+                                    .size(11.0)
+                                    .color(t.faint),
+                            );
+                            ui.separator();
+                        }
                         if ui.button("Open").clicked() {
-                            App::open(&r.path);
+                            self.pending_cmds.push(RowCmd::Open(r.path.clone()));
                             ui.close_menu();
                         }
                         if ui.button("Open containing folder").clicked() {
-                            App::open_folder(&r.path);
+                            self.pending_cmds.push(RowCmd::Folder(r.path.clone()));
                             ui.close_menu();
                         }
                         if ui.button("Open in terminal").clicked() {
-                            App::open_terminal(&r.path);
+                            self.pending_cmds.push(RowCmd::Terminal(r.path.clone()));
                             ui.close_menu();
                         }
-                        if ui.button("Copy path").clicked() {
-                            ctx.copy_text(r.path.display().to_string());
+                        ui.separator();
+                        let copy_paths = if multi {
+                            format!("Copy {n_sel} paths")
+                        } else {
+                            "Copy path".to_string()
+                        };
+                        if ui.button(copy_paths).clicked() {
+                            self.pending_cmds.push(RowCmd::CopyPaths {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
+                        }
+                        let copy_names = if multi {
+                            format!("Copy {n_sel} names")
+                        } else {
+                            "Copy name".to_string()
+                        };
+                        if ui.button(copy_names).clicked() {
+                            self.pending_cmds.push(RowCmd::CopyNames {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Show in Details panel").clicked() {
+                            self.pending_cmds.push(RowCmd::Details(r.path.clone()));
                             ui.close_menu();
                         }
                         if ui.button("Filter to this folder").clicked() {
-                            if let Some(parent) = r.path.parent() {
-                                ctx.copy_text(parent.display().to_string());
+                            self.pending_cmds.push(RowCmd::FilterTo(r.path.clone()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Search for this name").clicked() {
+                            self.pending_cmds.push(RowCmd::SearchName(r.path.clone()));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if in_sel {
+                            if ui.button("Remove from selection").clicked() {
+                                self.pending_cmds
+                                    .push(RowCmd::RemoveFromSelection(r.path.clone()));
+                                ui.close_menu();
                             }
+                        } else if ui.button("Add to selection").clicked() {
+                            self.pending_cmds
+                                .push(RowCmd::AddToSelection(r.path.clone()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Select all results").clicked() {
+                            self.pending_cmds.push(RowCmd::SelectAll);
+                            ui.close_menu();
+                        }
+                        if ui.button("Invert selection").clicked() {
+                            self.pending_cmds.push(RowCmd::Invert);
+                            ui.close_menu();
+                        }
+                        if n_sel > 0 && ui.button("Clear selection").clicked() {
+                            self.pending_cmds.push(RowCmd::ClearSelection);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Find duplicates in results…").clicked() {
+                            self.pending_cmds
+                                .push(RowCmd::FindDuplicates { selection: false });
+                            ui.close_menu();
+                        }
+                        let dup_sel = if n_sel >= 2 {
+                            format!("Find duplicates in selection ({n_sel})")
+                        } else {
+                            "Find duplicates in selection".to_string()
+                        };
+                        if ui
+                            .add_enabled(n_sel >= 2, egui::Button::new(dup_sel))
+                            .on_hover_text("Only scan the checked rows")
+                            .clicked()
+                        {
+                            self.pending_cmds
+                                .push(RowCmd::FindDuplicates { selection: true });
                             ui.close_menu();
                         }
                     });
@@ -4723,6 +5051,258 @@ impl App {
             self.sys_ram_total_kb = total;
             self.sys_ram_used_kb = total.saturating_sub(avail);
         }
+    }
+
+    /// Apply a result-row context-menu choice. Deferred out of the table so it
+    /// can take `&mut self` (and the window context, for the clipboard).
+    fn apply_row_cmd(&mut self, cmd: RowCmd, ctx: &egui::Context) {
+        let file_name = |p: &Path| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string())
+        };
+        match cmd {
+            RowCmd::Open(p) => App::open(&p),
+            RowCmd::Folder(p) => App::open_folder(&p),
+            RowCmd::Terminal(p) => App::open_terminal(&p),
+            RowCmd::CopyPaths { path, selection } => {
+                let mut v: Vec<String> = if selection {
+                    self.checked
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect()
+                } else {
+                    vec![path.display().to_string()]
+                };
+                v.sort();
+                ctx.copy_text(v.join("\n"));
+            }
+            RowCmd::CopyNames { path, selection } => {
+                let mut v: Vec<String> = if selection {
+                    self.checked.iter().map(|p| file_name(p)).collect()
+                } else {
+                    vec![file_name(&path)]
+                };
+                v.sort();
+                ctx.copy_text(v.join("\n"));
+            }
+            RowCmd::Details(p) => {
+                if let Some(i) = self.results.iter().position(|r| r.path == p) {
+                    self.selected = i;
+                }
+                self.panel_tab = PanelTab::Details;
+                if !self.prefs.show_preview {
+                    self.prefs.show_preview = true;
+                    self.prefs.save();
+                }
+                self.refresh_preview(ctx);
+            }
+            RowCmd::FilterTo(p) => {
+                if let Some(parent) = p.parent() {
+                    self.set_under(Some(parent.to_string_lossy().into_owned()));
+                }
+            }
+            RowCmd::SearchName(p) => {
+                let name = file_name(&p);
+                let stem = name
+                    .rsplit_once('.')
+                    .map(|(s, _)| s.to_string())
+                    .unwrap_or(name);
+                self.run_query(&format!("*{stem}*"));
+            }
+            RowCmd::AddToSelection(p) => {
+                self.checked.insert(p);
+            }
+            RowCmd::RemoveFromSelection(p) => {
+                self.checked.remove(&p);
+            }
+            RowCmd::SelectAll => {
+                self.checked = self.results.iter().map(|r| r.path.clone()).collect();
+            }
+            RowCmd::Invert => {
+                let all: Vec<PathBuf> = self.results.iter().map(|r| r.path.clone()).collect();
+                for p in all {
+                    if !self.checked.remove(&p) {
+                        self.checked.insert(p);
+                    }
+                }
+            }
+            RowCmd::ClearSelection => self.checked.clear(),
+            RowCmd::FindDuplicates { selection } => {
+                let paths: Vec<PathBuf> = if selection {
+                    self.checked.iter().cloned().collect()
+                } else {
+                    self.results.iter().map(|r| r.path.clone()).collect()
+                };
+                self.start_duplicate_scan(paths);
+            }
+        }
+    }
+
+    /// Kick off a duplicate scan over `paths` on the worker thread.
+    fn start_duplicate_scan(&mut self, paths: Vec<PathBuf>) {
+        if paths.len() < 2 {
+            return;
+        }
+        self.dup_gen += 1;
+        self.dup_progress = Some((0, 0));
+        self.dups = None;
+        self.show_dups = true;
+        let _ = self.dup_tx.send(DupRequest {
+            generation: self.dup_gen,
+            paths,
+        });
+    }
+
+    /// The duplicate-scan window: files with identical contents, grouped.
+    fn duplicates_window(&mut self, ctx: &egui::Context) {
+        if !self.show_dups {
+            return;
+        }
+        let t = self.theme();
+        let mut open = true;
+        let mut reveal: Option<PathBuf> = None;
+        let mut copy: Option<String> = None;
+        let mut select: Option<Vec<PathBuf>> = None;
+        egui::Window::new("Duplicates in results")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(680.0)
+            .default_height(430.0)
+            .show(ctx, |ui| {
+                if let Some((done, total)) = self.dup_progress {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new(if total == 0 {
+                                "collecting candidates…".to_string()
+                            } else {
+                                format!("comparing {done} / {total} candidate files…")
+                            })
+                            .size(12.0)
+                            .color(t.dim),
+                        );
+                    });
+                    ui.add_space(4.0);
+                }
+
+                let Some(report) = &self.dups else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Right-click a result and choose “Find duplicates in results…”.",
+                        )
+                        .size(12.0)
+                        .color(t.faint),
+                    );
+                    return;
+                };
+
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} group(s) · {} reclaimable · {} candidate file(s), {} fully hashed{}",
+                        report.groups.len(),
+                        human_size(report.extra_bytes),
+                        report.candidates,
+                        report.hashed,
+                        if report.capped { " (scan capped)" } else { "" }
+                    ))
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                if report.groups.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("No duplicate contents in these results.")
+                            .size(12.5)
+                            .color(t.good),
+                    );
+                    return;
+                }
+                ui.add_space(6.0);
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for g in &report.groups {
+                            let wasted = g.size * (g.paths.len() as u64 - 1);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{} copies", g.paths.len()))
+                                        .strong()
+                                        .color(t.text),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "· {} each · {} wasted",
+                                        human_size(g.size),
+                                        human_size(wasted)
+                                    ))
+                                    .size(11.5)
+                                    .color(t.warn),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("Select in results").clicked() {
+                                            select = Some(g.paths.clone());
+                                        }
+                                        if ui.small_button("Copy paths").clicked() {
+                                            copy = Some(
+                                                g.paths
+                                                    .iter()
+                                                    .map(|p| p.display().to_string())
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n"),
+                                            );
+                                        }
+                                    },
+                                );
+                            });
+                            for p in &g.paths {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(14.0);
+                                    let name = p
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    ui.label(
+                                        egui::RichText::new(name)
+                                            .monospace()
+                                            .size(11.5)
+                                            .color(t.text),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(short_dir(p)).size(10.5).color(t.faint),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button("Reveal").clicked() {
+                                                reveal = Some(p.clone());
+                                            }
+                                        },
+                                    )
+                                    .response
+                                    .on_hover_text(p.display().to_string());
+                                });
+                            }
+                            ui.add_space(6.0);
+                            ui.separator();
+                        }
+                    });
+            });
+
+        if let Some(p) = reveal {
+            App::open_folder(&p);
+        }
+        if let Some(text) = copy {
+            ctx.copy_text(text);
+        }
+        if let Some(paths) = select {
+            self.checked = paths.into_iter().collect();
+        }
+        self.show_dups = open;
     }
 
     /// The view tab strip above the status bar, plus the bulk-action controls.
@@ -5416,5 +5996,67 @@ mod tests {
             Some(true)
         );
         assert_eq!(gtk_settings_dark_from("# nothing\n"), None);
+    }
+
+    #[test]
+    fn duplicates_need_identical_contents() {
+        let dir = std::env::temp_dir().join(format!("efl-dups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        // Two real duplicates, a same-size near-miss, an empty file, a unique file.
+        let a = w("a.txt", b"hello world");
+        let b = w("b.txt", b"hello world");
+        let near = w("near.txt", b"hello worlD"); // same size, one byte different
+        let empty = w("empty.txt", b"");
+        let unique = w("unique.txt", b"unique");
+
+        let paths = vec![a.clone(), b.clone(), near, empty.clone(), unique];
+        let mut calls = 0;
+        let report = find_duplicates(&paths, &mut |_, _| calls += 1);
+
+        assert_eq!(report.groups.len(), 1, "exactly one duplicate pair");
+        let g = &report.groups[0];
+        assert_eq!(g.paths, vec![a.clone(), b.clone()]);
+        assert_eq!(g.size, 11);
+        assert_eq!(report.extra_bytes, 11, "one redundant copy");
+        assert!(
+            !report.groups.iter().any(|g| g.paths.contains(&empty)),
+            "empty files must not be reported: every empty file is trivially identical"
+        );
+        // Only the same-size files (a, b, near) are candidates.
+        assert_eq!(report.candidates, 3);
+        assert!(calls > 0, "progress is reported");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn duplicates_survive_a_prefix_longer_than_the_cheap_pass() {
+        let dir = std::env::temp_dir().join(format!("efl-dups2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Both share the first 100 KiB; only the tails differ, so the cheap
+        // (size + 64 KiB) pass cannot tell them apart and the full hash must.
+        let mut x = vec![b'x'; 100 * 1024];
+        let mut y = x.clone();
+        x.extend_from_slice(b"tail-A");
+        y.extend_from_slice(b"tail-B");
+        let px = dir.join("x.bin");
+        let py = dir.join("y.bin");
+        std::fs::write(&px, &x).unwrap();
+        std::fs::write(&py, &y).unwrap();
+
+        let report = find_duplicates(&[px, py], &mut |_, _| {});
+        assert!(
+            report.groups.is_empty(),
+            "files differing past the 64 KiB prefix are not duplicates"
+        );
+        assert_eq!(report.candidates, 2, "but they were compared");
+        assert_eq!(report.hashed, 2, "and fully hashed");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
