@@ -4,6 +4,41 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-09-25
+
+### Added
+
+- **The index now lives in SQLite** (`$XDG_CACHE_HOME/everything-linux/db/index.db`).
+  The daemon owns the database — it is the only writer — and keeps it current
+  from kernel filesystem events, folding each batch into one transaction; every
+  query (GUI, CLI, HTTP API) is answered from the database. See
+  [`docs/sqlite.md`](docs/sqlite.md).
+  - **Created when missing**, or when `schema_version` changes, or when a
+    previous build was interrupted (a `complete` marker is written inside the
+    same transaction as the rows, so a partial index can never be mistaken for
+    a small complete one).
+  - **Refreshed** when the delta backlog passes `REFRESH_AFTER_DIRTY`
+    (20 000 changes): a full rebuild is cheaper and safer than replaying a very
+    long delta stream.
+  - **One predicate.** The coarse filters (directory prefix, extension, size,
+    mtime, hidden, files-only) are pushed into SQL because they are exactly the
+    conditions the engine already applies; the name and category predicates then
+    run through the same `accepts()` the mmap backend uses, so the two backends
+    cannot disagree. A test asserts `count` == `search().len()` for every shape.
+  - New config: `storage` (`sqlite` | `mmap`, default `sqlite`) and `db_dir`.
+    `storage = "mmap"` keeps the original memory-mapped index; RAM-only mode
+    (`persist_index = false`) deliberately does not open a disk database.
+  - `rusqlite` with the `bundled` SQLite, so no system `libsqlite3` or
+    `pkg-config` is required at build or run time.
+
+### Changed
+
+- Queries with filters are now answered by SQL pushdown: `--ext toml`,
+  `--min-size 10K` and `--modified-within 7d` return in 1–2 ms on a 100k-file
+  index (measured). Unfiltered name queries stream the table through the shared
+  predicate, which is slower than the mmap scan — hence the `mmap` escape hatch.
+- The CLI's status line no longer claims the index is `mmap-backed`.
+
 ## [0.12.0] - 2026-09-25
 
 A UI overhaul to the “FileSearch Pro” reference design (see

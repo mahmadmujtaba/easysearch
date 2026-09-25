@@ -118,13 +118,17 @@ The reference also has a single tab strip; this app keeps its **multi-search
 tabs** above the toolbar as well (an earlier explicit request), and uses the
 bottom strip for view switching.
 
-## 5. SQLite index — in progress
+## 5. SQLite index — done
 
-The index is being moved to a SQLite database in a `db/` folder, written by the
-daemon and read by the GUI. The storage module (`core/src/sqlite_index.rs`) is
-built and tested but **not yet wired into the engine**; the app still runs on
-the mmap index. Design, trade-offs, the wiring plan and three open decisions are
-in [`sqlite.md`](sqlite.md).
+The index lives in a SQLite database in a `db/` folder, written by the daemon and
+read by every consumer (GUI, CLI, HTTP API). It is created when missing and
+rebuilt when the schema changes or a build was interrupted; live changes are
+folded into it in batched transactions before each query, and a large delta
+backlog triggers a full rebuild. Design and measurements are in
+[`sqlite.md`](sqlite.md).
+
+`storage = "mmap"` in `~/.config/everything-linux/config.json` falls back to the
+original memory-mapped index.
 
 ## 6. Measured footprint (for reference)
 

@@ -166,7 +166,7 @@ fn main() {
             println!("dirs:           {dirs}");
             if s.base_entries > 0 {
                 println!(
-                    "index:          mmap-backed ({} entries, {} files / {} dirs in base)",
+                    "index:          disk-backed ({} entries, {} files / {} dirs in base)",
                     s.base_entries, s.base_files, s.base_dirs
                 );
             } else {

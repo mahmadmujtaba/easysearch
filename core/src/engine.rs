@@ -147,13 +147,15 @@ impl Engine {
             PathBuf::new()
         };
 
-        // SQLite backend: open (creating the database if missing). The initial
-        // fill happens on a background thread in `start`, like the mmap build.
         // Cached (files, dirs); seeded from the database below so the very first
         // frame reports the real numbers.
         let counts_cache = Arc::new(RwLock::new(((0u64, 0u64), Instant::now())));
 
-        let sqlite = if config.storage == Storage::Sqlite {
+        // SQLite backend: open (creating the database if missing). The initial
+        // fill happens on a background thread in `start`, like the mmap build.
+        // RAM-only mode (`persist_index = false`) means “keep no index on disk”,
+        // so a disk database is deliberately not opened in that mode.
+        let sqlite = if config.storage == Storage::Sqlite && config.persist_index {
             match SqliteIndex::open(&config.db_dir()) {
                 Ok(idx) => {
                     // Serve from the existing database immediately — `start`
@@ -482,7 +484,7 @@ impl Engine {
                 );
             })
             .expect("failed to spawn rebuild thread");
-        }
+    }
 
     /// Compaction trigger: fold a large change overlay back into the disk file.
     fn maybe_compact(&self) {
