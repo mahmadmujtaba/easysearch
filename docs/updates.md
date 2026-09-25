@@ -1,5 +1,11 @@
 # In-place updates
 
+> **Status.** The mechanism, the signing tool and the client are complete and
+> tested (unit tests plus a manual end-to-end run against real `openssl`-signed
+> artifacts). **No public release host exists yet** — `DEFAULT_MANIFEST_URL` is a
+> placeholder, so a live check fails cleanly with a download error. Set the URL
+> (or `EVERYTHING_UPDATE_URL`) once you host it.
+
 Everything for Linux can update *itself* — over the internet, without a package
 manager, and without downloading or installing a `.deb`, `.rpm` or Flatpak. The
 running binary is replaced in place and the app restarts onto the new build.

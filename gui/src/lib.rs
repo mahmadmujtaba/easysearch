@@ -877,6 +877,8 @@ struct Preview {
     size: u64,
     mtime: i64,
     text: String,
+    /// The bytes were read but are not text (so "binary file", not "empty").
+    binary: bool,
     image: Option<egui::TextureHandle>,
 }
 
@@ -1599,6 +1601,7 @@ impl App {
         }
         let mut text = String::new();
         let mut image = None;
+        let mut binary = false;
         if !row.is_dir && row.size < 4 * 1024 * 1024 {
             if let Ok(bytes) = std::fs::read(&row.path) {
                 if is_image_file(&row.path) {
@@ -1614,8 +1617,9 @@ impl App {
                         ));
                     }
                 } else {
-                    text =
-                        String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]).into_owned();
+                    let slice = &bytes[..bytes.len().min(64 * 1024)];
+                    binary = !is_probably_text(slice);
+                    text = String::from_utf8_lossy(slice).into_owned();
                 }
             }
         }
@@ -1625,6 +1629,7 @@ impl App {
             size: row.size,
             mtime: row.mtime,
             text,
+            binary,
             image,
         });
     }
@@ -4950,7 +4955,6 @@ impl App {
         match self.panel_tab {
             PanelTab::Preview => {
                 let image = self.preview.as_ref().and_then(|p| p.image.clone());
-                let text_empty = self.preview.as_ref().is_none_or(|p| p.text.is_empty());
                 if is_dir {
                     ui.vertical_centered(|ui| {
                         ui.add_space(12.0);
@@ -4964,24 +4968,44 @@ impl App {
                                 .corner_radius(10),
                         );
                     });
-                } else if text_empty {
+                } else if let Some(pv) = self.preview.as_ref() {
+                    if !pv.text.is_empty() {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(ui.available_height() - 120.0)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(&pv.text)
+                                        .monospace()
+                                        .size(11.5)
+                                        .color(t.dim),
+                                );
+                            });
+                    } else if pv.binary {
+                        ui.label(
+                            egui::RichText::new("No text preview for this binary file.")
+                                .size(12.0)
+                                .color(t.faint),
+                        );
+                    } else if pv.size == 0 {
+                        ui.label(
+                            egui::RichText::new("This file is empty (0 bytes).")
+                                .size(12.0)
+                                .color(t.faint),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("No text preview for this file.")
+                                .size(12.0)
+                                .color(t.faint),
+                        );
+                    }
+                } else {
                     ui.label(
                         egui::RichText::new("No text preview for this file.")
                             .size(12.0)
                             .color(t.faint),
                     );
-                } else if let Some(pv) = self.preview.as_ref() {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .max_height(ui.available_height() - 120.0)
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(&pv.text)
-                                    .monospace()
-                                    .size(11.5)
-                                    .color(t.dim),
-                            );
-                        });
                 }
             }
             PanelTab::Details => {
@@ -6166,6 +6190,21 @@ fn is_image_file(path: &Path) -> bool {
     )
 }
 
+/// Best-effort "is this text?" test for the preview pane: no NUL bytes and only
+/// a trace of other control characters. A byte near the 64 KiB cut that splits a
+/// multi-byte character is fine — UTF-8 continuation bytes are >= 0x80, not
+/// control codes — so truncation never turns text into "binary".
+fn is_probably_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    let control = bytes
+        .iter()
+        .filter(|&&b| b == 0 || (b < 0x09) || (0x0e..0x20).contains(&b))
+        .count();
+    control * 100 / bytes.len() < 2
+}
+
 fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
@@ -6383,6 +6422,23 @@ fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_detection_distinguishes_empty_binary_and_text() {
+        assert!(is_probably_text(b"")); // empty file is still "text"
+        assert!(is_probably_text(b"hello\nworld\t!"));
+        assert!(is_probably_text("caf\u{e9} \u{1f600}".as_bytes())); // UTF-8 multibyte
+        // A 64 KiB cut through a multi-byte character must not look binary.
+        let mut truncated = vec![b'a'; 65_534];
+        truncated.extend_from_slice("\u{1f600}".as_bytes());
+        assert!(is_probably_text(&truncated[..65_535]));
+        assert!(!is_probably_text(&[0x00, 0x01, 0x02, 0x03])); // NUL → binary
+        // Dense high bytes are not control codes, so this stays "text".
+        assert!(is_probably_text(&[0xff; 64]));
+        let mut mostly_binary = vec![0u8; 100];
+        mostly_binary[0] = b'A';
+        assert!(!is_probably_text(&mostly_binary));
+    }
 
     #[test]
     fn category_index_roundtrips() {

@@ -4,6 +4,16 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-09-26
+
+### Fixed
+
+- **An empty file no longer reads as a failed preview.** The preview pane said
+  “No text preview for this file.” for a 0-byte text file; it now says “This file
+  is empty (0 bytes)”, and a file whose bytes are not text says “No text preview
+  for this binary file.” A NUL/dense-control heuristic decides which, and it
+  tolerates a multi-byte character split by the 64 KiB read cap.
+
 ## [0.15.0] - 2026-09-26
 
 ### Added
