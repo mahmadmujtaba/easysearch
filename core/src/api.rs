@@ -1,4 +1,4 @@
-//! Wire types for the engine protocol (see `docs/api.md`).
+//! Wire types for the engine protocol (see `docs/scope.md`).
 //!
 //! `Query` and `Status` are serialized directly (both derive serde). The search
 //! *response* needs a DTO because `ResultRow::path` is an `OsString` that cannot

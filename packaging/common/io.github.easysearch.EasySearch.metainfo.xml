@@ -18,25 +18,26 @@
 
   <description>
     <p>
-      EasySearch searches file names and file contents as you type,
-      across your whole filesystem, and keeps its index up to date in realtime
-      as files are created, renamed, changed and deleted.
+      EasySearch searches file names and file contents as you type, and keeps its
+      index up to date in realtime as files are created, renamed, changed and
+      deleted.
     </p>
-    <p>It is a lightweight native desktop application: no database, no runtime, no web view.</p>
+    <p>It is a lightweight native desktop application: no runtime and no web view, and it never accesses the network.</p>
     <ul>
       <li>Realtime index kept fresh by kernel filesystem events (inotify)</li>
       <li>Everything-style queries: globs, multiple terms, exclusion, regex</li>
       <li>Content search powered by the embedded ripgrep engine, always current</li>
-      <li>Live preview pane, tabs, search history and quick location filters</li>
-      <li>Follows your desktop's light/dark theme and fonts</li>
-      <li>Optional tray icon, plus a scriptable CLI</li>
+      <li>Word, OpenDocument and PDF text searched in-process, with no external tools</li>
+      <li>Live previews: images, media, documents, Markdown and syntax-highlighted code</li>
+      <li>Tags, saved searches, tabs and quick location filters</li>
+      <li>Dark, light and brand themes; your choice is remembered</li>
+      <li>A tray icon, a duplicate finder that moves copies to the Trash, and a scriptable CLI</li>
     </ul>
   </description>
 
   <launchable type="desktop-id">io.github.easysearch.EasySearch.desktop</launchable>
 
   <provides>
-    <binary>easysearch</binary>
     <binary>easysearch</binary>
   </provides>
 
@@ -67,9 +68,13 @@
   </screenshots>
 
   <releases>
-    <release version="0.11.0" date="2026-09-24">
+    <release version="0.41.1" date="2026-09-27">
       <description>
-        <p>Initial packaged release: .deb, .rpm and Flatpak metadata.</p>
+        <p>
+          Realtime filename and content search with a native GUI, tray, tags,
+          excluded folders, live previews and a recoverable duplicate finder —
+          fully offline.
+        </p>
       </description>
     </release>
   </releases>

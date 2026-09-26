@@ -99,7 +99,7 @@ pub struct Config {
     /// keep only recent filesystem changes in memory. See docs/scope.md §9.
     pub persist_index: bool,
     /// Where the index lives: a SQLite database (the default, see
-    /// `docs/sqlite.md`) or the original memory-mapped file.
+    /// `docs/scope.md`) or the original memory-mapped file.
     pub storage: Storage,
     /// Directory holding the SQLite database (default:
     /// `$XDG_CACHE_HOME/easysearch/db`).

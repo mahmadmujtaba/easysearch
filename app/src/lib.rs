@@ -4,7 +4,7 @@
 //! The engine is a real separate process, so the index keeps running and stays
 //! responsive while the window is hidden, and a crash in the UI cannot corrupt
 //! the index. It is *not* a network service: the app owns the child's
-//! stdin/stdout and speaks JSON frames over them (`docs/api.md`), so there is no
+//! stdin/stdout and speaks JSON frames over them (`docs/scope.md`), so there is no
 //! socket, no port, and nothing about the index is reachable from outside the
 //! app and its engine.
 //!

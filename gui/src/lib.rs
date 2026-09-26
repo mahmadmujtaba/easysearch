@@ -1812,12 +1812,13 @@ fn search_id() -> egui::Id {
     egui::Id::new("search_input")
 }
 
-/// The window's normal size, restored when it is un-parked.
+/// The window's normal size, and its minimum, restored when it is un-parked.
 const WINDOW_SIZE: egui::Vec2 = egui::vec2(1240.0, 760.0);
+const MIN_WINDOW_SIZE: egui::Vec2 = egui::vec2(640.0, 400.0);
 
 /// Whether this backend lets us truly unmap the window. `winit`'s Wayland
 /// backend implements `set_visible` as a no-op ("Not possible on Wayland"), so
-/// on a Wayland session we cannot hide a window — we park it instead.
+/// on a Wayland session we cannot unmap the window — we park it instead.
 /// `WAYLAND_DISPLAY` set means the window is a Wayland window (winit prefers it
 /// over XWayland).
 fn can_unmap_window() -> bool {
@@ -1826,18 +1827,18 @@ fn can_unmap_window() -> bool {
 
 /// Hide the window without closing it.
 ///
-/// On X11 this unmaps the window. On Wayland the unmap is ignored, so the
-/// window is *parked*: undecorated, 1×1 and kept behind everything. That is
-/// the only way to get the window out of the way there without closing it — and
-/// closing it would end the event loop (and with it the tray and the engine).
-/// [`show_window`] reverses it exactly.
+/// On X11 this unmaps the window. On Wayland the unmap is ignored (and the
+/// event loop cannot be recreated, so the window cannot be closed and reopened
+/// either), so the window is *parked*: undecorated, click-through and shrunk to
+/// a single pixel. Lifting the minimum size **first** is essential — the 640×400
+/// minimum from the viewport builder otherwise clamps the shrink back, which is
+/// what left the window visible. [`show_window`] reverses all of it.
 fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     if !can_unmap_window() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-            egui::WindowLevel::AlwaysOnBottom,
-        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(1.0, 1.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
     }
 }
@@ -1846,11 +1847,10 @@ fn hide_window(ctx: &egui::Context) {
 /// [`hide_window`].
 fn show_window(ctx: &egui::Context) {
     if !can_unmap_window() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-            egui::WindowLevel::Normal,
-        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(WINDOW_SIZE));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW_SIZE));
     }
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);

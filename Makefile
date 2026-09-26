@@ -131,7 +131,7 @@ validate-packaging:
 	 echo "appstreamcli: no errors"
 
 ## Run just the engine (normally the app's child; this drives it by hand).
-## It speaks JSON frames on stdin/stdout — see docs/api.md.
+## It speaks JSON frames on stdin/stdout — see docs/scope.md.
 daemon: release
 	./$(BIN_DIR)/easysearch-daemon
 

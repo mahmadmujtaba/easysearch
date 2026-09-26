@@ -4,6 +4,28 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.1] - 2026-09-27
+
+### Fixed
+
+- **Closing the window now really hides it on Wayland.** The window is parked
+  (undecorated, click-through and shrunk to a single pixel) instead of merely
+  losing its title bar — the 640×400 **minimum** size from the viewport builder
+  was clamping the shrink back, so the window stayed visible. The minimum is now
+  lifted before the shrink is requested, and restored on show. The X button and
+  the tray toggle share this path.
+
+### Changed
+
+- **Documentation consolidated and simplified.** `docs/api.md` and
+  `docs/sqlite.md` are merged into [`docs/scope.md`](docs/scope.md) (the engine
+  protocol and the index storage are now sections of the design document), the
+  screenshot guide moved into [`CONTRIBUTING.md`](CONTRIBUTING.md), and the
+  stale `ui-screenshots/` reference image was removed. `README.md`,
+  `CONTRIBUTING.md`, `docs/ui.md`, `docs/config.md`, `docs/packaging.md` and
+  `docs/pending.md` were rewritten shorter and current, and the AppStream
+  metainfo was refreshed (release version, description, a duplicate entry).
+
 ## [0.41.0] - 2026-09-27
 
 ### Added
@@ -178,7 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process on the machine could reach it) and a third tier (app, daemon, CLI) to
   keep in step. The app now spawns `easysearch --engine` as its own child, keeps
   its stdin/stdout, and they exchange one JSON object per line
-  ([`docs/api.md`](docs/api.md), the new *Engine protocol*). Nothing about the
+  (`docs/api.md`, since merged into `docs/scope.md`, the new *Engine protocol*). Nothing about the
   index is reachable from outside the process pair, so there is no endpoint to
   expose. Requests are multiplexed by id and answered on the engine's own
   threads, so a slow content search never blocks the status poller. The engine's
@@ -771,7 +793,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   safe while the old binary is executing). Every step fails closed: no key, no
   signature, a non-HTTPS URL, a bad hash, or a not-newer version all mean
   *nothing is written*. Assets are raw binaries, so there is no archive to
-  unpack. See [`docs/updates.md`](docs/updates.md).
+  unpack. See `docs/updates.md` (removed in v0.38.0).
 - **GUI: Help ▸ Check for updates…** opens a *Software update* window (release
   notes, progress bar, **Install update**, **Restart now**). A quiet check runs at
   launch at most once a day, and a `⬆ v… available` badge appears beside the
@@ -886,7 +908,7 @@ described the v0.1.0 architecture (a memory-mapped index and a three-pane UI).
   The daemon owns the database — it is the only writer — and keeps it current
   from kernel filesystem events, folding each batch into one transaction; every
   query (GUI, CLI, HTTP API) is answered from the database. See
-  [`docs/sqlite.md`](docs/sqlite.md).
+  `docs/sqlite.md` (since merged into `docs/scope.md`).
   - **Created when missing**, or when `schema_version` changes, or when a
     previous build was interrupted (a `complete` marker is written inside the
     same transaction as the rows, so a partial index can never be mistaken for

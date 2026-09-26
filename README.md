@@ -1,350 +1,151 @@
 # EasySearch
 
-<img src="icons/colored-logo.svg" width="260" align="right" alt="EasySearch">
+<img src="icons/colored-logo.svg" width="240" align="right" alt="EasySearch">
 
 Realtime filename **and** content search across your filesystem — a Linux
-equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
-**native GUI** (egui, no web technologies) and a minimal resource footprint.
+equivalent of VoidTools' *Everything*. Written in **Rust** with a **native GUI**
+(egui, no web technologies) and a deliberately small footprint.
 
-- **Realtime**: a live in-memory filename index is kept fresh by kernel
-  filesystem events (`inotify`); a file created / renamed / edited / deleted is
-  reflected in the next query within ~1 s.
-- **Content search**: the embedded **ripgrep engine** reads files live, so
-  content results are always current. An optional bounded content cache
-  accelerates repeated queries (default off; spooled to disk, not held in RAM).
-- **Everything-style queries**: `*.pdf`, `invoice 2026`, `!draft`, regex mode,
-  case toggle, hidden files, basename or full-path matching.
-- **Previews** in the right-hand pane: image thumbnails, audio/video metadata and
-  a video first-frame, the text layer of PDF and office documents, rendered
-  Markdown, and **syntax-highlighted source code** for the major languages.
-- **Tags**: label files and folders with your own `#tags`, stored locally in
-  `~/.config/easysearch/tags.json`; filter the results by a tag, tag a whole
-  selection at once, and tag anything straight from the preview pane.
-- **Lives in the tray**: closing the window keeps EasySearch running in the
-  background — the engine keeps indexing — and clicking the tray icon shows or
-  hides the window again. Only **Quit** stops the app.
-- **Duplicate finder**: group files with identical contents, then move the spare
-  copies to the desktop **Trash** (recoverable) — never a permanent delete.
-- **Fully offline**: the app makes **no network connections at all** — no
-  updater, no telemetry, no remote API. Everything stays local; install and
-  upgrade with your package manager (`.deb`/`.rpm`).
-- **Lightweight**: no GC, no runtime, no bundled web engine. See the footprint
-  budget in [`docs/scope.md`](docs/scope.md).
+- **Realtime** — the kernel reports every create/rename/edit/delete and the
+  index reflects it in about a second.
+- **Filename search** — Everything-style glob and regex matching, fuzzy
+  (fzf-style) matching, per-category counts, sorting.
+- **Content search** — the embedded **ripgrep engine** reads files live,
+  including the text layer of Word, OpenDocument and PDF files, in-process.
+- **Previews** — images, audio/video metadata, document text, rendered
+  Markdown, and **syntax-highlighted source code** for ~30 languages.
+- **Tags, excluded folders, duplicate finder** — label files, keep whole trees
+  out of the index, and move duplicate copies to the **Trash** (recoverable).
+- **Lives in the tray** — closing the window keeps the engine indexing; clicking
+  the tray icon shows or hides it.
+- **Fully offline** — no sockets, no telemetry, no updater. Everything is local.
 
 ## Screenshots
 
-The same window in both themes — every surface is themed: search box,
-filter bar, results table (`#`, Name, Path, Type, Size, Modified, **Created**,
-Match, Relevance), sidebar and preview pane.
+The same window in both themes — search box, filter bar, results table, sidebar
+and preview pane are all themed.
 
-**Dark**
+**Dark** (the default) · **Light**
 
 ![EasySearch in the dark theme](docs/screenshots/dark.png)
 
-**Light**
-
 ![EasySearch in the light theme](docs/screenshots/light.png)
 
-The images are shot against a small throwaway demo tree, so no personal
-filenames appear in them.
+_A third **Brand** theme uses the logo's teal palette. The images are shot
+against a throwaway demo tree, so no personal filenames appear._
 
-## Components
+## Install
 
-| Binary | Purpose |
-|---|---|
-| `easysearch` (app) | the desktop app: window + tray, spawns the engine |
-| `easysearch-cli` (CLI) | scriptable search + status (runs the engine in-process) |
-| `easysearch-gui` | the window alone (dev convenience; engine in-process) |
-| `easysearch-core` (lib) | the engine: index, watcher, matcher, content search |
-
-## Build (zero-sudo)
-
-No root needed — the setup script installs a user-local Rust toolchain
-(rustup), dev symlinks for system libraries, and wires the linker to rustup's
-bundled `rust-lld` (no C compiler required):
+Packages (see [`docs/packaging.md`](docs/packaging.md)):
 
 ```sh
-./scripts/install-deps.sh
-cargo build --release
-```
-
-Binaries land in `target/release/easysearch`, `target/release/easysearch-cli` and
-`target/release/easysearch-gui`.
-
-> Optional, only for **.docx content search**: nothing. Word, OpenDocument and
-> PDF content is extracted in-process (v0.18.0–v0.20.0); no external tool is
-> needed.
-
-## Packaging
-
-Distribution packages are built from the same assets as the app:
-
-```sh
-make deb        # dist/easysearch_<version>_<arch>.deb      (dpkg-deb)
-make rpm        # ~/rpmbuild/RPMS/... then copied to dist/          (rpmbuild)
+make deb        # dist/easysearch_<version>_<arch>.deb   (dpkg-deb)
+make rpm        # → dist/…                               (rpmbuild)
 make flatpak    # dist/io.github.easysearch.EasySearch.flatpak
-make packages   # all of the above that this machine has tools for
-make validate-packaging   # desktop entry + AppStream metadata
+make packages   # everything this machine has tools for
 ```
 
-None of them need root. See [`docs/packaging.md`](docs/packaging.md) for what
-they install, the dependency-derivation details, the Flatpak sandbox notes, and
-which identifiers to change before publishing.
-
-CI builds the `.deb` and the `.rpm` on every push to `master` (so, on every
-merged pull request) and uploads them as the run artifact
-`easysearch-master-packages` — see
-[`.github/workflows/packages.yml`](.github/workflows/packages.yml).
-
-> What is still outstanding — unverified package builds, placeholder
-> identifiers, known rough edges, measured footprint — is tracked in
-> [`docs/pending.md`](docs/pending.md).
-
-## Offline by design
-
-EasySearch has **no network code**: it opens no sockets, runs no updater and
-contacts no server. Installs and upgrades go through your package manager
-(`.deb`/`.rpm`), which is the one place you already trust to fetch and verify
-software. The only file descriptors it opens are the index database, the files
-it indexes, and a unix control socket in `$XDG_RUNTIME_DIR` for the CLI and
-desktop shortcuts to talk to a running window.
-
-## Usage
+Or build and install user-locally — **no root needed**:
 
 ```sh
-# The app — window + tray; spawns the engine as a child (what end users run)
-make run                          # or: ./target/release/easysearch
-
-# CLI
-./target/release/easysearch-cli search "*.pdf"              # glob patterns
-./target/release/easysearch-cli search "report 2026 !draft" # AND terms + exclude
-./target/release/easysearch-cli search --regex 'report[_-]\d{4}\.pdf$'
-./target/release/easysearch-cli search --content "TODO"     # search inside files
-./target/release/easysearch-cli search mtn --fuzzy          # fzf-style match
-./target/release/easysearch-cli search '' --content 'a\nb' --multiline  # spans lines
-./target/release/easysearch-cli search budget --content budget --any     # name OR content
-./target/release/easysearch-cli search '*' --ext pdf,docx --min-size 1M
-./target/release/easysearch-cli search '*.log' --modified-within 7d
-./target/release/easysearch-cli search '*' --under /srv/data
-./target/release/easysearch-cli status                      # index state, counts
-
-# Control a running window (bind these to desktop shortcuts — no privileged API)
-./target/release/easysearch --toggle              # show the window / hide it
-./target/release/easysearch --search TODO         # open and search
+./scripts/install-deps.sh      # user-local Rust + dev libraries
+cargo build --release
+make install                   # ~/.local/bin + desktop entry, icon, metainfo
 ```
 
-The GUI follows the “FileSearch Pro” reference layout (see
-[`docs/ui.md`](docs/ui.md)): a menu bar and a labelled toolbar (Back/Forward through the
-location history, Home, Index, Content Search, Regex, Recent, Saved), a search row
-(query + scope + location + `Search`), a filter bar (Type / Size / Modified / Path /
-Ext / Case / Hidden), a results header with sorting and row density, then three
-panes — a sidebar (categories with live counts, saved searches, indexed locations),
-the results table (`#`, Name, Path, coloured type pill, Size, Modified, Created,
-Match, Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
-quick actions. Under it: view tabs, bulk actions, recent searches and a live status
-bar (index state, CPU, RAM, query stats, 100/110/125% zoom). The theme is an
-explicit choice — **Dark by default**, **Light**, or **Brand** (the logo's teal
-palette) — remembered in `gui.json`; it no longer follows the desktop. It draws
-with your system fonts, resolved through fontconfig from the desktop's
-configured family, and its sidebar and result icons are painted in the theme's
-own colours.
+`make install` puts the binaries in `~/.local/bin/easysearch*` and the desktop
+entry, icon and AppStream metadata in `~/.local/share`, so the app shows up in
+your launcher with the right icon.
 
-Query semantics (Everything-style):
+## Quick start
 
-- space-separated terms are **ANDed**; `!term` **excludes**
-- terms without glob metacharacters are **substring** matches (`draft` matches
-  `draft.pdf`); `*`, `?`, `[...]` work as globs
-- `--fuzzy` (or the **Fuzzy** toolbar button) matches the term's characters *in
-  order* anywhere, so `mtn` finds `meeting-notes.md`; it also drives the
-  Relevance ranking. `!term` exclusions stay literal
-- `--regex` treats each term as a regex (filenames and content); `--multiline`
-  lets the content pattern span lines (`foo\nbar`), which is slower
-- `--content PATTERN` additionally searches inside files (a result must match
-  **both** the name query and the pattern); `--any` relaxes that to **either**
-  (the GUI's *Full text* scope)
-- case-insensitive by default (`--case` to change)
-- hidden files/dirs are indexed but hidden from results (`--hidden` to include)
+```sh
+easysearch                       # the app: window + tray + engine child
+
+# CLI (scriptable; runs the engine in-process)
+easysearch-cli search "*.pdf"
+easysearch-cli search "report 2026 !draft"
+easysearch-cli search TODO --content "TODO"      # search inside files
+easysearch-cli status                            # index state and counts
+
+# Control a running window (bind these to desktop shortcuts)
+easysearch --toggle              # show the window if hidden, hide it if visible
+easysearch --search TODO         # open it and run a search
+easysearch --quit                # stop the app and its engine
+```
+
+The GUI is a single window with a menu bar, search and filter rows, a results
+table, a sidebar (categories, saved searches, tags, locations) and a
+preview/details pane. See [`docs/ui.md`](docs/ui.md) for the full guide.
 
 ## Supported formats
 
-**Filename search** covers every file and directory the index walks (the whole
-root, subject to `roots` and the ignore rules) — there is nothing format-specific
-about it.
+**Filename search** covers everything the index walks. **Content search** reads
+text-like files live, plus these formats, extracted **in-process** (no external
+tool):
 
-**Content search** reads text-like files live, plus these document formats, whose
-text is extracted **in-process** (no external tool to install):
+| Format | Extensions |
+| --- | --- |
+| Plain text, code, config, logs, CSV, … | anything text-like |
+| Microsoft Word | `.docx` |
+| LibreOffice / OpenDocument | `.odt` `.ods` `.odp` `.odg` |
+| PDF | `.pdf` (text layer only) |
 
-| Format | Extensions | Notes |
-|---|---|---|
-| Plain text, code, config, logs, CSV, … | anything text-like | binary detection stops on NUL, like `rg` |
-| Microsoft Word | `.docx` | OOXML package (`word/document.xml` + headers, footers, notes, comments) |
-| LibreOffice / OpenDocument | `.odt` `.ods` `.odp` `.odg` | ODF `content.xml`, table-driven like the OOXML reader |
-| PDF | `.pdf` | text layer only — a scanned, image-only PDF has none |
+Binary Office formats (`.doc`, `.xls`/`.xlsx`, `.ppt`/`.pptx`) are not extracted
+yet. Malformed files are skipped, never fatal.
 
-Binary Office formats (Word `.doc`, Excel `.xls`/`.xlsx`, PowerPoint
-`.ppt`/`.pptx`) are **not** extracted yet; the preview says so rather than
-guessing. Malformed input is skipped, never fatal.
-
-**Previews** (the right-hand pane) render by kind: image thumbnails; audio/video
-metadata and a video first-frame; the text layer of the document formats above;
-rendered **Markdown**; and **syntax-highlighted source code**. The highlighter
-understands Rust, C/C++, Java, Go, Python, JavaScript/TypeScript, shell,
-JSON/YAML/TOML/INI, HTML/XML, CSS, SQL, Ruby, PHP, Lua, Kotlin, Swift, C#,
-R, Haskell, Scala, Dart, Perl, Nix, Elixir, Erlang and Clojure (mapped from the
-extension, and by name for `Makefile`, `Dockerfile`, …), and also colours fenced
-code inside a Markdown preview.
+**Previews** render images, audio/video (metadata from `ffprobe`, a first frame
+from `ffmpeg`, both best-effort), the document text above, Markdown, and
+**syntax-highlighted code** (Rust, C/C++, Java, Go, Python, JS/TS, shell,
+JSON/YAML/TOML/INI, HTML/XML, CSS, SQL, Ruby, PHP, Lua, Kotlin, Swift, C#, R,
+Haskell, Scala, Dart, Perl, Nix, Elixir, Erlang, Clojure).
 
 ## Configuration
 
-`~/.config/easysearch/config.json` (optional; defaults shown):
+`~/.config/easysearch/config.json` — optional; every key has a default. The
+defaults, with what each one does, are in
+[`docs/config.md`](docs/config.md). The most useful:
 
-```json
-{
-  "roots": [],
-  "exclude_removable": true,
-  "exclude_network": true,
-  "exclude_dirs": [],
-  "respect_ignore_files": true,
-  "persist_index": true,
-  "storage": "sqlite",
-  "db_dir": null,
-  "disk_index_dir": null,
-  "overlay_compaction_threshold": 8192,
-  "exclude_fstypes": [],
-  "content_index_enabled": false,
-  "content_index_max_file_bytes": 8388608,
-  "content_index_total_cap_bytes": 268435456,
-  "content_index_in_memory": false,
-  "degraded_rescan_secs": 30,
-  "max_results": 1000
-}
-```
+- **`roots`** — directories to index; empty means your home directory.
+- **`exclude_dirs`** — whole subtrees to leave out (editable live in
+  **Tools ▸ Excluded folders…**).
+- **`storage`** — `"sqlite"` (default) or `"mmap"`; `persist_index: false`
+  keeps nothing on disk.
 
-- **roots**: empty = `$HOME` of the user running the program. Add paths to
-  index more (e.g. `["/home/me", "/srv/data"]`).
-- **exclude_dirs**: directory trees to leave out of the index, wherever they sit
-  under a root (e.g. `["~/VirtualBox VMs", "/srv/scratch"]`; `~` means `$HOME`).
-  Unlike the ignore patterns these are exact folders, and the whole subtree is
-  skipped. Edit them live in **Tools ▸ Excluded folders…** (or right-click a
-  folder result ▸ *Exclude folder from the index*); the change is saved here and
-  the index is rebuilt at once.
-- **storage**: `"sqlite"` (default) keeps the index in a SQLite database;
-  `"mmap"` uses the original memory-mapped file. See [`docs/sqlite.md`](docs/sqlite.md).
-- **db_dir**: where the SQLite database lives (default
-  `~/.cache/easysearch/db`).
-- **persist_index**: `true` (default) keeps an index on disk with only recent
-  changes in RAM; `false` keeps everything in RAM (no database, no mmap file).
-- **disk_index_dir**: where the mmap index lives (default
-  `~/.cache/easysearch`); the database defaults to a `db/` folder inside it.
-- **overlay_compaction_threshold**: how many pending changes trigger a
-  background compaction (mmap backend).
-- **content_index_enabled**: `true` enables the background content cache
-  (bounded, LRU; keeps repeated content searches fast). It can also be toggled
-  while running, in **Settings ▸ Indexing**, or via the engine's `config` op.
-  It is **off at boot** and, by default, **spooled to disk**
-  (`<disk_index_dir>/content/`) rather than held in RAM, so it does not grow the
-  resident set.
-- **content_index_in_memory**: `true` keeps that cache in RAM instead of on
-  disk (up to `content_index_total_cap_bytes`). Start with
-  `easysearch --content-in-memory` to set it for one run.
-- A global ignore file at `~/.config/easysearch/ignore` adds extra
-  exclusions.
+The GUI's own state (theme, zoom, tabs, saved searches, tags) lives beside it in
+`gui.json` and `tags.json`.
 
-Every key, with its default and effect, is documented in [`docs/config.md`](docs/config.md).
+## How it works
 
-## Non-essential folders
+One binary is the whole app. `easysearch` opens the window and tray, and spawns
+**itself** as the engine (`easysearch --engine`), talking to it as a child
+process over stdin/stdout JSON frames — no socket, no port. The engine owns a
+live **SQLite** index on disk (so RAM stays low), kept fresh by kernel
+filesystem events, and answers content queries with ripgrep's own crates. Close
+the window and the engine keeps indexing behind the tray; quench it with
+**Quit**.
 
-`~/.gitignore` (installed by `scripts/install-deps.sh`, or copy the project's
-`.gitignore`) keeps noise out of the index: `node_modules`, `target`, build
-dirs, caches, editor settings, VCS internals. Any `.gitignore`/`.ignore` in the
-searched tree is honored.
-
-## Display backends (Wayland-first, X11 second)
-
-The GUI is **Wayland-first**: winit connects to a native Wayland session
-whenever `WAYLAND_DISPLAY` is set (it prefers Wayland because an X11 display
-can exist under Wayland via XWayland) and automatically falls back to **X11**
-when only `DISPLAY` is present. The app id `easysearch` is registered
-with the Wayland compositor for window icon / taskbar grouping.
-
-To force a backend:
-
-```sh
-easysearch-gui                            # auto: Wayland, else X11
-export -n WAYLAND_DISPLAY; easysearch-gui # force X11 (or: env -u WAYLAND_DISPLAY)
-```
-
-## System tray
-
-The tray icon (StatusNotifierItem over D-Bus) is owned by the **app** — the same
-process as the window — with an Open/Quit menu and a “Recent searches” submenu;
-left-click opens or toggles the window. **Closing the window (X) hides it to the
-tray**, so the engine keeps indexing and *Open* (or `easysearch --toggle`) brings
-the window back instantly; **File ▸ Hide window** does the same. **Quit** in the
-tray, **File ▸ Quit EasySearch**, or `easysearch --quit` stops the app and the
-engine together. Works on KDE/Qt natively and on GTK desktops that host SNI
-(GNOME with the AppIndicator extension, XFCE, Cinnamon, MATE), and the app is
-fully usable without a tray.
-
-## Realtime & watch limits
-
-The index is updated by `inotify`. The kernel caps watches per user
-(`fs.inotify.max_user_watches`, default 123,040 on Debian 13). If a tree is too
-large, the app automatically falls back to **degraded mode** (periodic rebuild,
-visible in the status bar). You can raise the cap:
-
-```sh
-sudo sysctl fs.inotify.max_user_watches=1048576   # persists until reboot
-# make permanent: echo 'fs.inotify.max_user_watches=1048576' | sudo tee /etc/sysctl.d/90-inotify.conf
-```
-
-## Where the index lives (and why RAM stays low)
-
-The index is a **SQLite database** in `~/.cache/easysearch/db/`
-(`index.db`, WAL mode), owned by the engine — the only writer:
-
-- The bulk of the index is on disk; only a small **change overlay** of recent
-  creates/edits/deletes stays resident. The overlay is folded into the database
-  in one transaction before each query, so a query never misses a change the
-  watcher has already seen.
-- **Startup is instant.** A complete database is served immediately while a
-  background pass re-validates it against the live filesystem. The database is
-  created from a full walk when it is missing, when the schema version changes,
-  or when a previous build was interrupted (a `complete` marker is written in the
-  same transaction as the rows, so a partial index is never mistaken for a small
-  complete one).
-- If the delta backlog grows past 20 000 changes, a **full rebuild** replaces
-  replaying a very long delta stream.
-- `storage = "mmap"` in the config switches back to the original memory-mapped
-  file (`index-v1.bin`, zero-copy scan) and `persist_index = false` keeps nothing
-  on disk at all. Details and the trade-offs: [`sqlite.md`](docs/sqlite.md).
-- The optional **content cache** is off at boot and, when on, **spools document
-  text to disk** (`~/.cache/easysearch/content/`, read back per lookup) instead
-  of holding it in RAM — so searching content does not leave what it read
-  resident. `--content-in-memory` opts back into the RAM map. Measured: with
-  ≈ 112 MB of text cached, the engine sat at ≈ 11–15 MiB resident on disk vs
-  ≈ 122 MiB in RAM.
-
-Measured on a real `$HOME`: ≈ 15 MiB idle for the headless engine (mmap mode, ≈137k
-files); on 100 479 entries the SQLite engine sits at ≈ 51 MiB and the GUI at ≈ 92 MiB,
-with filename queries at 1–26 ms and filtered queries at 1–2 ms (SQL pushdown).
-The GUI adds the native window/GL stack.
-
-## Footprint (budget)
-
-- binaries < 10 MB (stripped, LTO; the GUI binary is ≈ 12 MB)
-- idle RAM ≈ 15 MiB headless; the index is on disk, only the change overlay is in RAM
-- idle CPU ≈ 0 % (event-driven)
-- filename query at 1M entries < 50 ms; content queries stream results
+The design, process model, footprint budget and trade-offs are in
+[`docs/scope.md`](docs/scope.md).
 
 ## Documentation
 
 | Document | What it covers |
-|---|---|
-| [`docs/scope.md`](docs/scope.md) | Scope, architecture, search semantics, realtime guarantees, footprint budget, delivery phases |
-| [`docs/ui.md`](docs/ui.md) | Using the GUI: layout, filters, saved searches, shortcuts, relevance scoring |
+| --- | --- |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Architecture, dev setup, and how to open your first PR |
+| [`docs/scope.md`](docs/scope.md) | Design: process model, search semantics, the engine protocol, storage, footprint |
+| [`docs/ui.md`](docs/ui.md) | Using the GUI: layout, filters, tags, duplicates, shortcuts |
 | [`docs/config.md`](docs/config.md) | Every `config.json` key, its default and its effect |
-| [`docs/api.md`](docs/api.md) | The app↔engine JSON protocol over stdin/stdout |
-| [`docs/sqlite.md`](docs/sqlite.md) | The SQLite index: schema, flush/refresh policy, trade-offs |
 | [`docs/packaging.md`](docs/packaging.md) | Building `.deb`, `.rpm` and Flatpak packages |
-| [`docs/pending.md`](docs/pending.md) | What is still outstanding, prioritised |
+| [`docs/pending.md`](docs/pending.md) | Known gaps and what is planned |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release-by-release history |
+
+## Contributing
+
+Contributions are welcome — from a typo fix to a new feature. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md); it explains the architecture, how to set up
+a machine without root, and how to get a first pull request merged.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

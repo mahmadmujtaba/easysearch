@@ -7,7 +7,7 @@
 //! hides it, so the engine keeps indexing; quitting stops both.
 //!
 //! There is no socket, no port and no HTTP: the app and its engine talk over the
-//! child's stdin/stdout (`docs/api.md`).
+//! child's stdin/stdout (`docs/scope.md`).
 
 use std::process::ExitCode;
 
