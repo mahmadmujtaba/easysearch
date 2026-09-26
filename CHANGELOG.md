@@ -4,6 +4,38 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-09-26
+
+### Added
+
+- **A logo, drawn in code and shown in the app.** `gui/src/logo.rs` rasterises one
+  mark — a magnifier over a lightning bolt, on a rounded badge — and the app now
+  uses it for the **window icon** (so X11 and icon-theme-less sessions show it,
+  not only Wayland via the desktop entry), the **tray pixmap**, the **About
+  dialog**, the idle empty state, and at 13 px next to the version in the
+  **status bar**. It is supersampled, so it is smooth at every size, and it needs
+  no image asset.
+- The design lives in one place. The geometry is written in the same 512-unit
+  space as `packaging/icons/…/EasySearch.svg`, which was redrawn to match, so the
+  launcher icon and the in-app mark cannot drift apart. The README and the About
+  dialog show the mark too.
+
+### Changed
+
+- **The tray icon is the same mark now.** It used to be a lightning bolt on a
+  dark square from its own little rasteriser, which did not match the icon
+  shipped to launchers.
+- `docs/screenshots/` was re-shot with the mark in the status bar.
+
+### Fixed
+
+- Two geometry bugs in the new rasteriser, both caught by diffing it against a
+  render of the SVG: the handle's direction was measured from the lens centre
+  rather than from its own start, drawing it a third too long and into the
+  badge's corner; and the lens hole was not punched through the handle's inner
+  end, which left a ring-coloured sliver inside the lens. Each now has a
+  regression test.
+
 ## [0.29.1] - 2026-09-26
 
 ### Fixed

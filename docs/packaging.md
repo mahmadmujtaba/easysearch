@@ -50,7 +50,9 @@ of it the three Rust binaries.
 ```
 packaging/
   common/           desktop entry + AppStream metainfo (shared by all formats)
-  icons/            hicolor icon theme tree (SVG; PNGs are rendered at build time)
+  icons/            hicolor icon theme tree (SVG; PNGs are rendered at build time).
+                    The mark is drawn in code too — see `gui/src/logo.rs`, which
+                    the SVG mirrors shape for shape.
   debian/           control template (substituted by the build script)
   rpm/              spec template (substituted by the build script)
   flatpak/          manifest + generated cargo-sources.json

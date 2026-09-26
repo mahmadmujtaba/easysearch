@@ -118,10 +118,13 @@ impl Tray for AppTray {
 pub fn spawn_tray(
     title: &str,
     history: Arc<Mutex<Vec<String>>>,
-) -> Result<(
-    std::sync::mpsc::Receiver<TrayMsg>,
-    ksni::blocking::Handle<AppTray>,
-), ksni::Error> {
+) -> Result<
+    (
+        std::sync::mpsc::Receiver<TrayMsg>,
+        ksni::blocking::Handle<AppTray>,
+    ),
+    ksni::Error,
+> {
     let (tx, rx) = std::sync::mpsc::channel();
     let tray = AppTray {
         tx,
@@ -134,68 +137,17 @@ pub fn spawn_tray(
 
 // --- icon rendering -------------------------------------------------------
 
-const SIZE: i32 = 64;
-// Lightning bolt polygon (classic zig-zag), coordinates in 0..64 space.
-const BOLT: [(f32, f32); 7] = [
-    (35.0, 6.0),
-    (19.0, 36.0),
-    (29.0, 36.0),
-    (25.0, 58.0),
-    (47.0, 26.0),
-    (35.0, 26.0),
-    (42.0, 6.0),
-];
-const BOLT_COLOR: (u8, u8, u8) = (122, 162, 247); // #7aa2f7 accent
-const BG_COLOR: (u8, u8, u8) = (36, 40, 59); // #24283b widget bg
+/// Pixmap side, in pixels. Hosts scale this down, and 64 keeps it sharp on a
+/// HiDPI tray.
+const SIZE: u32 = 64;
 
-/// 64×64 ARGB32 (network byte order) pixmap for the StatusNotifierItem.
+/// `SIZE`×`SIZE` ARGB32 (network byte order) pixmap for the StatusNotifierItem.
+/// It is the same mark as the window icon and the desktop entry — drawn from
+/// [`crate::logo`] — so the three cannot drift apart.
 pub fn tray_icon_pixmap() -> Icon {
-    let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let (r, g, b, a) = pixel(x as f32 + 0.5, y as f32 + 0.5);
-            data.push(a);
-            data.push(r);
-            data.push(g);
-            data.push(b);
-        }
+    Icon {
+        width: SIZE as i32,
+        height: SIZE as i32,
+        data: crate::logo::argb32(SIZE),
     }
-    Icon { width: SIZE, height: SIZE, data }
-}
-
-fn pixel(x: f32, y: f32) -> (u8, u8, u8, u8) {
-    if point_in_poly(x, y, &BOLT) {
-        return (BOLT_COLOR.0, BOLT_COLOR.1, BOLT_COLOR.2, 255);
-    }
-    if inside_rounded_rect(x, y, 2.0, 2.0, SIZE as f32 - 4.0, SIZE as f32 - 4.0, 14.0) {
-        return (BG_COLOR.0, BG_COLOR.1, BG_COLOR.2, 255);
-    }
-    (0, 0, 0, 0)
-}
-
-fn inside_rounded_rect(x: f32, y: f32, rx: f32, ry: f32, w: f32, h: f32, r: f32) -> bool {
-    if x < rx || y < ry || x > rx + w || y > ry + h {
-        return false;
-    }
-    // Distance from the inner rect's corners.
-    let cx = x.clamp(rx + r, rx + w - r);
-    let cy = y.clamp(ry + r, ry + h - r);
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= r * r
-}
-
-/// Ray-casting point-in-polygon test.
-fn point_in_poly(x: f32, y: f32, poly: &[(f32, f32)]) -> bool {
-    let mut inside = false;
-    let mut j = poly.len() - 1;
-    for i in 0..poly.len() {
-        let (xi, yi) = poly[i];
-        let (xj, yj) = poly[j];
-        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }

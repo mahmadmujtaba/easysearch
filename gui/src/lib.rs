@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub mod ipc;
+mod logo;
 mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
@@ -546,14 +547,19 @@ fn gtk_settings_dark_from(text: &str) -> Option<bool> {
 
 /// Run the GUI against an already-chosen search backend (blocks until exit).
 pub fn run(backend: Arc<Backend>) -> eframe::Result {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("EasySearch")
+        // Must match the installed desktop entry / icon name so Wayland
+        // compositors associate the window with it (and show the icon).
+        .with_app_id(APP_ID)
+        .with_inner_size([1240.0, 760.0])
+        .with_min_inner_size([640.0, 400.0]);
+    // X11 — and Wayland sessions whose compositor does not resolve the app id —
+    // take the window icon from here, so the mark is compiled in rather than
+    // read from the icon theme.
+    viewport = viewport.with_icon(window_icon());
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("EasySearch")
-            // Must match the installed desktop entry / icon name so Wayland
-            // compositors associate the window with it (and show the icon).
-            .with_app_id(APP_ID)
-            .with_inner_size([1240.0, 760.0])
-            .with_min_inner_size([640.0, 400.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -561,6 +567,16 @@ pub fn run(backend: Arc<Backend>) -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, backend)))),
     )
+}
+
+/// The logo rendered for the window icon.
+fn window_icon() -> egui::IconData {
+    const SIZE: u32 = 256;
+    egui::IconData {
+        rgba: logo::rgba(SIZE),
+        width: SIZE,
+        height: SIZE,
+    }
 }
 
 /// Choose the search backend for the standalone `easysearch-gui` binary.
@@ -982,6 +998,8 @@ struct App {
     sort: Option<Sort>,
     preview: Option<Preview>,
     dark: bool,
+    /// The logo, rasterised on first use (see [`App::logo`]).
+    logo_tex: Option<egui::TextureHandle>,
     history_idx: Option<usize>,
     search_was_focused: bool,
     /// Screen rect of the search field. A press outside it drops the field's
@@ -1236,6 +1254,7 @@ impl App {
             sort: start.sort,
             preview: None,
             dark,
+            logo_tex: None,
             history_idx: None,
             search_was_focused: false,
             search_rect: None,
@@ -3230,6 +3249,20 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// The logo, rasterised once and reused.
+    fn logo(&mut self, ctx: &egui::Context) -> egui::TextureHandle {
+        const SIZE: u32 = 128;
+        self.logo_tex
+            .get_or_insert_with(|| {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [SIZE as usize, SIZE as usize],
+                    &logo::rgba(SIZE),
+                );
+                ctx.load_texture("easysearch-logo", image, egui::TextureOptions::LINEAR)
+            })
+            .clone()
+    }
+
     fn about_dialog(&mut self, ctx: &egui::Context) {
         let (files, dirs) = self.engine.counts();
         egui::Window::new("About")
@@ -3239,6 +3272,9 @@ impl App {
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.vertical_centered(|ui| {
+                    let mark = self.logo(ui.ctx());
+                    ui.add(egui::Image::new((mark.id(), egui::vec2(64.0, 64.0))));
+                    ui.add_space(6.0);
                     ui.label(egui::RichText::new("EasySearch").size(20.0).strong());
                     ui.label(
                         egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
@@ -5088,7 +5124,10 @@ impl App {
                 );
                 return;
             }
-            // Idle state: search tips + recent searches.
+            // Idle state: the mark, then search tips + recent searches.
+            let mark = self.logo(ui.ctx());
+            ui.add(egui::Image::new((mark.id(), egui::vec2(72.0, 72.0))));
+            ui.add_space(12.0);
             ui.label(
                 egui::RichText::new("Start typing to search")
                     .size(19.0)
@@ -5928,6 +5967,12 @@ impl App {
                         .color(t.faint),
                 )
                 .on_hover_text("Running version — updates install in place");
+                // The mark, tucked in beside the version: always on screen, and
+                // the one place a glance ties the window to its icon.
+                let mark = self.logo(ui.ctx());
+                ui.add(egui::Image::new((mark.id(), egui::vec2(13.0, 13.0))))
+                    .on_hover_text("EasySearch");
+                ui.add_space(3.0);
                 if let Some(version) = &self.update_banner {
                     ui.label(
                         egui::RichText::new(format!("⬆ v{version} available"))

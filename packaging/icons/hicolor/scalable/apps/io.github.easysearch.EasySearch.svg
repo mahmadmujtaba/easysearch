@@ -1,23 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  EasySearch app icon: a magnifier with a lightning bolt inside.
+  EasySearch: a magnifier over a lightning bolt, on a rounded badge.
+
+  This is the desktop-entry / software-centre icon. The app draws the same mark
+  itself (window icon, tray, About dialog) from the geometry in
+  `gui/src/logo.rs` — keep the two in step; the coordinates and colours below are
+  the ones that file uses.
 
   Drawn with filled shapes only (no gradients, no strokes) so that every SVG
   renderer draws it identically — including minimal ones that ignore
   stroke-only shapes, such as ImageMagick's built-in renderer.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <!-- Rounded-square background -->
-  <rect x="16" y="16" width="480" height="480" rx="110" ry="110" fill="#232842"/>
+  <!-- Rounded-square badge -->
+  <rect x="16" y="16" width="480" height="480" rx="108" ry="108" fill="#232842"/>
 
-  <!-- Magnifier handle: a filled bar with a rounded end -->
-  <path d="M288.6 309.4 L315.4 282.6 L401.4 368.6 L374.6 395.4 Z" fill="#7aa2f7"/>
-  <circle cx="388" cy="382" r="19" fill="#7aa2f7"/>
+  <!-- Magnifier handle: a capsule along the 45° diagonal, under the ring -->
+  <path d="M283.7 316.3 L324.3 275.7 L404.0 355.4 L363.4 396.0 Z" fill="#7aa2f7"/>
+  <circle cx="383.7" cy="375.7" r="28.7" fill="#7aa2f7"/>
 
-  <!-- Magnifier ring: an outer disc with the background punched out -->
-  <circle cx="226" cy="220" r="117" fill="#7aa2f7"/>
-  <circle cx="226" cy="220" r="87" fill="#232842"/>
+  <!-- Magnifier lens: an outer disc with the badge punched out of it -->
+  <circle cx="228" cy="220" r="128" fill="#7aa2f7"/>
+  <circle cx="228" cy="220" r="91" fill="#232842"/>
 
   <!-- Lightning bolt -->
-  <path d="M246 152 L192 240 h38 l-16 66 70 -92 h-40 z" fill="#e0af68"/>
+  <path d="M228 151 L192.1 231 L221 231 L213 289 L264 206 L235 206 Z" fill="#e0af68"/>
 </svg>
