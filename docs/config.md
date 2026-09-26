@@ -70,7 +70,7 @@ queries:
 
 | Key | Default | Effect |
 |---|---|---|
-| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) is cached so repeated content searches do not re-extract it. **Off at boot** and **live-toggleable** — **Settings ▸ Indexing ▸ Background content index** (the app pushes it to the engine) — and switching it off frees the cache, so it costs nothing while off. |
+| `content_index_enabled` | `false` | Background content cache: extracted document text (`.docx`, OpenDocument `.odt`/`.ods`/`.odp`/`.odg`, PDF) is cached so repeated content searches do not re-extract it. **Off at boot** and **live-toggleable** — **Settings ▸ Indexing ▸ Background content index** (the app pushes it to the engine) — and switching it off frees the cache, so it costs nothing while off. |
 | `content_index_max_file_bytes` | `8388608` (8 MB) | Files larger than this are not cached (they are still searched live). |
 | `content_index_total_cap_bytes` | `268435456` (256 MB) | Total size of the cache; LRU-evicted beyond this. With the default disk store this bounds the spool directory; with `content_index_in_memory` it bounds resident memory. |
 | `content_index_in_memory` | `false` | **Where** the cache lives: `false` spools text to `<disk_index_dir>/content/` and reads it back per lookup, so documents do not stay resident; `true` keeps it in RAM. Set at boot with `--content-in-memory` or `EASYSEARCH_CONTENT_MEMORY=1` (the launcher flag reaches the engine child the app spawns through the environment). |

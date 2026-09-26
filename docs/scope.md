@@ -41,8 +41,8 @@ repeated content queries, and is kept fresh by the same event pipeline.
 
 - Realtime whole-filesystem **filename/path search** (glob patterns *and* regex).
 - Realtime **content search** over text-based files (code, configs, plain text, logs)
-  and **Word `.docx`** documents, **OpenDocument `.odt`** documents and the text
-  layer of **PDF** files.
+  and the text of **Word `.docx`** documents, the **OpenDocument** family
+  (`.odt`/`.ods`/`.odp`/`.odg`) and the text layer of **PDF** files.
 - Lightweight **native GUI** (search box, results list, match-mode toggles, status bar) —
   no web technologies.
 - **CLI** for scripting; an optional headless **engine** server (`easysearch-daemon`) speaking the same JSON-frames protocol.
@@ -56,7 +56,7 @@ repeated content queries, and is kept fresh by the same event pipeline.
   the embedded ripgrep engine reads live data faster than any incremental indexer for
   human-scale queries).
 - Binary file content search (images, video, archives) — text, **Word `.docx`**,
-  **OpenDocument `.odt`** and **PDF (text layer)** are searchable.
+  the **OpenDocument** family and **PDF (text layer)** are searchable.
 - Network filesystems as *indexed roots* (SMB/NFS mounts excluded by default; see §6).
 - **Any network access by the app itself** — no updater, no telemetry, no remote API
   (the in-place updater was removed in v0.38.0; install and upgrade via `.deb`/`.rpm`).
@@ -81,7 +81,7 @@ repeated content queries, and is kept fresh by the same event pipeline.
 │   │                       small in-memory change overlay (flushed into the db per query)    │
 │   ├── matcher ── globset (pattern mode) + regex crate (regex mode) over indexed paths       │
 │   ├── content  ── grep-searcher + grep-regex + ignore (ripgrep engine, in-process)          │
-│   │                 └─ preprocessor hook (docx extraction)                                   │
+│   │                 └─ document extraction (docx/odf/pdf)                                     │
 │   ├── content_index (OPTIONAL, default off) ── background extractor + disk-spooled cache    │
 │   │                 (bounded, LRU; kept fresh by the same watcher events)                    │
 │   └── queries  ── SQL pushdown (dir/ext/size/mtime/hidden) + one shared predicate          │
@@ -130,7 +130,7 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | CLI | **`clap`** | hand-rolled parser |
 | Engine transport | **JSON frames over the child's stdin/stdout** (the app re-executes itself with `--engine`) | HTTP/`tiny_http` on loopback (rejected: a listening socket to secure for no gain) |
 | Serialization (engine protocol) | **`serde_json`** | — |
-| `.docx` / `.odt` / `.pdf` extraction | **in-process** (`zip` + `quick-xml`; `pdf-extract`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
+| `.docx` / OpenDocument / `.pdf` extraction | **in-process** (`zip` + `quick-xml`; `pdf-extract`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
 
 **Explicitly rejected:** Python (too slow — user direction), web-based UI frameworks
 (Electron/Tauri/webview — user direction), Baloo/Recoll/Tracker (heavy), subprocess-per-
@@ -183,13 +183,14 @@ filter bar). They are enforced by the same predicate whether the query is a `sea
   is off by default because it is much slower.
 - **Realtime guarantee for content:** results are always computed from live disk state at
   query time. Editing a file then re-running the query immediately shows the change.
-- `.docx` / `.odt` / `.pdf` content: text is extracted **in-process**, so Office
-  and PDF files behave like text with no external tool to install. For OOXML/ODF
-  (both ZIPs of XML) the run text, tabs, line breaks and table cells become
-  whitespace that keeps words separated, and headers, footers, footnotes,
-  endnotes and comments are included. For PDF it is the text layer only — a
-  scanned, image-only PDF has none, which is a property of the file. Malformed
-  input is skipped, never fatal (the PDF parser even runs under `catch_unwind`).
+- `.docx` / OpenDocument (`.odt`/`.ods`/`.odp`/`.odg`) / `.pdf` content: text is
+  extracted **in-process**, so Office and PDF files behave like text with no
+  external tool to install. For OOXML/ODF (both ZIPs of XML) the run text, tabs,
+  line breaks and table cells become whitespace that keeps words separated, and
+  headers, footers, footnotes, endnotes and comments are included. For PDF it is
+  the text layer only — a scanned, image-only PDF has none, which is a property
+  of the file. Malformed input is skipped, never fatal (the PDF parser even runs
+  under `catch_unwind`).
 - Binary files are never content-searched (binary detection quits on NUL, exactly like
   `rg`).
 
@@ -275,7 +276,7 @@ One query box, three effective combinations:
 |---|---|---|
 | Content search engine | **ripgrep's crates** (`grep-searcher`, `grep-regex`, `ignore`, `globset`) | The same code as the `rg` binary, in-process; no subprocess, no runtime dep |
 | Filesystem events | **`notify`** crate | Wraps inotify (Linux); same API on Windows/macOS |
-| `.docx` / `.odt` / `.pdf` text extraction | **`zip` + `quick-xml`** for OOXML/ODF, **`pdf-extract`** for PDF | All in-process: a package is a ZIP of XML, and a PDF text layer needs no subprocess or apt-installed tool |
+| `.docx` / OpenDocument / `.pdf` text extraction | **`zip` + `quick-xml`** for OOXML/ODF, **`pdf-extract`** for PDF | All in-process: a package is a ZIP of XML, and a PDF text layer needs no subprocess or apt-installed tool |
 | Open results | **`xdg-open`** | Desktop-standard "open file / containing folder" |
 | Build toolchain | **apt** `rustc`/`cargo` 1.85 (or rustup) + `build-essential`, `pkg-config`, X11/Wayland/GL dev libs | Verified available on target; one-time `sudo apt install` |
 
@@ -283,8 +284,8 @@ One query box, three effective combinations:
 `find`-based reimplementation, subprocess-per-query `rg`, a hand-rolled content indexer.
 
 > Every content format is read **in-process**, so there is no external tool to
-> install for `.docx` / `.odt` / `.pdf` content search. A file that cannot be
-> parsed is skipped, and the query still succeeds.
+> install for `.docx` / OpenDocument / `.pdf` content search. A file that cannot
+> be parsed is skipped, and the query still succeeds.
 
 ---
 

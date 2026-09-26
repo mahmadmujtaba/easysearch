@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.34.0** (2026-09-26), in rough priority order. Everything
+Outstanding items at **v0.39.0** (2026-09-27), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -86,8 +86,8 @@ Both scripts fail fast with install instructions when their tool is missing, so
   there is no host-reaching API and no `--share=network` to add.
 - **Flatpak: only `$HOME` is visible.** Grant `--filesystem=host:ro` to search
   the rest of the disk.
-- **Empty files have no preview.** A 0-byte text file shows “No text preview
-  for this file.” rather than an empty document.
+- ~~**Empty files have no preview.**~~ **Fixed in v0.37.0** — a 0-byte file shows
+  “This file is empty (0 bytes).”
 - **`easysearch-gui` is still built but no longer packaged.** If you add a
   binary or a `dlopen`ed library, update three places in step:
   `GUI_DEPENDS` in `scripts/package-deb.sh`, the `Requires:` sonames in

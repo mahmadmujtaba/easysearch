@@ -157,6 +157,35 @@ Query semantics (Everything-style):
 - case-insensitive by default (`--case` to change)
 - hidden files/dirs are indexed but hidden from results (`--hidden` to include)
 
+## Supported formats
+
+**Filename search** covers every file and directory the index walks (the whole
+root, subject to `roots` and the ignore rules) — there is nothing format-specific
+about it.
+
+**Content search** reads text-like files live, plus these document formats, whose
+text is extracted **in-process** (no external tool to install):
+
+| Format | Extensions | Notes |
+|---|---|---|
+| Plain text, code, config, logs, CSV, … | anything text-like | binary detection stops on NUL, like `rg` |
+| Microsoft Word | `.docx` | OOXML package (`word/document.xml` + headers, footers, notes, comments) |
+| LibreOffice / OpenDocument | `.odt` `.ods` `.odp` `.odg` | ODF `content.xml`, table-driven like the OOXML reader |
+| PDF | `.pdf` | text layer only — a scanned, image-only PDF has none |
+
+Binary Office formats (Word `.doc`, Excel `.xls`/`.xlsx`, PowerPoint
+`.ppt`/`.pptx`) are **not** extracted yet; the preview says so rather than
+guessing. Malformed input is skipped, never fatal.
+
+**Previews** (the right-hand pane) render by kind: image thumbnails; audio/video
+metadata and a video first-frame; the text layer of the document formats above;
+rendered **Markdown**; and **syntax-highlighted source code**. The highlighter
+understands Rust, C/C++, Java, Go, Python, JavaScript/TypeScript, shell,
+JSON/YAML/TOML/INI, HTML/XML, CSS, SQL, Ruby, PHP, Lua, Kotlin, Swift, C#,
+R, Haskell, Scala, Dart, Perl, Nix, Elixir, Erlang and Clojure (mapped from the
+extension, and by name for `Makefile`, `Dockerfile`, …), and also colours fenced
+code inside a Markdown preview.
+
 ## Configuration
 
 `~/.config/easysearch/config.json` (optional; defaults shown):
