@@ -17,6 +17,7 @@ use crate::sqlite_index::{REFRESH_AFTER_DIRTY, SqliteIndex};
 use crate::walker::{self, walk_root_apply, walk_root_collect};
 use crate::watcher;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -647,7 +648,37 @@ impl Engine {
             accepts(&cq, p, meta, false).then(|| (p.to_path_buf(), meta))
         };
 
-        let (results, truncated) = if want_content {
+        let (results, truncated) = if want_content && cq.content_or_name && cq.has_name_filter {
+            // “Full text”: a file matches if its *name* matches or its *content*
+            // does, so both halves are evaluated and merged.
+            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let name_hits: Vec<PathBuf> = self
+                .collect(&name_filter, cap)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
+            let name_less = without_name(&cq);
+            let candidates: Vec<PathBuf> = self
+                .collect(
+                    &|p, meta| accepts(&name_less, p, meta, true).then(|| (p.to_path_buf(), meta)),
+                    cap,
+                )
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
+            let content_hits = search_contents(
+                &candidates,
+                &pattern,
+                cap,
+                &self.cache,
+                self.queue.as_deref(),
+            );
+            let (paths, truncated) = merge_or_hits(name_hits, content_hits, limit);
+            (
+                paths.into_iter().map(|p| self.row_for(&p)).collect(),
+                truncated,
+            )
+        } else if want_content {
             let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
             let candidates: Vec<PathBuf> = if cq.has_name_filter {
                 self.collect(&name_filter, cap)
@@ -719,7 +750,34 @@ impl Engine {
             limit
         };
 
-        let (results, truncated) = if want_content {
+        let (results, truncated) = if want_content && cq.content_or_name && cq.has_name_filter {
+            // “Full text”: match the name *or* the content.
+            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let name_hits: Vec<PathBuf> = db.candidates(cq, cap)?;
+            let name_less = without_name(cq);
+            let candidates = db.candidates(&name_less, cap)?;
+            let content_hits = search_contents(
+                &candidates,
+                &pattern,
+                cap,
+                &self.cache,
+                self.queue.as_deref(),
+            );
+            let (paths, truncated) = merge_or_hits(name_hits, content_hits, limit);
+            let rows = paths
+                .into_iter()
+                .map(|p| {
+                    let m = db.meta_of(&p).unwrap_or_default();
+                    ResultRow {
+                        path: p,
+                        size: m.size,
+                        mtime: m.mtime,
+                        is_dir: m.is_dir,
+                    }
+                })
+                .collect();
+            (rows, truncated)
+        } else if want_content {
             let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
             let candidates = db.candidates(cq, cap)?;
             let matched = search_contents(
@@ -934,6 +992,35 @@ impl Engine {
 ///
 /// `files_only` forces directories out even when `include_dirs` is set (content
 /// search only ever looks inside files).
+/// A copy of `cq` with the name terms and exclusions removed, so `accepts` can
+/// collect the candidates for the *content* half of a “Full text” (OR) query
+/// without also demanding that the name match.
+fn without_name(cq: &CompiledQuery) -> CompiledQuery {
+    let mut bare = cq.clone();
+    bare.terms.clear();
+    bare.excludes.clear();
+    bare.has_name_filter = false;
+    bare
+}
+
+/// Merge the two halves of an OR query — name matches first, then the content
+/// matches that are not already there — and cap the result.
+fn merge_or_hits(
+    mut name_hits: Vec<PathBuf>,
+    content_hits: Vec<PathBuf>,
+    limit: usize,
+) -> (Vec<PathBuf>, bool) {
+    let mut seen: HashSet<PathBuf> = name_hits.iter().cloned().collect();
+    for path in content_hits {
+        if seen.insert(path.clone()) {
+            name_hits.push(path);
+        }
+    }
+    let truncated = name_hits.len() > limit;
+    name_hits.truncate(limit);
+    (name_hits, truncated)
+}
+
 pub(crate) fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool) -> bool {
     if meta.is_dir && (files_only || !cq.include_dirs) {
         return false;

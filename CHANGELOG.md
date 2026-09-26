@@ -4,6 +4,26 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-09-26
+
+### Added
+
+- **The *Full text* scope: the query matches the file name *or* its contents.**
+  Previously a content query required the name to match as well (name AND
+  content), which the reference UI's “Full Text (content + name)” scope could not
+  express. Now the scope picker has four entries — *Filenames*, *Full path*,
+  *Contents*, *Full text (name or contents)* — and the engine evaluates both
+  halves and merges them, name matches first. Also `--any` on the CLI and
+  `any`/`content_or_name` on the HTTP API, and `Query.content_or_name`.
+- `engine::without_name()` and `engine::merge_or_hits()` keep the two backends
+  (mmap and SQLite) sharing one implementation of the merge.
+
+### Notes
+
+- The sidebar's per-category facet counts stay name-based for *Full text*
+  queries (counting the content half would mean running a content search per
+  category per keystroke); that was already true for content queries.
+
 ## [0.24.0] - 2026-09-26
 
 ### Changed — the project is now **EasySearch**

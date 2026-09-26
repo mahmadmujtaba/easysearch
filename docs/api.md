@@ -65,6 +65,7 @@ Errors are always JSON: `{"error":"…"}` with a `4xx`/`5xx` status.
 | `regex` | `1`/`true` — treat terms as regex |
 | `case` | `1`/`true` — case-sensitive |
 | `content` | regex searched inside file contents |
+| `any` / `content_or_name` | `1`/`true` — with `content`, match the name **or** the content instead of requiring both |
 | `fuzzy` | `1`/`true` — fzf-style subsequence matching for name terms (`!` terms stay literal) |
 | `multiline` | `1`/`true` — the `content` pattern may span lines (slower) |
 | `hidden` | `1`/`true` — include hidden files |

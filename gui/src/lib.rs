@@ -242,6 +242,8 @@ struct TabState {
     query: String,
     regex_mode: bool,
     content_mode: bool,
+    /// With `content_mode`: match the name *or* the content (the Full text scope).
+    full_text: bool,
     case_sensitive: bool,
     hidden: bool,
     full_path: bool,
@@ -268,6 +270,7 @@ impl Default for TabState {
             query: String::new(),
             regex_mode: false,
             content_mode: false,
+            full_text: false,
             case_sensitive: false,
             hidden: false,
             full_path: false,
@@ -294,6 +297,7 @@ impl TabState {
             query: p.query.clone(),
             regex_mode: p.regex_mode,
             content_mode: p.content_mode,
+            full_text: p.full_text,
             case_sensitive: p.case_sensitive,
             hidden: p.hidden,
             full_path: p.full_path,
@@ -311,6 +315,7 @@ impl TabState {
             query: self.query.clone(),
             regex_mode: self.regex_mode,
             content_mode: self.content_mode,
+            full_text: self.full_text,
             case_sensitive: self.case_sensitive,
             hidden: self.hidden,
             full_path: self.full_path,
@@ -330,6 +335,9 @@ struct TabPrefs {
     query: String,
     regex_mode: bool,
     content_mode: bool,
+    /// `#[serde(default)]` keeps older `gui.json` files loadable.
+    #[serde(default)]
+    full_text: bool,
     case_sensitive: bool,
     hidden: bool,
     full_path: bool,
@@ -896,6 +904,8 @@ enum Scope {
     Filenames,
     FullPath,
     Contents,
+    /// The query is matched against the file name **or** its contents.
+    FullText,
 }
 
 /// Which tab the right-hand panel shows.
@@ -912,6 +922,8 @@ struct App {
     query: String,
     regex_mode: bool,
     content_mode: bool,
+    /// With `content_mode`: the query matches the name *or* the contents.
+    full_text: bool,
     case_sensitive: bool,
     hidden: bool,
     full_path: bool,
@@ -1166,6 +1178,7 @@ impl App {
             query: start.query,
             regex_mode: start.regex_mode,
             content_mode: start.content_mode,
+            full_text: start.full_text,
             case_sensitive: start.case_sensitive,
             hidden: start.hidden,
             full_path: start.full_path,
@@ -1380,6 +1393,7 @@ impl App {
             query: self.query.clone(),
             regex_mode: self.regex_mode,
             content_mode: self.content_mode,
+            full_text: self.full_text,
             case_sensitive: self.case_sensitive,
             hidden: self.hidden,
             full_path: self.full_path,
@@ -1405,6 +1419,7 @@ impl App {
         self.query = t.query;
         self.regex_mode = t.regex_mode;
         self.content_mode = t.content_mode;
+        self.full_text = t.full_text;
         self.case_sensitive = t.case_sensitive;
         self.hidden = t.hidden;
         self.full_path = t.full_path;
@@ -1482,7 +1497,9 @@ impl App {
     }
 
     fn send_query(&mut self) {
-        let name = if self.content_mode {
+        // In the *Contents* scope the query text is the content pattern and the
+        // name is empty; in *Full text* it is both, matched as alternatives.
+        let name = if self.content_mode && !self.full_text {
             String::new()
         } else {
             self.query.clone()
@@ -1509,6 +1526,7 @@ impl App {
             modified_within_secs: self.modified.secs(),
             fuzzy: self.prefs.fuzzy,
             multiline: self.prefs.multiline,
+            content_or_name: self.full_text,
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search {
@@ -2813,7 +2831,7 @@ impl eframe::App for App {
             && self.counts_at.elapsed() >= Duration::from_millis(500)
         {
             let base = Query {
-                name: if self.content_mode {
+                name: if self.content_mode && !self.full_text {
                     String::new()
                 } else {
                     self.last_sent.clone()
@@ -2832,6 +2850,9 @@ impl eframe::App for App {
                 modified_within_secs: self.modified.secs(),
                 fuzzy: self.prefs.fuzzy,
                 multiline: self.prefs.multiline,
+                // Facet counts are name-based; the content half of a Full text
+                // query is not counted here (it is approximated as before).
+                content_or_name: false,
                 limit: 1,
             };
             self.counts_key = self.last_sent.clone();
@@ -3897,6 +3918,19 @@ impl App {
                             self.set_scope(Scope::Contents);
                             ui.close_menu();
                         }
+                        if ui
+                            .selectable_label(
+                                self.scope() == Scope::FullText,
+                                "Full text (name or contents)",
+                            )
+                            .on_hover_text(
+                                "The query matches the file name or its contents, not both",
+                            )
+                            .clicked()
+                        {
+                            self.set_scope(Scope::FullText);
+                            ui.close_menu();
+                        }
                     })
                     .response
                     .on_hover_text("Where the query is matched");
@@ -4212,7 +4246,11 @@ impl App {
     /// Which part of a file the query is matched against.
     fn scope(&self) -> Scope {
         if self.content_mode {
-            Scope::Contents
+            if self.full_text {
+                Scope::FullText
+            } else {
+                Scope::Contents
+            }
         } else if self.full_path {
             Scope::FullPath
         } else {
@@ -4225,6 +4263,7 @@ impl App {
             Scope::Filenames => "Filenames",
             Scope::FullPath => "Full path",
             Scope::Contents => "Contents (ripgrep)",
+            Scope::FullText => "Full text (name or contents)",
         }
     }
 
@@ -4232,7 +4271,8 @@ impl App {
         if self.scope() == s {
             return;
         }
-        self.content_mode = s == Scope::Contents;
+        self.content_mode = matches!(s, Scope::Contents | Scope::FullText);
+        self.full_text = s == Scope::FullText;
         self.full_path = s == Scope::FullPath;
         self.send_query();
     }

@@ -298,6 +298,7 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
             "hidden" => q.include_hidden = truthy(&value),
             "fuzzy" => q.fuzzy = truthy(&value),
             "multiline" => q.multiline = truthy(&value),
+            "content_or_name" | "any" => q.content_or_name = truthy(&value),
             "path" | "full_path" => q.full_path = truthy(&value),
             "dirs" | "include_dirs" => q.include_dirs = truthy(&value),
             "under" => {

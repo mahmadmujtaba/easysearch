@@ -115,7 +115,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | `Tags` tab, tag chips, bulk `Tag` action | Not built (needs a tag store) |
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
 | `Created` **column** in the table | Deferred: birth time is shown in the Details tab, but a table column would need `btime` stored in the on-disk index (a format change) |
-| `Full Text (content + name)` scope | Offered as `Filenames` / `Full path` / `Contents` instead: the engine ANDs name and content, so an OR mode needs an engine change |
+| `Full Text (content + name)` scope | **Built in v0.25.0** — the *Full text (name or contents)* scope, `--any`, or `content_or_name` on the API |
 | Per-location counts in the sidebar | Locations are listed with their paths; only the categories carry live counts |
 | `Follow symlinks` advanced checkbox | **Built in v0.22.0** — Tools ▸ Ignore files… and Settings ▸ Indexing, live via `POST /v1/config` |
 | `Content: Any` filter | Not built (no meaningful second value today) |

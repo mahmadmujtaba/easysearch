@@ -57,6 +57,54 @@ fn test_engine(root: &std::path::Path) -> Engine {
 }
 
 #[test]
+fn full_text_matches_name_or_content() {
+    let dir = TestDir::new("fulltext");
+    let root = dir.0.clone();
+    // Name matches but content does not.
+    std::fs::write(root.join("alpha-note.txt"), "nothing interesting here").unwrap();
+    // Content matches but the name does not.
+    std::fs::write(root.join("beta.txt"), "a mention of alpha inside").unwrap();
+    // Neither.
+    std::fs::write(root.join("gamma.txt"), "unrelated").unwrap();
+
+    let engine = test_engine(&root);
+    let query = |or: bool| Query {
+        name: "alpha".into(),
+        content: Some("alpha".into()),
+        content_or_name: or,
+        include_dirs: false,
+        limit: 50,
+        ..Query::default()
+    };
+
+    let names = |r: easysearch_core::SearchResponse| {
+        let mut v: Vec<String> = r
+            .results
+            .iter()
+            .filter_map(|row| {
+                row.path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect();
+        v.sort();
+        v
+    };
+
+    // Default: name AND content, so neither fixture qualifies.
+    assert!(
+        names(engine.search(&query(false)).unwrap()).is_empty(),
+        "AND mode should require both"
+    );
+
+    // Full text: name OR content, so both qualify and the third does not.
+    assert_eq!(
+        names(engine.search(&query(true)).unwrap()),
+        vec!["alpha-note.txt".to_string(), "beta.txt".to_string()]
+    );
+}
+
+#[test]
 fn name_regex_content_and_realtime() {
     let dir = TestDir::new("main");
     let root = dir.0.clone();

@@ -41,8 +41,11 @@ Query syntax (Everything-compatible):
 | `foo\nbar` *(Multiline)* | a content regex that spans lines (much slower) |
 
 **Scope** (the picker next to the search box) decides *what* the query is matched
-against: **Filenames** (default), **Full path**, or **Contents** (inside files,
-via the embedded ripgrep engine — always read live, never stale).
+against: **Filenames** (default), **Full path**, **Contents** (inside files, via
+the embedded ripgrep engine — always read live, never stale), or **Full text**,
+where the query matches the file name **or** its contents. *Contents* and *Full
+text* use the same pattern for content matching; the difference is whether the
+name must also match (`Contents`) or may match instead (`Full text`).
 
 **Location** (and the sidebar's *Indexed Locations*) restricts the search to one
 directory; Back/Forward in the toolbar walk your location history.

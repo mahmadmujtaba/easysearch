@@ -96,6 +96,7 @@ make run                          # or: ./target/release/easysearch
 ./target/release/easysearch-cli search --content "TODO"     # search inside files
 ./target/release/easysearch-cli search mtn --fuzzy          # fzf-style match
 ./target/release/easysearch-cli search '' --content 'a\nb' --multiline  # spans lines
+./target/release/easysearch-cli search budget --content budget --any     # name OR content
 ./target/release/easysearch-cli search '*' --ext pdf,docx --min-size 1M
 ./target/release/easysearch-cli search '*.log' --modified-within 7d
 ./target/release/easysearch-cli search '*' --under /srv/data
@@ -130,6 +131,9 @@ Query semantics (Everything-style):
   Relevance ranking. `!term` exclusions stay literal
 - `--regex` treats each term as a regex (filenames and content); `--multiline`
   lets the content pattern span lines (`foo\nbar`), which is slower
+- `--content PATTERN` additionally searches inside files (a result must match
+  **both** the name query and the pattern); `--any` relaxes that to **either**
+  (the GUI's *Full text* scope)
 - case-insensitive by default (`--case` to change)
 - hidden files/dirs are indexed but hidden from results (`--hidden` to include)
 

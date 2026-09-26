@@ -42,6 +42,10 @@ enum Command {
         /// (combined with the name query: results must match both)
         #[arg(long, value_name = "PATTERN")]
         content: Option<String>,
+        /// With --content: match the *name* query OR the content pattern
+        /// instead of requiring both (the GUI's "Full text" scope)
+        #[arg(long)]
+        any: bool,
         /// Let the content pattern span lines (e.g. --content 'foo\nbar')
         #[arg(long)]
         multiline: bool,
@@ -121,6 +125,7 @@ fn main() {
             query,
             regex,
             content,
+            any,
             multiline,
             case,
             hidden,
@@ -171,6 +176,7 @@ fn main() {
                 modified_within_secs,
                 fuzzy,
                 multiline,
+                content_or_name: any,
                 limit,
             };
             match backend.search(&q) {

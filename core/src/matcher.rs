@@ -76,6 +76,10 @@ pub struct Query {
     /// against one line at a time. Much slower, so it is opt-in.
     #[serde(default)]
     pub multiline: bool,
+    /// Match the name query **or** the content pattern, instead of requiring
+    /// both (the "Full text" scope). Has no effect without a content pattern.
+    #[serde(default)]
+    pub content_or_name: bool,
     pub limit: usize,
 }
 
@@ -97,6 +101,7 @@ impl Default for Query {
             modified_within_secs: None,
             fuzzy: false,
             multiline: false,
+            content_or_name: false,
             limit: 1000,
         }
     }
@@ -209,6 +214,8 @@ pub struct CompiledQuery {
     pub limit: usize,
     /// The content pattern may span lines (see [`Query::multiline`]).
     pub multiline: bool,
+    /// Name terms and the content pattern are alternatives, not both required.
+    pub content_or_name: bool,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
 }
@@ -270,6 +277,7 @@ impl CompiledQuery {
             modified_within_secs: q.modified_within_secs,
             limit: q.limit.max(1),
             multiline: q.multiline,
+            content_or_name: q.content_or_name,
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
     }
