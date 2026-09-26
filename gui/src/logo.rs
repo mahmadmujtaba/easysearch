@@ -1,11 +1,12 @@
 //! The EasySearch logo, compiled into the binary.
 //!
 //! The brand assets live in `icons/` at the root of the repository (4000×4000
-//! exports of the wordmark). `assets/logo.png` is a 512×512 copy of the coloured
-//! tile, embedded here so that the window icon, the tray pixmap and the in-app
-//! mark never depend on the icon theme being installed — which matters for the
-//! single-file binary, and for X11, where the window icon comes from the process
-//! rather than from the desktop entry.
+//! exports of the wordmark). `assets/logo.png` is a 512×512 copy of the
+//! **transparent** artwork, embedded here so that the window icon, the tray
+//! pixmap and the in-app mark never depend on the icon theme being installed —
+//! which matters for the single-file binary, and for X11, where the window icon
+//! comes from the process rather than from the desktop entry. Being transparent,
+//! it reads correctly on both the light and the dark theme.
 //!
 //! The same artwork is installed as
 //! `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg`
@@ -13,8 +14,8 @@
 
 use std::sync::OnceLock;
 
-/// The tile is opaque and square; 512 px is its native size and enough for the
-/// window icon and for the dialog and welcome-screen renders.
+/// The artwork is square and transparent; 512 px is its native size and enough
+/// for the window icon and for the dialog and welcome-screen renders.
 const LOGO_PNG: &[u8] = include_bytes!("../assets/logo.png");
 
 /// The decoded logo. Decoding once keeps the tray refresh and the UI off the
@@ -38,11 +39,19 @@ pub fn rgba(size: u32) -> Vec<u8> {
 
 /// The same image as ARGB32 in network byte order, which is what a
 /// StatusNotifierItem pixmap expects.
+///
+/// The colour channels are premultiplied by alpha (the convention Qt/KDE and
+/// most ARGB32 pixmap consumers use); with the transparent artwork a
+/// straight-alpha buffer would show bright fringes around the mark.
 pub fn argb32(size: u32) -> Vec<u8> {
     let rgba = rgba(size);
     let mut out = Vec::with_capacity(rgba.len());
     for px in rgba.chunks_exact(4) {
-        out.extend_from_slice(&[px[3], px[0], px[1], px[2]]);
+        let a = u32::from(px[3]);
+        out.push(px[3]);
+        out.push((u32::from(px[0]) * a / 255) as u8);
+        out.push((u32::from(px[1]) * a / 255) as u8);
+        out.push((u32::from(px[2]) * a / 255) as u8);
     }
     out
 }
@@ -63,21 +72,37 @@ mod tests {
         for size in [16_u32, 22, 64, 128, 256, 512] {
             let data = rgba(size);
             assert_eq!(data.len(), (size * size * 4) as usize, "size {size}");
-            // The exported tile is opaque, and resampling must not invent
-            // transparency at the edges.
-            assert!(
-                data.iter().skip(3).step_by(4).all(|&a| a == 255),
-                "size {size} lost opacity"
-            );
         }
     }
 
     #[test]
-    fn argb32_moves_alpha_to_the_front() {
+    fn the_logo_is_transparent_not_a_coloured_tile() {
+        // The asset is the transparent export, so it must carry a real alpha
+        // channel: a fully opaque image here means the wrong file got embedded
+        // (the coloured tile has a cream background and would look pasted on
+        // the dark theme).
+        let data = rgba(128);
+        let alpha: Vec<u8> = data.iter().skip(3).step_by(4).copied().collect();
+        assert!(alpha.contains(&0), "expected fully transparent pixels");
+        assert!(alpha.contains(&255), "expected opaque pixels in the mark");
+    }
+
+    #[test]
+    fn argb32_premultiplies_in_network_byte_order() {
         let rgba = rgba(32);
         let argb = argb32(32);
         assert_eq!(argb.len(), rgba.len());
-        assert_eq!(&argb[0..1], &rgba[3..4], "alpha first");
-        assert_eq!(&argb[1..4], &rgba[0..3], "then the colour");
+        for (i, px) in rgba.chunks_exact(4).enumerate() {
+            let a = u32::from(px[3]);
+            let out = &argb[i * 4..i * 4 + 4];
+            assert_eq!(u32::from(out[0]), a, "alpha first");
+            for c in 0..3 {
+                assert_eq!(
+                    u32::from(out[1 + c]),
+                    u32::from(px[c]) * a / 255,
+                    "channel {c} is premultiplied"
+                );
+            }
+        }
     }
 }

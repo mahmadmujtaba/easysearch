@@ -3,14 +3,15 @@
   EasySearch app icon.
 
   This is the project logo, as exported in `icons/` at the repository root
-  (`icons/colored-logo.svg`); it is installed here under the application id so
-  launchers, software centres and the XDG icon themes can find it by name. The
+  (`icons/transparent-logo.svg`); it is installed here under the application id
+  so launchers, software centres and the XDG icon themes can find it by name.
+  The art is transparent, so it sits on whatever background the host draws. The
   app itself draws the same artwork from `gui/assets/logo.png` for its window
   icon, tray pixmap and About dialog, so keep the two in step.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
 shape-rendering="geometricPrecision"
-width="4000" height="4000" viewBox="0 0 776 776"><rect width="100%" height="100%" fill="#EFEADF" />
+width="4000" height="4000" viewBox="0 0 776 776">
   <metadata>null</metadata>
 
 <path d="

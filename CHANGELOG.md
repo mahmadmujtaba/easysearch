@@ -4,6 +4,23 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.1] - 2026-09-26
+
+### Changed
+
+- **The app now shows the transparent logo, not the cream tile.** The window
+  icon, the tray pixmap, the About dialog and the welcome screen all embed
+  `gui/assets/logo.png`, and that was the *coloured* export — a wordmark on its
+  own cream background. On the dark theme it read as a pasted-on light square.
+  The embedded asset and the installed hicolor icon are now
+  `icons/transparent-logo.*`, so the mark sits directly on the theme's own
+  background. The tray's ARGB32 buffer is premultiplied for it (the convention
+  Qt/KDE expect), which straight alpha from a PNG would otherwise leave with
+  bright fringes. `gui/src/logo.rs` now asserts the asset is square *and*
+  genuinely transparent, so embedding the opaque tile again is a test failure.
+  The README keeps the coloured export — a self-contained tile reads on both
+  light and dark pages.
+
 ## [0.32.0] - 2026-09-26
 
 ### Changed

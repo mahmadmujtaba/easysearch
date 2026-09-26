@@ -59,7 +59,7 @@ of it the three Rust binaries.
 ```
 packaging/
   common/           desktop entry + AppStream metainfo (shared by all formats)
-  icons/            hicolor icon theme tree; the SVG is `icons/colored-logo.svg`
+  icons/            hicolor icon theme tree; the SVG is `icons/transparent-logo.svg`
                     under the application id, and PNGs are rendered from it at
                     build time. The app embeds a 512 px copy —
                     `gui/assets/logo.png` — for its window icon, tray pixmap and
@@ -119,18 +119,20 @@ These are placeholders and should be changed to your own identifiers:
 
 | File | Use |
 | --- | --- |
-| `colored-logo.svg`, `.png` | the logo on its own cream background — used by the README and the installed icon, so it reads on light *and* dark pages |
-| `transparent-logo.svg`, `.png` | the same artwork without a background, for placing on a colour you control |
+| `transparent-logo.svg`, `.png` | the logo without a background — **what the app installs and embeds** (window icon, tray pixmap, About dialog, launcher icon), so it sits on the host's own background and reads on both themes |
+| `colored-logo.svg`, `.png` | the same logo on its cream background — used by the README, where a self-contained tile reads on light *and* dark pages |
 | `colored-logo.pdf`, `transparent-logo.pdf` | print |
 
-Two copies of it are checked in, because neither can be referenced from where the
-other lives. Keep them in step by hand:
+Two copies of the artwork are checked in, because neither can be referenced from
+where the other lives. Keep them in step by hand:
 
 - `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg` —
-  `colored-logo.svg` plus a header comment. The file name has to match the
+  `transparent-logo.svg` plus a header comment. The file name has to match the
   application id for icon themes and launchers to find it.
-- `gui/assets/logo.png` — a 512 px render of the same tile, compiled into the
-  binary for the window icon, the tray pixmap and the About dialog.
+- `gui/assets/logo.png` — a 512 px render of `transparent-logo.png`, compiled
+  into the binary for the window icon, the tray pixmap and the About dialog. It
+  is genuinely transparent (alpha 0), and the tray's ARGB32 buffer is
+  premultiplied for it; `gui/src/logo.rs` has tests for both.
 
 `make deb` also renders PNG icons (16–512 px) from the SVG in the packaging tree,
 so a `.deb` carries both.
