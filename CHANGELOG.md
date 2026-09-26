@@ -4,6 +4,31 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.1] - 2026-09-26
+
+### Fixed
+
+- **The packaging pipeline's RPM step now actually builds.** v0.28.0 added the
+  workflow and fixed the spec's unpackaged doc files, but `rpmbuild` still could
+  not start: it refuses to run when the spec's `BuildRequires` (`cargo`,
+  `rust >= 1.88`, `desktop-file-utils`) are missing from the rpm database — which
+  they always are on Debian/Ubuntu, where Rust comes from rustup.
+  `scripts/package-rpm.sh` now passes `--nodeps`, the tools being provided by the
+  environment (the job `dnf builddep` does on Fedora). That is the change that
+  takes the workflow from red to green.
+- `rpmbuild` passes `HOME`/`PATH` through to `%build`, so the rustup `cargo` shim
+  is found there — checked with a probe spec rather than assumed.
+
+### Changed
+
+- The workflow uses current action majors — `actions/checkout@v7`,
+  `actions/cache@v6`, `actions/upload-artifact@v7` — clearing the Node 20
+  deprecation warning the first run reported.
+- The RPM was reproduced end-to-end in an `ubuntu:24.04` container (the image
+  `ubuntu-latest` is): it builds, the payload is complete (three binaries, desktop
+  entry, metainfo, SVG, both doc files) and its `Requires` carry the `dlopen`ed
+  GUI sonames next to the `libc`/`libgcc` ones. Recorded in `docs/packaging.md`.
+
 ## [0.28.0] - 2026-09-26
 
 ### Added
@@ -19,13 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The RPM spec no longer relies on `%doc`/`%license` for files it installs by
-  hand.** `%license LICENSE` puts the licence in `%{_licensedir}`, so the copy the
-  spec also installed into `%{_docdir}` was left unpackaged — `rpmbuild` fails
-  such a build with "Installed (but unpackaged) file(s) found". Both doc files are
-  now listed by their real `%{_docdir}` paths, which is portable across the rpm
-  implementations (Fedora, Debian/Ubuntu) this may be built with. The bug was
-  latent because the spec had never been executed.
+- **The RPM spec's doc files were unpackaged.** It installed `LICENSE` and
+  `README.md` into `/usr/share/doc/easysearch` but declared them with
+  `%license`/`%doc`, which place files in a *name-version* directory, so `rpmbuild`
+  would fail with “Installed (but unpackaged) file(s) found”. Both are now listed
+  by their real paths in `%files`, which is portable across rpm implementations and
+  keeps the layout consistent with the `.deb`. The bug was latent because the spec
+  had never been executed — the RPM step still needed the `--nodeps` fix that
+  lands in 0.28.1.
 
 ### Changed
 

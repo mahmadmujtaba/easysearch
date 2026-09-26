@@ -62,7 +62,11 @@ echo "source tarball: $TOP/SOURCES/$TARBALL_DIR.tar.gz"
 sed -e "s|@VERSION@|$VERSION|g" \
     packaging/rpm/$NAME.spec.in >"$TOP/SPECS/$NAME.spec"
 
-rpmbuild -ba \
+# --nodeps: the spec's BuildRequires (cargo, rust >= 1.88, desktop-file-utils)
+# are not rpm packages on Debian/Ubuntu, where Rust comes from rustup, so
+# rpmbuild would refuse to start the build. The tools are provided by the
+# environment, exactly as they are on Fedora after `dnf builddep`.
+rpmbuild -ba --nodeps \
     --define "_topdir $TOP" \
     "$TOP/SPECS/$NAME.spec" || err "rpmbuild failed (see the output above)"
 

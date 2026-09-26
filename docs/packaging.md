@@ -14,6 +14,14 @@ entry and the AppStream metadata.
 
 Nothing here needs `sudo`.
 
+On Debian and Ubuntu the RPM is built with the distribution's `rpm` package,
+which provides `rpmbuild`. That environment has no rpm database entry for Rust
+(the toolchain comes from rustup), so the spec's `BuildRequires` cannot be
+satisfied; `scripts/package-rpm.sh` therefore passes `rpmbuild --nodeps`, the
+tools being supplied by the environment. On Fedora the same job is done by
+`dnf builddep` before the build. Nothing else about the build changes: `%prep`,
+`%build` (cargo), `%install` and `%files` all run as written.
+
 ## What gets installed
 
 All three formats install the same payload:
@@ -146,17 +154,28 @@ Verified on this machine (KDE/Plasma, Wayland, Debian-family, no root):
   with `dpkg -S`.
 - `scripts/gen-cargo-sources.py` regenerates all 491 crates.io sources and every
   checksum matches `Cargo.lock`.
+- The **RPM**, which this machine cannot build (no `rpmbuild`), was reproduced in
+  an `ubuntu:24.04` container — the image `ubuntu-latest` is — with the cargo
+  build staged, so `%prep`/`%install`/`%files`/brp ran for real:
+  - `rpmbuild --nodeps -bb` completes and writes
+    `easysearch-<version>-1.x86_64.rpm`.
+  - The payload is the three binaries, the desktop entry, the metainfo file, the
+    SVG icon and the two doc files — no unpackaged files.
+  - Its `Requires` carry the sonames the GUI `dlopen()`s
+    (`libEGL.so.1()(64bit)`, `libwayland-client.so.0()(64bit)`, …) next to the
+    ELF-derived `libc`/`libgcc`/`libm` ones, so installing on Fedora/openSUSE
+    pulls in the right runtime libraries.
+  - `rpmbuild` passes `HOME`/`PATH` through to `%build`, so the rustup shim
+    `cargo` is found (checked with a one-line probe spec).
+
+`.github/workflows/packages.yml` runs the same build on every push to `master`,
+so the RPM path is exercised on each merge rather than only by hand.
 
 **Not verified here**, because the tools are not installed on this machine:
 
-- `make rpm` — no `rpmbuild` here, so the spec is exercised only by CI
-  (`.github/workflows/packages.yml`), which builds it on Ubuntu with the
-  distribution's `rpm` package. The spec is conventional (`%autosetup`, `%build`
-  with cargo, `%install`, `%files`, soname `Requires`, doc files listed by real
-  path).
 - `make flatpak` — no `flatpak-builder`. The manifest, the offline vendored
   source config and the generated sources are in place, but a build has not been
   run. Expect the usual first-run iteration (runtime version, SDK extension).
 
-Both scripts fail fast with install instructions when their tool is missing, so
-`make packages` on a machine without them degrades cleanly.
+The rpm and flatpak scripts fail fast with install instructions when their tool is
+missing, so `make packages` on a machine without them degrades cleanly.
