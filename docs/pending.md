@@ -57,9 +57,9 @@ Both scripts fail fast with install instructions when their tool is missing, so
    Note the id is also the Wayland `app_id`, so a KDE window rule or shortcut
    that matched the previous class needs re-doing.
 
-2. **Repository URL.** Done: `packaging/rpm/easysearch.spec.in`,
-   `core/src/update.rs` (`DEFAULT_MANIFEST_URL`) and the `CHANGELOG` release links
-   all point at the real repository, `github.com/mahmadmujtaba/easysearch`.
+2. **Repository URL.** Done: `packaging/rpm/easysearch.spec.in` and the
+   `CHANGELOG` release links all point at the real repository,
+   `github.com/mahmadmujtaba/easysearch`.
 
 3. **Deb maintainer** — defaults to
    `EasySearch <easysearch@localhost>`. Override per build:
@@ -193,12 +193,10 @@ deliverable; these are gated on request:
   and the `.rpm` on every push to `master` (i.e. every merged PR) and on every
   pull request, uploading them as the run artifact `easysearch-packages`; pushing
   a `v*` tag additionally attaches them to the GitHub release for that tag. It
-  does **not** run the test suite, and it does not *sign* anything —
-  `scripts/release-sign.sh` is still wired to nothing, so the self-update manifest
-  is not produced.
+  does **not** run the test suite.
 - **`dist/` is gitignored**, so the `.deb`, the shareable single binary and any
   future `.rpm`/`.flatpak` are never committed — they are build outputs only.
-- **`packaging/flatpak/cargo-sources.json` *is* committed** (491 crates,
+- **`packaging/flatpak/cargo-sources.json` *is* committed** (522 crates,
   generated from `Cargo.lock`). It must be regenerated — `make cargo-sources` —
   whenever dependencies change, or the Flatpak build will fail offline.
 - **Screenshots are committed now.** The 0.12.0 redesign could not be captured at
@@ -209,26 +207,18 @@ deliverable; these are gated on request:
 
 ---
 
-## 9. Self-update — what is deliberately not done yet
+## 9. No in-app updates — deliberately removed
 
-The in-place updater is complete and tested end-to-end (13 unit tests plus a
-manual run against real `openssl`-signed artifacts); see
-[`updates.md`](updates.md). These pieces are intentionally outside the repo or
-not yet built:
+EasySearch has **no network code at all**. An in-place updater (a signed HTTPS
+manifest, Ed25519 verification and atomic binary replacement) existed through
+v0.37.0, but it was removed in v0.38.0: keeping the app local removes a whole
+class of security and privacy concerns, and your package manager is already the
+right place to fetch, verify and install software.
 
-- **A release host exists, but no signed update is published.** The
-  repository's GitHub releases now carry the `.deb` and `.rpm` (see §8), and
-  `DEFAULT_MANIFEST_URL` points at them, but nothing uploads a `manifest.json`
-  or its signature, so a live update check still fails cleanly with a download
-  error.
-- **No public release has been signed yet.** The keypair exists and its public
-  half is compiled into the binary; the private half lives at
-  `~/.config/easysearch/release-signing-key.pem` (never committed). Back it
-  up — losing it means future updates are refused by existing installs.
-- **Manual release step.** CI publishes the packages on a `v*` tag, but nothing
-  runs `scripts/release-sign.sh`; wire that into the tag build to also publish the
-  signed `manifest.json` the updater needs.
-- **No key rotation / revocation.** Changing the key needs a rebuild with the new
-  public key embedded; a follow-up could accept a signed *key-change* manifest.
-- **Only Linux ELF binaries.** The manifest is per-target, but no Windows/macOS
-  packaging exists (see §7).
+- The `self-update` CLI subcommand, `docs/updates.md`,
+  `scripts/release-sign.sh`, the `ed25519-dalek`/`sha2` core dependencies and the
+  compiled-in release public key are gone.
+- Installs and upgrades go through `.deb`/`.rpm` (or Flatpak), built by the same
+  CI that already attaches them to a tagged release (see §8).
+- There is no update check, no telemetry and no remote API. A release is just a
+  newer package.

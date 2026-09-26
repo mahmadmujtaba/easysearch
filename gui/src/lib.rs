@@ -10,7 +10,6 @@
 //! preview/details panel — over a view tab strip, recent searches and a live
 //! status bar. Tokyo Night palette; Wayland-first windowing.
 
-use easysearch_core::update::{CurlFetcher, InstallReport, Stage, UpdateConfig, Updater};
 use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
 };
@@ -613,10 +612,6 @@ struct GuiPrefs {
     compact_rows: bool,
     /// User-defined saved searches.
     saved: Vec<SavedSearch>,
-    /// Check for updates automatically at launch (at most once a day).
-    check_updates: bool,
-    /// Unix seconds of the last automatic update check (0 = never).
-    update_checked_at: u64,
     /// Fuzzy (fzf-style) filename matching. A global mode (not per-tab).
     fuzzy: bool,
     /// Let the content pattern span lines (content search only). Slower.
@@ -638,8 +633,6 @@ impl Default for GuiPrefs {
             sidebar_tips: true,
             compact_rows: false,
             saved: Vec::new(),
-            check_updates: true,
-            update_checked_at: 0,
             fuzzy: false,
             multiline: false,
             content_warning_seen: false,
@@ -1030,14 +1023,6 @@ struct App {
     dup_progress: Option<(usize, usize)>,
     dups: Option<DupReport>,
     show_dups: bool,
-    // --- self-update ------------------------------------------------------
-    /// The “Software update” window is open.
-    show_update: bool,
-    update_ui: UpdateUi,
-    /// Receiver for the in-flight check/install worker (one at a time).
-    update_rx: Option<mpsc::Receiver<UpdateMsg>>,
-    /// Version of a newer release, once known (drives the status-bar badge).
-    update_banner: Option<String>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1270,10 +1255,6 @@ impl App {
             dup_progress: None,
             dups: None,
             show_dups: false,
-            show_update: false,
-            update_ui: UpdateUi::Idle,
-            update_rx: None,
-            update_banner: None,
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -1290,7 +1271,6 @@ impl App {
             }
         }
         app.send_query();
-        app.maybe_auto_check_updates();
         app
     }
 
@@ -2639,33 +2619,6 @@ enum DupMsg {
     Done(u64, DupReport),
 }
 
-/// State of the self-update window.
-enum UpdateUi {
-    Idle,
-    Checking,
-    UpToDate,
-    Available(Box<easysearch_core::Available>),
-    /// Installing; `Some((stage, done, total))` once progress has arrived.
-    Installing(Option<(Stage, u64, u64)>),
-    Ready(Box<InstallReport>),
-    Error(String),
-}
-
-/// Messages from the background update worker.
-enum UpdateMsg {
-    UpToDate,
-    Available(Box<easysearch_core::Available>),
-    Progress(Stage, u64, u64),
-    Installed(Box<InstallReport>),
-    Error(String),
-}
-
-/// What the background update worker should do.
-enum UpdateTask {
-    Check,
-    Install(easysearch_core::Available),
-}
-
 /// An action chosen from a result row's context menu. Collected while the table
 /// is being drawn and applied afterwards, because applying needs `&mut self`
 /// while the rows borrow the result list.
@@ -3130,8 +3083,6 @@ impl eframe::App for App {
             self.counts_at = Instant::now();
         }
 
-        self.poll_updates(ctx);
-
         while let Ok(msg) = self.dup_rx.try_recv() {
             match msg {
                 DupMsg::Progress(gen_id, done, total) => {
@@ -3185,7 +3136,6 @@ impl eframe::App for App {
             || self.show_save
             || self.show_saved
             || self.show_dups
-            || self.show_update
             || self.show_ignore;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
@@ -3435,7 +3385,6 @@ impl eframe::App for App {
         }
         self.save_search_dialog(ctx);
         self.duplicates_window(ctx);
-        self.update_dialog(ctx);
         self.ignore_dialog(ctx);
     }
 
@@ -3593,36 +3542,13 @@ impl App {
                     self.prefs.save();
                 }
                 ui.label(
-                    egui::RichText::new("Closing the window leaves EasySearch running in the \
-                                         tray, so the index and the search stay warm.")
+                    egui::RichText::new(
+                        "Closing the window leaves EasySearch running in the \
+                                         tray, so the index and the search stay warm.",
+                    )
                     .small()
                     .color(self.fg_dim()),
                 );
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("Updates").strong());
-                if ui
-                    .checkbox(
-                        &mut self.prefs.check_updates,
-                        "Check for updates at launch (at most once a day)",
-                    )
-                    .on_hover_text(
-                        "Releases are verified with a signed HTTPS manifest and installed in place — no .deb/.rpm.",
-                    )
-                    .changed()
-                {
-                    self.prefs.save();
-                }
-                let dim = self.fg_dim();
-                let banner = self.update_banner.clone();
-                ui.horizontal(|ui| {
-                    if ui.button("Check now…").clicked() {
-                        self.show_update = true;
-                        self.start_update_check();
-                    }
-                    if let Some(version) = &banner {
-                        ui.label(egui::RichText::new(format!("v{version} available")).color(dim));
-                    }
-                });
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Search").strong());
                 if ui
@@ -3916,18 +3842,6 @@ impl App {
                         }
                     });
                     ui.menu_button("Help", |ui| {
-                        let update_label = match &self.update_banner {
-                            Some(version) => format!("Update available: v{version}…"),
-                            None => "Check for updates…".to_string(),
-                        };
-                        if ui.button(update_label).clicked() {
-                            self.show_update = true;
-                            if matches!(self.update_ui, UpdateUi::Idle | UpdateUi::Error(_)) {
-                                self.start_update_check();
-                            }
-                            ui.close_menu();
-                        }
-                        ui.separator();
                         if ui.button("About").clicked() {
                             self.show_about = true;
                             ui.close_menu();
@@ -5745,314 +5659,6 @@ impl App {
         });
     }
 
-    // --- self-update ------------------------------------------------------
-
-    /// At launch, look for a newer release quietly — at most once a day, so
-    /// opening the app repeatedly doesn't hammer the release host.
-    fn maybe_auto_check_updates(&mut self) {
-        if !self.prefs.check_updates || UpdateConfig::disabled() {
-            return;
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        const DAY: u64 = 24 * 3600;
-        if self.prefs.update_checked_at != 0
-            && now.saturating_sub(self.prefs.update_checked_at) < DAY
-        {
-            return;
-        }
-        self.prefs.update_checked_at = now;
-        self.prefs.save();
-        self.spawn_update_worker(UpdateTask::Check);
-    }
-
-    /// Run one update task on a background thread (only one at a time).
-    fn spawn_update_worker(&mut self, task: UpdateTask) {
-        if self.update_rx.is_some() {
-            return;
-        }
-        let (tx, rx) = mpsc::channel::<UpdateMsg>();
-        let spawned = std::thread::Builder::new()
-            .name("update".into())
-            .spawn(move || {
-                let updater = Updater::new(UpdateConfig::default().with_env());
-                let fetcher = CurlFetcher::new();
-                match task {
-                    UpdateTask::Check => match updater.check(&fetcher) {
-                        Ok(Some(available)) => {
-                            let _ = tx.send(UpdateMsg::Available(Box::new(available)));
-                        }
-                        Ok(None) => {
-                            let _ = tx.send(UpdateMsg::UpToDate);
-                        }
-                        Err(e) => {
-                            let _ = tx.send(UpdateMsg::Error(e.to_string()));
-                        }
-                    },
-                    UpdateTask::Install(available) => {
-                        let result =
-                            updater.install(&available, &fetcher, &mut |stage, done, total| {
-                                let _ = tx.send(UpdateMsg::Progress(stage, done, total));
-                            });
-                        match result {
-                            Ok(report) => {
-                                let _ = tx.send(UpdateMsg::Installed(Box::new(report)));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(UpdateMsg::Error(e.to_string()));
-                            }
-                        }
-                    }
-                }
-            });
-        match spawned {
-            Ok(_) => self.update_rx = Some(rx),
-            Err(e) => {
-                self.update_ui = UpdateUi::Error(format!("cannot start the update worker: {e}"));
-                self.update_rx = None;
-            }
-        }
-    }
-
-    fn start_update_check(&mut self) {
-        if self.update_rx.is_some() {
-            return;
-        }
-        self.update_ui = UpdateUi::Checking;
-        self.spawn_update_worker(UpdateTask::Check);
-    }
-
-    fn start_update_install(&mut self, available: easysearch_core::Available) {
-        if self.update_rx.is_some() {
-            return;
-        }
-        self.update_ui = UpdateUi::Installing(None);
-        self.spawn_update_worker(UpdateTask::Install(available));
-    }
-
-    /// Drain the update worker's channel and keep the UI repainting while it
-    /// runs.
-    fn poll_updates(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.update_rx.take() else {
-            return;
-        };
-        let mut running = true;
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => self.apply_update_msg(msg),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    running = false;
-                    break;
-                }
-            }
-        }
-        if running {
-            self.update_rx = Some(rx);
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-    }
-
-    fn apply_update_msg(&mut self, msg: UpdateMsg) {
-        match msg {
-            UpdateMsg::UpToDate => {
-                self.update_banner = None;
-                self.update_ui = UpdateUi::UpToDate;
-            }
-            UpdateMsg::Available(available) => {
-                self.update_banner = Some(available.version.clone());
-                self.update_ui = UpdateUi::Available(available);
-            }
-            UpdateMsg::Progress(stage, done, total) => {
-                self.update_ui = UpdateUi::Installing(Some((stage, done, total)));
-            }
-            UpdateMsg::Installed(report) => {
-                self.update_banner = None;
-                self.update_ui = UpdateUi::Ready(report);
-            }
-            UpdateMsg::Error(message) => {
-                self.update_ui = UpdateUi::Error(message);
-            }
-        }
-    }
-
-    /// Relaunch onto the freshly installed binary: stop the app's engine child
-    /// (so the new process starts the new one) and hand over to a detached copy.
-    fn restart_into_new_version(&mut self) {
-        self.engine.shutdown();
-        std::thread::sleep(Duration::from_millis(400));
-        if let Ok(exe) = std::env::current_exe() {
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            // `setsid` detaches the relaunch so it outlives this process; fall
-            // back to a plain spawn when it is unavailable.
-            let detached = Command::new("setsid")
-                .arg(&exe)
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .is_ok();
-            if !detached {
-                let _ = Command::new(&exe).args(&args).spawn();
-            }
-        }
-        std::process::exit(0);
-    }
-
-    /// The “Software update” window (opened from Help ▸ Check for updates…).
-    fn update_dialog(&mut self, ctx: &egui::Context) {
-        if !self.show_update {
-            return;
-        }
-        let t = self.theme();
-        let mut open = true;
-        let mut close = false;
-        let mut do_check = false;
-        let mut do_install: Option<easysearch_core::Available> = None;
-        let mut do_restart = false;
-        egui::Window::new("Software update")
-            .collapsible(false)
-            .resizable(true)
-            .default_width(520.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new(format!("Installed version:  v{}", env!("CARGO_PKG_VERSION")))
-                        .color(t.dim),
-                );
-                ui.add_space(8.0);
-                match &self.update_ui {
-                    UpdateUi::Idle => {
-                        ui.label("Check for a newer release over HTTPS.");
-                    }
-                    UpdateUi::Checking => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(egui::RichText::new("Checking the release manifest…").color(t.dim));
-                        });
-                    }
-                    UpdateUi::UpToDate => {
-                        ui.colored_label(t.good, "✔  You are running the newest release.");
-                    }
-                    UpdateUi::Available(available) => {
-                        ui.colored_label(
-                            t.accent,
-                            format!("Version {} is available.", available.version),
-                        );
-                        if !available.notes.trim().is_empty() {
-                            ui.add_space(6.0);
-                            egui::ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(available.notes.trim())
-                                        .monospace()
-                                        .size(11.5)
-                                        .color(t.dim),
-                                );
-                            });
-                        }
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Signature-checked and installed in place — no .deb/.rpm, no reinstall.",
-                            )
-                            .size(11.0)
-                            .color(t.faint),
-                        );
-                        ui.add_space(8.0);
-                        if ui.button("Install update").clicked() {
-                            do_install = Some((**available).clone());
-                        }
-                    }
-                    UpdateUi::Installing(progress) => {
-                        let (fraction, text) = match progress {
-                            Some((Stage::Downloading, done, total)) if *total > 0 => (
-                                *done as f32 / *total as f32,
-                                format!(
-                                    "Downloading… {} / {} KiB",
-                                    done / 1024,
-                                    total / 1024
-                                ),
-                            ),
-                            Some((Stage::Downloading, done, _)) => (
-                                0.0,
-                                format!("Downloading… {} KiB", done / 1024),
-                            ),
-                            Some((Stage::Verifying, _, _)) => {
-                                (1.0, "Verifying checksum and signature…".to_string())
-                            }
-                            Some((Stage::Installing, _, _)) => (1.0, "Installing…".to_string()),
-                            None => (0.0, "Starting…".to_string()),
-                        };
-                        ui.add(
-                            egui::ProgressBar::new(fraction.clamp(0.0, 1.0)).show_percentage(),
-                        );
-                        ui.label(egui::RichText::new(text).color(t.dim));
-                    }
-                    UpdateUi::Ready(report) => {
-                        ui.colored_label(t.good, format!("✔  Installed version {}.", report.version));
-                        ui.add_space(4.0);
-                        for file in &report.files {
-                            ui.label(
-                                egui::RichText::new(format!("   {}", file.display()))
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(t.dim),
-                            );
-                        }
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Restart to run the new version — the engine restarts with it.",
-                            )
-                            .color(t.dim),
-                        );
-                        ui.add_space(8.0);
-                        if ui.button("Restart now").clicked() {
-                            do_restart = true;
-                        }
-                    }
-                    UpdateUi::Error(message) => {
-                        ui.colored_label(t.bad, format!("Update failed: {message}"));
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Nothing was changed on disk. You can retry once the cause is fixed.",
-                            )
-                            .size(11.0)
-                            .color(t.faint),
-                        );
-                    }
-                }
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    let busy = matches!(self.update_ui, UpdateUi::Checking | UpdateUi::Installing(_));
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Check for updates"))
-                        .clicked()
-                    {
-                        do_check = true;
-                    }
-                    if ui.button("Close").clicked() {
-                        close = true;
-                    }
-                });
-            });
-
-        self.show_update = open && !close;
-        if do_check {
-            self.start_update_check();
-        }
-        if let Some(available) = do_install {
-            self.start_update_install(available);
-        }
-        if do_restart {
-            self.restart_into_new_version();
-        }
-    }
-
     // --- ignore files -----------------------------------------------------
 
     fn open_ignore_dialog(&mut self) {
@@ -6333,15 +5939,7 @@ impl App {
                         .size(10.5)
                         .color(t.faint),
                 )
-                .on_hover_text("Running version — updates install in place");
-                if let Some(version) = &self.update_banner {
-                    ui.label(
-                        egui::RichText::new(format!("⬆ v{version} available"))
-                            .size(10.5)
-                            .color(t.accent),
-                    )
-                    .on_hover_text("Open Help ▸ Check for updates");
-                }
+                .on_hover_text("Running version — fully offline, no network access");
                 ui.separator();
                 ui.label(
                     egui::RichText::new("↑↓ · Enter open · Ctrl+F search · Ctrl+A all · Esc clear")

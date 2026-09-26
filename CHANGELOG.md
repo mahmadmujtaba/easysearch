@@ -4,6 +4,26 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] - 2026-09-27
+
+### Changed
+
+- **EasySearch is now fully offline.** All network code is gone: no in-app
+  updates, no update check, no telemetry, no remote API. The app opens no
+  sockets — its only descriptors are the index database, the files it indexes
+  and the local `$XDG_RUNTIME_DIR` control socket. Install and upgrade through
+  your package manager (`.deb`/`.rpm`), which is the one place you already trust
+  to fetch and verify software.
+
+### Removed
+
+- **The in-place self-updater.** `easysearch-cli self-update`, the GUI
+  **Help ▸ Check for updates…** item and the *Software update* window, the
+  launch-time update check and the `⬆ v… available` status-bar badge,
+  **Settings ▸ Updates**, `docs/updates.md`, `scripts/release-sign.sh`, the
+  `ed25519-dalek`/`sha2` core dependencies and the compiled-in release public
+  key are all removed. `core/src/update.rs` is deleted.
+
 ## [0.37.0] - 2026-09-26
 
 ### Added

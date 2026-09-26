@@ -14,8 +14,9 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
   accelerates repeated queries (default off; spooled to disk, not held in RAM).
 - **Everything-style queries**: `*.pdf`, `invoice 2026`, `!draft`, regex mode,
   case toggle, hidden files, basename or full-path matching.
-- **Self-updating**: check a signed HTTPS manifest and replace the binaries in
-  place — no `.deb`/`.rpm`, no reinstall. See [`docs/updates.md`](docs/updates.md).
+- **Fully offline**: the app makes **no network connections at all** — no
+  updater, no telemetry, no remote API. Everything stays local; install and
+  upgrade with your package manager (`.deb`/`.rpm`).
 - **Lightweight**: no GC, no runtime, no bundled web engine. See the footprint
   budget in [`docs/scope.md`](docs/scope.md).
 
@@ -88,26 +89,14 @@ merged pull request) and uploads them as the run artifact
 > identifiers, known rough edges, measured footprint — is tracked in
 > [`docs/pending.md`](docs/pending.md).
 
-## Updating
+## Offline by design
 
-Packages are for the first install; updates happen in place over the network.
-The GUI checks quietly at launch (**Help ▸ Check for updates…** to do it now) and
-can install and restart onto the new build; the CLI can do the same:
-
-```sh
-./target/release/easysearch-cli self-update --check
-./target/release/easysearch-cli self-update
-```
-
-A release publishes a `manifest.json` signed with Ed25519 plus a SHA-256 per
-asset. The client fetches it over **HTTPS only**, verifies the signature against
-a public key compiled into the binary, verifies every download's checksum, and
-only then `rename()`s the new binaries over the old ones (atomic, and safe while
-the old binary is running). Anything that fails — a bad signature, a mismatched
-hash, a cleartext URL, a version that is not newer — means nothing is written.
-
-To publish a release, see [`docs/updates.md`](docs/updates.md) and
-[`scripts/release-sign.sh`](scripts/release-sign.sh).
+EasySearch has **no network code**: it opens no sockets, runs no updater and
+contacts no server. Installs and upgrades go through your package manager
+(`.deb`/`.rpm`), which is the one place you already trust to fetch and verify
+software. The only file descriptors it opens are the index database, the files
+it indexes, and a unix control socket in `$XDG_RUNTIME_DIR` for the CLI and
+desktop shortcuts to talk to a running window.
 
 ## Usage
 
@@ -127,8 +116,6 @@ make run                          # or: ./target/release/easysearch
 ./target/release/easysearch-cli search '*.log' --modified-within 7d
 ./target/release/easysearch-cli search '*' --under /srv/data
 ./target/release/easysearch-cli status                      # index state, counts
-./target/release/easysearch-cli self-update --check         # is a newer release out?
-./target/release/easysearch-cli self-update                 # install it in place
 
 # Control a running window (bind these to desktop shortcuts — no privileged API)
 ./target/release/easysearch --toggle              # show the window / hide it

@@ -189,7 +189,7 @@ Verified on this machine (KDE/Plasma, Wayland, Debian-family, no root):
 - Dependency lists are derived from the running binary's actual libraries
   (`dpkg-shlibdeps` plus the `dlopen`ed sonames), then mapped to real packages
   with `dpkg -S`.
-- `scripts/gen-cargo-sources.py` regenerates all 491 crates.io sources and every
+- `scripts/gen-cargo-sources.py` regenerates all 522 crates.io sources and every
   checksum matches `Cargo.lock`.
 - The **RPM**, which this machine cannot build (no `rpmbuild`), was reproduced in
   an `ubuntu:24.04` container — the image `ubuntu-latest` is — with the cargo

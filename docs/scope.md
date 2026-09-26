@@ -58,7 +58,8 @@ repeated content queries, and is kept fresh by the same event pipeline.
 - Binary file content search (images, video, archives) — text, **Word `.docx`**,
   **OpenDocument `.odt`** and **PDF (text layer)** are searchable.
 - Network filesystems as *indexed roots* (SMB/NFS mounts excluded by default; see §6).
-- Persistent database or boot-time cache — the index lives in RAM, rebuilt on start.
+- **Any network access by the app itself** — no updater, no telemetry, no remote API
+  (the in-place updater was removed in v0.38.0; install and upgrade via `.deb`/`.rpm`).
 - Web-based UI (Electron/Tauri/webview) — explicitly rejected by design decision.
 - Windows/macOS *delivery* in phase 1 (code stays portable; packaging is later).
 - Editing, moving, or deleting files from within the tool (read-only search; "open in
@@ -424,7 +425,7 @@ easysearch/
 ├── core/                      ← library: walker, watcher, matcher, content,
 │   └── src/                     content_index, disk_index (mmap), sqlite_index,
 │                                engine, backend, child, proto, logo, ipc,
-│                                update, config, api
+│                                config, api
 ├── app/                       ← the single binary users run (window + tray; spawns the engine)
 ├── gui/                       ← eframe/egui frontend (window only; runs the engine in-process)
 ├── cli/                       ← clap frontend

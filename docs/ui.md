@@ -221,9 +221,8 @@ Live index state (`Indexing: idle (86,100 files)` or a progress spinner),
 system **CPU** and **RAM**, the number of results and the search time, the total
 indexed entries, the **UI zoom** (100% / 110% / 125% — also in Settings), the
 current keyboard hints, and — at the far right — the **running version**
-(`v0.15.0`). When a newer release is known, an `⬆ v… available` badge sits beside
-the version and opens **Help ▸ Check for updates…** (see
-[`updates.md`](updates.md)). Hover any result's row for its full path.
+(`v0.38.0`), so you can tell which build is installed. Hover any result's row for
+its full path.
 
 ## Keyboard shortcuts
 
