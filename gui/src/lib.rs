@@ -570,11 +570,10 @@ pub fn select_backend() -> Arc<Backend> {
 }
 
 fn daemon_from_env_or_args() -> Option<String> {
-    if let Ok(addr) = std::env::var("EVERYTHING_DAEMON") {
-        if !addr.trim().is_empty() {
+    if let Ok(addr) = std::env::var("EVERYTHING_DAEMON")
+        && !addr.trim().is_empty() {
             return Some(addr);
         }
-    }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if let Some(rest) = arg.strip_prefix("--daemon=") {
@@ -1628,8 +1627,8 @@ impl App {
         let mut text = String::new();
         let mut image = None;
         let mut binary = false;
-        if !row.is_dir && row.size < 4 * 1024 * 1024 {
-            if let Ok(bytes) = std::fs::read(&row.path) {
+        if !row.is_dir && row.size < 4 * 1024 * 1024
+            && let Ok(bytes) = std::fs::read(&row.path) {
                 if is_image_file(&row.path) {
                     if let Ok(decoded) = image::load_from_memory(&bytes) {
                         let thumb = decoded.thumbnail(280, 280);
@@ -1648,7 +1647,6 @@ impl App {
                     text = String::from_utf8_lossy(slice).into_owned();
                 }
             }
-        }
         self.preview = Some(Preview {
             path: row.path.clone(),
             is_dir: row.is_dir,
@@ -2989,19 +2987,17 @@ impl eframe::App for App {
             if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
                 self.select(self.selected.saturating_sub(20), ctx);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if let Some(row) = self.results.get(self.selected) {
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter))
+                && let Some(row) = self.results.get(self.selected) {
                     App::open(&row.path);
                 }
-            }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if !self.query.is_empty() {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && !self.query.is_empty() {
                 self.query.clear();
                 self.history_idx = None;
                 self.send_query();
             }
-        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
         }
@@ -3115,14 +3111,13 @@ impl eframe::App for App {
 
         // Close button: default = quit the app. With "close to tray" enabled
         // (opt-in setting) the window hides instead; only Quit then exits.
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if self.prefs.close_to_tray && !self.tray_quit {
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.prefs.close_to_tray && !self.tray_quit {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 self.window_visible = false;
             }
             // else: let the close proceed and the app exit.
-        }
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -4799,11 +4794,10 @@ impl App {
                     if row_resp.clicked() {
                         self.selected = i;
                     }
-                    if let Some(p) = toggle {
-                        if !self.checked.remove(&p) {
+                    if let Some(p) = toggle
+                        && !self.checked.remove(&p) {
                             self.checked.insert(p);
                         }
-                    }
                     // The menu acts on the whole selection when this row is part
                     // of it, otherwise on the row alone.
                     let n_sel = self.checked.len();

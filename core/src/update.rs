@@ -755,7 +755,7 @@ pub fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
         .bytes()
         .filter(|b| !b.is_ascii_whitespace())
         .collect();
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err("odd-length hex".to_string());
     }
     let mut out = Vec::with_capacity(cleaned.len() / 2);

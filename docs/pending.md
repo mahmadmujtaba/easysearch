@@ -92,9 +92,11 @@ Both scripts fail fast with install instructions when their tool is missing, so
   `GUI_DEPENDS` in `scripts/package-deb.sh`, the `Requires:` sonames in
   `packaging/rpm/everything-linux.spec.in`, and the install list in the Flatpak
   manifest.
-- **Pre-existing clippy style warnings** — 6 in `gui`, 14 in `core`
-  (collapsible `if`s, needless borrows). Cosmetic; no new ones are added by
-  recent work.
+- **Clippy is clean.** The 20-odd pre-existing style warnings (collapsible `if`s,
+  needless `map_or`, single-pattern `match`es, `Default` reassignment in tests)
+  were fixed in v0.22.1; `cargo clippy --workspace --all-targets` reports nothing,
+  and the two genuinely long internal signatures carry an `#[allow]` with a note
+  rather than a cosmetic reshuffle.
 
 ---
 

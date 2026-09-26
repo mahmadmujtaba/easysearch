@@ -11,23 +11,22 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Result categories for the sidebar quick filters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Category {
+    #[default]
     All,
-    Recent { max_age_secs: i64 },
+    Recent {
+        max_age_secs: i64,
+    },
     Images,
     Docs,
     Code,
     Archives,
     Audio,
     Video,
-    Large { min_bytes: u64 },
-}
-
-impl Default for Category {
-    fn default() -> Self {
-        Category::All
-    }
+    Large {
+        min_bytes: u64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

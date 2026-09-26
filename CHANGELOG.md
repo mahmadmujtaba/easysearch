@@ -4,6 +4,19 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-09-26
+
+### Changed
+
+- **`cargo clippy --workspace --all-targets` is clean** (it had ~30 standing
+  style warnings). Mostly `cargo clippy --fix`: collapsible `if` chains,
+  `map_or(false, ..)` → `is_some_and`, `map_or(true, ..)` → `is_none_or`,
+  `% 2 != 0` → `!is_multiple_of(2)`, a derived `Default` for `Category`, elided
+  lifetimes, and test configs built with struct-update syntax instead of
+  reassignment. The two long internal signatures (`rebuild_once`,
+  `start_watcher`) keep their parameters and carry a documented `#[allow]`,
+  because bundling them would only move the list.
+
 ## [0.22.0] - 2026-09-26
 
 ### Added

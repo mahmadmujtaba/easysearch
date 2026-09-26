@@ -121,10 +121,10 @@ fn walk_impl(
             .git_exclude(true)
             .parents(true)
             .require_git(false);
-        if let Some(ig) = global_ignore_path() {
-            if let Some(err) = builder.add_ignore(ig) {
-                eprintln!("global ignore: {err}");
-            }
+        if let Some(ig) = global_ignore_path()
+            && let Some(err) = builder.add_ignore(ig)
+        {
+            eprintln!("global ignore: {err}");
         }
     } else {
         builder
@@ -153,7 +153,7 @@ fn walk_impl(
             };
             let path = entry.path();
             if roots.is_excluded(path) {
-                let is_dir = entry.file_type().map_or(false, |t| t.is_dir());
+                let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
                 return if is_dir {
                     WalkState::Skip
                 } else {
@@ -188,10 +188,10 @@ fn walk_impl(
                     flush(&sink, drained);
                 }
             }
-            if let Some(q) = queue.as_deref() {
-                if !is_dir {
-                    q.send(pb);
-                }
+            if let Some(q) = queue.as_deref()
+                && !is_dir
+            {
+                q.send(pb);
             }
             WalkState::Continue
         })
@@ -258,7 +258,7 @@ pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, opts: WalkOptions) -> Vec
         if roots.is_excluded(entry.path()) {
             continue;
         }
-        if entry.file_type().map_or(false, |t| t.is_dir()) {
+        if entry.file_type().is_some_and(|t| t.is_dir()) {
             dirs.push(entry.path().to_path_buf());
         }
     }

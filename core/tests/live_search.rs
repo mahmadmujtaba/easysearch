@@ -41,10 +41,12 @@ fn wait_until(timeout: Duration, cond: impl Fn() -> bool) -> bool {
 }
 
 fn test_engine(root: &std::path::Path) -> Engine {
-    let mut cfg = Config::default();
-    cfg.roots = vec![root.to_string_lossy().into_owned()];
-    // Isolated on-disk index cache (no pollution of ~/.cache, no cross-test races).
-    cfg.disk_index_dir = Some(root.join(".cache-dir").to_string_lossy().into_owned());
+    let cfg = Config {
+        roots: vec![root.to_string_lossy().into_owned()],
+        // Isolated on-disk index cache (no pollution of ~/.cache, no cross-test races).
+        disk_index_dir: Some(root.join(".cache-dir").to_string_lossy().into_owned()),
+        ..Config::default()
+    };
     let mut engine = Engine::new(cfg);
     engine.start();
     assert!(
@@ -247,10 +249,11 @@ fn disk_index_is_reused_across_restarts() {
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/beta.md"), "b").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.roots = vec![root.to_string_lossy().into_owned()];
-    let cache_dir = root.join(".cache-dir").to_string_lossy().into_owned();
-    cfg.disk_index_dir = Some(cache_dir.clone());
+    let cfg = Config {
+        roots: vec![root.to_string_lossy().into_owned()],
+        disk_index_dir: Some(root.join(".cache-dir").to_string_lossy().into_owned()),
+        ..Config::default()
+    };
 
     let mut e1 = Engine::new(cfg.clone());
     e1.start();
@@ -291,9 +294,11 @@ fn ram_mode_still_works() {
     let root = dir.0.clone();
     std::fs::write(root.join("mem.txt"), "ram resident").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.roots = vec![root.to_string_lossy().into_owned()];
-    cfg.persist_index = false; // pure in-memory mode
+    let cfg = Config {
+        roots: vec![root.to_string_lossy().into_owned()],
+        persist_index: false, // pure in-memory mode
+        ..Config::default()
+    };
     let mut engine = Engine::new(cfg);
     engine.start();
     assert!(engine.wait_live(Duration::from_secs(30)));

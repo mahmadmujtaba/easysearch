@@ -237,6 +237,6 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        assert_eq!(send_to(&path, &Command::Show).unwrap(), false);
+        assert!(!send_to(&path, &Command::Show).unwrap());
     }
 }

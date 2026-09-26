@@ -196,7 +196,7 @@ fn record_meta(mmap: &Mmap, i: usize) -> Meta {
     }
 }
 
-fn path_bytes<'a>(mmap: &'a Mmap, blob_start: usize, i: usize) -> &'a [u8] {
+fn path_bytes(mmap: &Mmap, blob_start: usize, i: usize) -> &[u8] {
     let r = record(mmap, i);
     let len = u32_at(r, 0) as usize;
     let off = u64_at(r, 24) as usize;

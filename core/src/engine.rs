@@ -200,10 +200,10 @@ impl Engine {
         if config.persist_index && sqlite.is_none() {
             // Serve from yesterday's index immediately; a background rebuild
             // re-validates it against the live filesystem.
-            match DiskIndex::load(&index_path) {
-                Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
-                Err(_) => {} // no cache yet / stale: build at startup
+            if let Ok(idx) = DiskIndex::load(&index_path) {
+                *base.write().unwrap() = Some(Arc::new(idx));
             }
+            // No cache yet / stale: build at startup.
         }
 
         let respect_ignore_files = config.respect_ignore_files;
@@ -565,10 +565,10 @@ impl Engine {
     pub fn wait_live(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if let Ok(s) = self.status.read() {
-                if s.state == State::Live {
-                    return true;
-                }
+            if let Ok(s) = self.status.read()
+                && s.state == State::Live
+            {
+                return true;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -780,7 +780,7 @@ impl Engine {
                 if ov.removed.contains(path) {
                     continue;
                 }
-                if base.as_deref().map_or(false, |b| b.contains(path)) {
+                if base.as_deref().is_some_and(|b| b.contains(path)) {
                     continue;
                 }
                 if accepts(&cq, path, *meta, files_only) {
@@ -819,7 +819,7 @@ impl Engine {
                 if ov.removed.contains(path) {
                     continue;
                 }
-                let in_base = base.as_deref().map_or(false, |b| b.contains(path));
+                let in_base = base.as_deref().is_some_and(|b| b.contains(path));
                 if in_base {
                     continue;
                 }
@@ -887,7 +887,7 @@ impl Engine {
         let b = base.as_deref();
         let (mut files, mut dirs) = b.map(|b| (b.files(), b.dirs())).unwrap_or((0, 0));
         for (p, m) in &ov.added {
-            if b.map_or(true, |b| !b.contains(p)) {
+            if b.is_none_or(|b| !b.contains(p)) {
                 if m.is_dir {
                     dirs += 1;
                 } else {
@@ -951,10 +951,10 @@ pub(crate) fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool
     if !matches_category(&cq.category, p, &meta) {
         return false;
     }
-    if let Some(prefix) = cq.under.as_deref() {
-        if !p.starts_with(prefix) {
-            return false;
-        }
+    if let Some(prefix) = cq.under.as_deref()
+        && !p.starts_with(prefix)
+    {
+        return false;
     }
     true
 }
@@ -982,6 +982,10 @@ fn build_entries(
 
 /// One background compaction: walk live, write the disk index, swap the base,
 /// and prune the overlay to true deltas.
+///
+/// The parameters are the engine's own fields, passed explicitly so the thread
+/// closure owns them; bundling them into a struct would only move the list.
+#[allow(clippy::too_many_arguments)]
 fn rebuild_once(
     index_path: &Path,
     roots: &Arc<RootSet>,

@@ -175,9 +175,6 @@ mod tests {
 
     #[test]
     fn exclusion_set_marks_known_mounts() {
-        let mut cfg = Config::default();
-        cfg.roots = vec!["/home/ahmad".into()];
-        cfg.exclude_fstypes = vec!["fuse.sshfs".into()];
         let set = RootSet {
             roots: vec![PathBuf::from("/home/ahmad")],
             excluded: vec![

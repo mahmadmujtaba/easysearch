@@ -25,6 +25,10 @@ use std::thread::JoinHandle;
 /// single recursive watch: one unreadable directory is skipped and counted
 /// instead of aborting the whole watch — which a single root-owned folder
 /// inside a Steam/Proton prefix would otherwise cause.
+///
+/// The parameters are the engine's own fields; they are passed explicitly so the
+/// thread closure owns them.
+#[allow(clippy::too_many_arguments)]
 pub fn start_watcher(
     roots: Vec<PathBuf>,
     overlay: Arc<RwLock<Overlay>>,
