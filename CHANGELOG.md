@@ -4,6 +4,26 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-09-26
+
+### Added
+
+- **OpenDocument (`.odt`) and PDF content search (Phase 3).** Both are read
+  in-process, with no external tool.
+  - `.odt` reuses the document-package reader: an ODF file is a ZIP of XML too,
+    so the extraction is now table-driven — one set of element rules for
+    WordprocessingML (`<w:t>`, `<w:p>`, `<w:tab/>`, …) and one for OpenDocument
+    (`<text:p>`, `<text:h>`, `<text:line-break/>`, `<text:s/>`, table cells).
+  - `.pdf` uses the pure-Rust `pdf-extract` crate for the **text layer**. A
+    scanned, image-only PDF has no text layer, which is a property of the file.
+    PDF parsing is the least predictable input here, so it runs under
+    `catch_unwind`: a malformed document skips one file and never takes down a
+    query or the extraction worker.
+- `content_index::needs_extraction()` and `EXTRACT_EXTENSIONS` describe the
+  formats that need extraction; `content.rs` and the index use them, so the two
+  paths cannot disagree.
+- `packaging/flatpak/cargo-sources.json` regenerated for the new dependencies.
+
 ## [0.19.0] - 2026-09-26
 
 ### Added

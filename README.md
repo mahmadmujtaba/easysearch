@@ -38,8 +38,9 @@ cargo build --release
 
 Binaries land in `target/release/everything` and `target/release/everything-gui`.
 
-> Optional, only for **.docx content search**: nothing — `.docx` text is extracted
-> in-process since v0.18.0 (the old `docx2txt` dependency is gone).
+> Optional, only for **.docx content search**: nothing. Word, OpenDocument and
+> PDF content is extracted in-process (v0.18.0–v0.20.0); no external tool is
+> needed.
 
 ## Packaging
 

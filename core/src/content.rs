@@ -12,11 +12,8 @@ use regex::Regex;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-/// Maximum size of extracted .docx text we are willing to hold in memory.
-const MAX_DOCX_TEXT_BYTES: u64 = 64 * 1024 * 1024;
-
-/// Files whose content is searched through the preprocessor hook.
-const DOCX_EXTENSIONS: &[&str] = &["docx"];
+/// Maximum size of extracted document text we are willing to hold in memory.
+const MAX_EXTRACTED_TEXT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A compiled content query: the ripgrep matcher (live search) plus a plain
 /// regex (cheap check over cached text).
@@ -98,8 +95,8 @@ fn search_one(
         Err(_) => return false,
     }
 
-    if is_docx(path) {
-        let text = match crate::content_index::extract_text(path, MAX_DOCX_TEXT_BYTES) {
+    if crate::content_index::needs_extraction(path) {
+        let text = match crate::content_index::extract_text(path, MAX_EXTRACTED_TEXT_BYTES) {
             Some(t) => t,
             None => return false,
         };
@@ -132,13 +129,6 @@ fn search_reader<R: std::io::Read>(
         Ok(()) => sink.found,
         Err(_) => false,
     }
-}
-
-fn is_docx(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| DOCX_EXTENSIONS.iter().any(|d| e.eq_ignore_ascii_case(d)))
-        .unwrap_or(false)
 }
 
 /// Sink that stops at the first match and records it.

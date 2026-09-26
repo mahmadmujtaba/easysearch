@@ -12,7 +12,17 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, mpsc, mpsc::Receiver};
 use std::thread::JoinHandle;
 
-const DOCX_EXTENSIONS: &[&str] = &["docx"];
+/// Extensions whose text is read from a document package rather than as bytes.
+pub const EXTRACT_EXTENSIONS: &[&str] = &["docx", "odt", "pdf"];
+
+/// True if `path` is a document whose text lives inside an OOXML/ODF package
+/// (a ZIP of XML) instead of being the file's own bytes.
+pub fn needs_extraction(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| EXTRACT_EXTENSIONS.iter().any(|d| e.eq_ignore_ascii_case(d)))
+        .unwrap_or(false)
+}
 
 /// Queue of paths awaiting background text extraction.
 ///
@@ -155,19 +165,45 @@ pub fn spawn_extractor(
 
 /// Extract searchable text from a file.
 /// - plain text: read (capped), skip binary-looking files (NUL byte),
-/// - `.docx`: in-process OOXML extraction (see [`extract_docx_text`]) — no
-///   external `docx2txt` needed.
+/// - `.docx` / `.odt`: in-process package extraction (see [`extract_package_text`]),
+/// - `.pdf`: the text layer, in-process (see [`extract_pdf_text`]).
+///
+/// No external tool is used for any of them.
 pub fn extract_text(path: &Path, max_bytes: u64) -> Option<String> {
-    let is_docx = path
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| DOCX_EXTENSIONS.iter().any(|d| e.eq_ignore_ascii_case(d)))
-        .unwrap_or(false);
-    if is_docx {
-        extract_docx_text(path, max_bytes)
-    } else {
-        extract_plain_text(path, max_bytes)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" => extract_pdf_text(path, max_bytes),
+        "docx" | "odt" => extract_package_text(path, max_bytes),
+        _ => extract_plain_text(path, max_bytes),
     }
+}
+
+/// Extract the **text layer** of a PDF, in-process.
+///
+/// A scanned, image-only PDF has no text layer and therefore yields nothing —
+/// that is a property of the file, not a failure. PDFs are the least predictable
+/// input this engine handles, so the parser runs under `catch_unwind`: a
+/// malformed document must skip one file, never take down a query or worker.
+fn extract_pdf_text(path: &Path, max_bytes: u64) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    // A text layer is far smaller than the file; refuse absurd inputs outright.
+    if bytes.len() as u64 > max_bytes.saturating_mul(8) {
+        return None;
+    }
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(&bytes)
+    }))
+    .ok()?
+    .ok()?;
+    let text = parsed.trim();
+    if text.is_empty() || text.len() as u64 > max_bytes {
+        return None;
+    }
+    Some(text.to_string())
 }
 
 fn extract_plain_text(path: &Path, max_bytes: u64) -> Option<String> {
@@ -184,34 +220,94 @@ fn extract_plain_text(path: &Path, max_bytes: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// XML parts inside a `.docx` that carry visible text.
-const DOCX_STATIC_PARTS: &[&str] = &[
-    "word/document.xml",
-    "word/footnotes.xml",
-    "word/endnotes.xml",
-    "word/comments.xml",
-];
+/// How to read one document-package format: which ZIP parts hold text, and
+/// which XML elements are text, line ends, tabs and spaces.
+struct Markup {
+    /// Element names whose character data is visible text.
+    containers: &'static [&'static str],
+    /// Element names that end a line (on their end tag).
+    line_ends: &'static [&'static str],
+    /// Element names that add a tab (on their end tag).
+    tab_ends: &'static [&'static str],
+    /// Empty elements that add a newline.
+    empty_newlines: &'static [&'static str],
+    /// Empty elements that add a tab.
+    empty_tabs: &'static [&'static str],
+    /// Empty elements that add a space.
+    empty_spaces: &'static [&'static str],
+    /// ZIP parts that are always tried first.
+    static_parts: &'static [&'static str],
+    /// Whether an *optional* ZIP part can hold visible text.
+    part_matches: fn(&str) -> bool,
+}
 
-/// Extract text from a `.docx`, in-process.
+/// WordprocessingML (`.docx`): text lives in `<w:t>` runs; paragraphs, table
+/// rows and cells become whitespace. Headers/footers/notes are included.
+const WORD_RULES: Markup = Markup {
+    containers: &["t", "delText"],
+    line_ends: &["p", "tr"],
+    tab_ends: &["tc"],
+    empty_newlines: &["br", "cr"],
+    empty_tabs: &["tab"],
+    empty_spaces: &[],
+    static_parts: &[
+        "word/document.xml",
+        "word/footnotes.xml",
+        "word/endnotes.xml",
+        "word/comments.xml",
+    ],
+    part_matches: is_docx_text_part,
+};
+
+/// OpenDocument Text (`.odt`): the body is `content.xml`, where the text sits
+/// directly inside paragraphs and headings (with inline spans/links).
+const ODF_RULES: Markup = Markup {
+    containers: &["p", "h", "list-item", "table-cell"],
+    line_ends: &["p", "h", "list-item", "table-row"],
+    tab_ends: &["table-cell"],
+    empty_newlines: &["line-break"],
+    empty_tabs: &["tab"],
+    empty_spaces: &["s"],
+    static_parts: &["content.xml"],
+    part_matches: no_extra_parts,
+};
+
+fn no_extra_parts(_name: &str) -> bool {
+    false
+}
+
+/// Extract the visible text of a `.docx` or `.odt`, in-process.
 ///
-/// A `.docx` is an OOXML package (a ZIP). The readable payload lives in
-/// `word/*.xml` as WordprocessingML, so this opens the archive, walks those XML
-/// parts, keeps the character data of `<w:t>` runs (and deleted `<w:delText>`),
-/// and turns `<w:p>`/`<w:br>` into newlines, `<w:tab>` into a tab and a table
-/// cell (`<w:tc>`) into a tab. Headers, footers and comments are included.
-fn extract_docx_text(path: &Path, max_bytes: u64) -> Option<String> {
+/// Both are ZIP packages of XML; only the element rules differ. The body is read
+/// part by part and converted with [`append_markup_text`]. A malformed package is
+/// skipped (`None`), never fatal.
+fn extract_package_text(path: &Path, max_bytes: u64) -> Option<String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let rules = if ext == "odt" {
+        &ODF_RULES
+    } else {
+        &WORD_RULES
+    };
+    extract_zip_xml_text(path, rules, max_bytes)
+}
+
+fn extract_zip_xml_text(path: &Path, rules: &Markup, max_bytes: u64) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
 
-    // Document first, then the optional parts, then anything else that looks
-    // like a text-bearing Word part (headers/footers are numbered).
-    let mut parts: Vec<String> = DOCX_STATIC_PARTS.iter().map(|s| s.to_string()).collect();
+    // The known parts first, then any optional part this format allows
+    // (Word headers/footers are numbered).
+    let mut parts: Vec<String> = rules.static_parts.iter().map(|s| s.to_string()).collect();
     for i in 0..archive.len() {
         let Ok(entry) = archive.by_index(i) else {
             continue;
         };
         let name = entry.name().to_string();
-        if is_docx_text_part(&name) && !parts.iter().any(|p| p == &name) {
+        if (rules.part_matches)(&name) && !parts.iter().any(|p| p == &name) {
             parts.push(name);
         }
     }
@@ -228,7 +324,7 @@ fn extract_docx_text(path: &Path, max_bytes: u64) -> Option<String> {
         if entry.read_to_string(&mut xml).is_err() {
             continue;
         }
-        append_wordml_text(&xml, &mut out, max_bytes);
+        append_markup_text(&xml, rules, &mut out, max_bytes);
     }
 
     if out.len() as u64 > max_bytes || out.is_empty() {
@@ -250,42 +346,62 @@ fn is_docx_text_part(name: &str) -> bool {
         || base.starts_with("footer")
 }
 
-/// Append the visible text of one WordprocessingML part to `out`.
-fn append_wordml_text(xml: &str, out: &mut String, max_bytes: u64) {
+/// Append the visible text of one document XML part to `out`, using `rules`.
+fn append_markup_text(xml: &str, rules: &Markup, out: &mut String, max_bytes: u64) {
     use quick_xml::events::Event;
 
     let mut reader = quick_xml::Reader::from_str(xml);
     reader.config_mut().trim_text(false);
-    let mut in_run_text = false;
+    let mut in_text = false;
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match local_name(e.name().as_ref()) {
-                b"t" | b"delText" => in_run_text = true,
-                b"tab" => out.push('\t'),
-                _ => {}
-            },
-            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
-                b"t" | b"delText" => in_run_text = false,
-                b"p" | b"tr" => out.push('\n'),
-                b"tc" => out.push('\t'),
-                _ => {}
-            },
-            Ok(Event::Empty(e)) => match local_name(e.name().as_ref()) {
-                b"br" | b"cr" => out.push('\n'),
-                b"tab" => out.push('\t'),
-                _ => {}
-            },
+            Ok(Event::Start(e)) => {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                if is_one_of(name, rules.containers) {
+                    in_text = true;
+                }
+                if is_one_of(name, rules.empty_tabs) {
+                    out.push('\t');
+                }
+            }
+            Ok(Event::End(e)) => {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                if is_one_of(name, rules.containers) {
+                    in_text = false;
+                }
+                if is_one_of(name, rules.line_ends) {
+                    out.push('\n');
+                }
+                if is_one_of(name, rules.tab_ends) {
+                    out.push('\t');
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                if is_one_of(name, rules.empty_newlines) {
+                    out.push('\n');
+                }
+                if is_one_of(name, rules.empty_tabs) {
+                    out.push('\t');
+                }
+                if is_one_of(name, rules.empty_spaces) {
+                    out.push(' ');
+                }
+            }
             Ok(Event::Text(t)) => {
-                if in_run_text && let Ok(text) = t.decode() {
+                if in_text && let Ok(text) = t.decode() {
                     out.push_str(&text);
                 }
             }
             // quick-xml reports entity references as their own event, so resolve
             // them to the characters the text would contain.
             Ok(Event::GeneralRef(r)) => {
-                if in_run_text {
+                if in_text {
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => out.push(c),
                         _ => {
@@ -305,7 +421,7 @@ fn append_wordml_text(xml: &str, out: &mut String, max_bytes: u64) {
                 }
             }
             Ok(Event::CData(t)) => {
-                if in_run_text {
+                if in_text {
                     out.push_str(&String::from_utf8_lossy(&t));
                 }
             }
@@ -325,6 +441,10 @@ fn local_name(qname: &[u8]) -> &[u8] {
         Some(i) => &qname[i + 1..],
         None => qname,
     }
+}
+
+fn is_one_of(name: &[u8], list: &[&str]) -> bool {
+    list.iter().any(|candidate| name == candidate.as_bytes())
 }
 
 #[cfg(test)]
@@ -355,9 +475,9 @@ mod tests {
         }
     }
 
-    /// Build a `.docx` (a ZIP) with the given `word/*.xml` parts.
-    fn fake_docx(scratch: &Scratch, parts: &[(&str, &str)]) -> PathBuf {
-        let path = scratch.path().join("doc.docx");
+    /// Build a document package (a ZIP) with the given parts.
+    fn fake_package(scratch: &Scratch, file: &str, parts: &[(&str, &str)]) -> PathBuf {
+        let path = scratch.path().join(file);
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let opts = zip::write::SimpleFileOptions::default();
@@ -387,8 +507,9 @@ mod tests {
   <w:p><w:r><w:t>CONFIDENTIAL</w:t></w:r></w:p></w:hdr>"#;
 
         let scratch = Scratch::new("text");
-        let path = fake_docx(
+        let path = fake_package(
             &scratch,
+            "doc.docx",
             &[
                 ("word/document.xml", document),
                 ("word/header1.xml", header),
@@ -429,13 +550,117 @@ mod tests {
     }
 
     #[test]
+    fn extracts_opendocument_text() {
+        // Headings, inline spans, an entity, a line break, a tab, a table and a
+        // `<text:s/>` space.
+        let content = r#"<?xml version="1.0"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+  <office:body><office:text>
+    <text:h text:outline-level="1">Annual Report</text:h>
+    <text:p>Revenue was <text:span>up</text:span> 12&#37;.</text:p>
+    <text:p>Line one<text:line-break/>line two<text:tab/>tabbed</text:p>
+    <table:table><table:table-row>
+      <table:table-cell><text:p>Cell A</text:p></table:table-cell>
+      <table:table-cell><text:p>Cell B</text:p></table:table-cell>
+    </table:table-row></table:table>
+    <text:p>Words<text:s/>joined</text:p>
+  </office:text></office:body>
+</office:document-content>"#;
+        let scratch = Scratch::new("odt");
+        let path = fake_package(
+            &scratch,
+            "doc.odt",
+            &[
+                ("content.xml", content),
+                ("styles.xml", "<x>NOT BODY TEXT</x>"),
+            ],
+        );
+
+        let text = extract_text(&path, 1024 * 1024).expect("odt text");
+        assert!(text.contains("Annual Report"), "{text:?}");
+        // Inline spans stay attached, and the numeric entity is resolved.
+        assert!(text.contains("Revenue was up 12%."), "{text:?}");
+        // A break and a tab separate words.
+        assert!(!text.contains("Line oneline two"), "{text:?}");
+        assert!(text.contains("tabbed"), "{text:?}");
+        // `` is a real space.
+        assert!(text.contains("Words joined"), "{text:?}");
+        // Table cells are separated.
+        assert!(text.contains("Cell A"), "{text:?}");
+        assert!(text.contains("Cell B"), "{text:?}");
+        assert!(!text.contains("Cell ACell B"), "{text:?}");
+        // Only the body part is read.
+        assert!(!text.contains("NOT BODY TEXT"), "{text:?}");
+    }
+
+    /// Assemble a minimal, valid one-page PDF with a single text object.
+    /// Written by hand (with a real xref) so the test does not depend on a
+    /// fixture file.
+    fn minimal_pdf(text: &str) -> Vec<u8> {
+        let content = format!("BT /F1 24 Tf 20 100 Td ({text}) Tj ET");
+        let objects: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> >> >>"
+                .into(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        ];
+        let mut out = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+        }
+        let xref_at = out.len();
+        out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+        out.push_str("0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        out.into_bytes()
+    }
+
+    #[test]
+    fn extracts_a_pdf_text_layer() {
+        let scratch = Scratch::new("pdf");
+        let path = scratch.path().join("doc.pdf");
+        std::fs::write(&path, minimal_pdf("Hello quarterly report")).unwrap();
+        let text = extract_text(&path, 1024 * 1024).expect("pdf text layer");
+        assert!(text.contains("quarterly"), "{text:?}");
+    }
+
+    #[test]
+    fn a_malformed_pdf_is_skipped_not_a_panic() {
+        let scratch = Scratch::new("badpdf");
+        let path = scratch.path().join("broken.pdf");
+        std::fs::write(&path, b"%PDF-1.4 this is not a real document").unwrap();
+        // The parser may or may not recover; either way it must not panic and
+        // must never invent text.
+        if let Some(text) = extract_text(&path, 1024 * 1024) {
+            assert!(!text.contains("quarterly"), "{text:?}");
+        }
+    }
+
+    #[test]
     fn docx_extraction_respects_the_size_cap() {
         let big = format!(
             r#"<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:body></w:document>"#,
             "a".repeat(4096)
         );
         let scratch = Scratch::new("cap");
-        let path = fake_docx(&scratch, &[("word/document.xml", &big)]);
+        let path = fake_package(&scratch, "doc.docx", &[("word/document.xml", &big)]);
         assert!(extract_text(&path, 1024 * 1024).is_some());
         // A cap smaller than the text means the file is skipped, not truncated.
         assert!(extract_text(&path, 64).is_none());

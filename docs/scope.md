@@ -41,7 +41,8 @@ repeated content queries, and is kept fresh by the same event pipeline.
 
 - Realtime whole-filesystem **filename/path search** (glob patterns *and* regex).
 - Realtime **content search** over text-based files (code, configs, plain text, logs)
-  and **Word `.docx`** documents.
+  and **Word `.docx`** documents, **OpenDocument `.odt`** documents and the text
+  layer of **PDF** files.
 - Lightweight **native GUI** (search box, results list, match-mode toggles, status bar) —
   no web technologies.
 - **CLI** for scripting; optional headless **daemon** with a localhost HTTP API.
@@ -54,7 +55,8 @@ repeated content queries, and is kept fresh by the same event pipeline.
 - Content indexing into a database (Baloo/Recoll territory — heavy; unnecessary because
   the embedded ripgrep engine reads live data faster than any incremental indexer for
   human-scale queries).
-- Binary file content search (PDF, images, video, archives) — text/docx only for now.
+- Binary file content search (images, video, archives) — text, **Word `.docx`**,
+  **OpenDocument `.odt`** and **PDF (text layer)** are searchable.
 - Network filesystems as *indexed roots* (SMB/NFS mounts excluded by default; see §6).
 - Persistent database or boot-time cache — the index lives in RAM, rebuilt on start.
 - Web-based UI (Electron/Tauri/webview) — explicitly rejected by design decision.
@@ -125,7 +127,7 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | CLI | **`clap`** | hand-rolled parser |
 | Optional daemon HTTP | **`tiny_http`** (small, stdlib-ish) | axum (heavier) |
 | Serialization (daemon only) | **`serde_json`** | — |
-| `.docx` extraction | **in-process** OOXML reader (`zip` + `quick-xml`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
+| `.docx` / `.odt` / `.pdf` extraction | **in-process** (`zip` + `quick-xml`; `pdf-extract`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
 
 **Explicitly rejected:** Python (too slow — user direction), web-based UI frameworks
 (Electron/Tauri/webview — user direction), Baloo/Recoll/Tracker (heavy), subprocess-per-
@@ -177,11 +179,13 @@ filter bar). They are enforced by the same predicate whether the query is a `sea
   `-U`-style flags in a later phase).
 - **Realtime guarantee for content:** results are always computed from live disk state at
   query time. Editing a file then re-running the query immediately shows the change.
-- `.docx` content: text is extracted **in-process** from the OOXML package (a ZIP),
-  so Office files behave like text with no external tool to install. `<w:t>` run
-  text (and deleted `<w:delText>`), `<w:tab/>`, line breaks and table cells are
-  turned into whitespace that keeps words separated; headers, footers and comments
-  are included. If the file is not a valid package it is skipped, never fatal.
+- `.docx` / `.odt` / `.pdf` content: text is extracted **in-process**, so Office
+  and PDF files behave like text with no external tool to install. For OOXML/ODF
+  (both ZIPs of XML) the run text, tabs, line breaks and table cells become
+  whitespace that keeps words separated, and headers, footers, footnotes,
+  endnotes and comments are included. For PDF it is the text layer only — a
+  scanned, image-only PDF has none, which is a property of the file. Malformed
+  input is skipped, never fatal (the PDF parser even runs under `catch_unwind`).
 - Binary files are never content-searched (binary detection quits on NUL, exactly like
   `rg`).
 
@@ -266,15 +270,16 @@ One query box, three effective combinations:
 |---|---|---|
 | Content search engine | **ripgrep's crates** (`grep-searcher`, `grep-regex`, `ignore`, `globset`) | The same code as the `rg` binary, in-process; no subprocess, no runtime dep |
 | Filesystem events | **`notify`** crate | Wraps inotify (Linux); same API on Windows/macOS |
-| `.docx` text extraction | **`zip` + `quick-xml`** in-process | The OOXML package is a ZIP of WordprocessingML; no subprocess, no apt-installed tool |
+| `.docx` / `.odt` / `.pdf` text extraction | **`zip` + `quick-xml`** for OOXML/ODF, **`pdf-extract`** for PDF | All in-process: a package is a ZIP of XML, and a PDF text layer needs no subprocess or apt-installed tool |
 | Open results | **`xdg-open`** | Desktop-standard "open file / containing folder" |
 | Build toolchain | **apt** `rustc`/`cargo` 1.85 (or rustup) + `build-essential`, `pkg-config`, X11/Wayland/GL dev libs | Verified available on target; one-time `sudo apt install` |
 
 **Explicitly rejected:** Baloo/Recoll/Tracker (heavy daemons, content DBs), a custom
 `find`-based reimplementation, subprocess-per-query `rg`, a hand-rolled content indexer.
 
-> If a required tool is missing at runtime, the app **degrades gracefully** (docx
-> skipped) and surfaces the exact `apt install` command needed.
+> Every content format is read **in-process**, so there is no external tool to
+> install for `.docx` / `.odt` / `.pdf` content search. A file that cannot be
+> parsed is skipped, and the query still succeeds.
 
 ---
 
@@ -411,7 +416,7 @@ everything-for-linux/
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
 | **2 — Polish** | **Done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), fuzzy ranking (v0.17.0), bundled docx extractor (v0.18.0), global hotkey via the control socket (v0.19.0) |
-| **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
+| **3 — Stretch** | **Partly done**: **PDF / ODT extraction (v0.20.0)**. **Outstanding**: `fanotify` watcher, multiline content regex, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |
 
@@ -423,7 +428,8 @@ that document, not this one, is the live backlog.
 **Risks (mitigations in place):** inotify watch exhaustion (§5.2 degraded mode); first
 `cargo build` is slow (crate compile; mitigated by release profile + `lto`); crates.io
 network access needed for dependencies (verify at first build; Debian's packaged crates
-are a fallback); docx extraction cost (only docx files, only when content search is on).
+are a fallback); document extraction cost (docx/odt/pdf files, only when content search
+is on).
 
 **Decisions — all resolved 2026-08-20 (user confirmation):**
 1. **Stack:** Rust + egui + embedded ripgrep crates + `notify` — **confirmed**. (Slint as
