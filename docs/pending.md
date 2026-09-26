@@ -160,7 +160,7 @@ From [`scope.md` §12](scope.md#12-delivery-phases). Phase 1 is the committed
 deliverable; these are gated on request:
 
 **Phase 2 — polish**
-- Bundled docx extractor (drop the `docx2txt` dependency)
+- ~~Bundled docx extractor (drop the `docx2txt` dependency)~~ — **done in v0.18.0** (in-process `zip` + `quick-xml` OOXML reader)
 - Global hotkey
 - ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, `?fuzzy=1`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
 - ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)

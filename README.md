@@ -38,7 +38,8 @@ cargo build --release
 
 Binaries land in `target/release/everything` and `target/release/everything-gui`.
 
-> Optional, only for **.docx content search**: `sudo apt install docx2txt`.
+> Optional, only for **.docx content search**: nothing — `.docx` text is extracted
+> in-process since v0.18.0 (the old `docx2txt` dependency is gone).
 
 ## Packaging
 

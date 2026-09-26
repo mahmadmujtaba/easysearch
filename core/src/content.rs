@@ -1,8 +1,8 @@
 //! On-demand content search via the embedded ripgrep engine.
 //!
 //! Always reads live disk state (results are as fresh as the files themselves).
-//! `.docx` files are searched through a text-extraction preprocessor hook
-//! (default: the `docx2txt` tool; skipped gracefully when unavailable).
+//! `.docx` files are searched through an in-process OOXML text extractor (no
+//! external tool); a file that cannot be extracted is skipped, never fatal.
 
 use crate::content_index::{ContentIndex, ExtractQueue};
 use grep_regex::RegexMatcher;

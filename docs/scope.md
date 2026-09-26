@@ -125,7 +125,7 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | CLI | **`clap`** | hand-rolled parser |
 | Optional daemon HTTP | **`tiny_http`** (small, stdlib-ish) | axum (heavier) |
 | Serialization (daemon only) | **`serde_json`** | — |
-| `.docx` extraction | external `docx2txt` subprocess (preprocessor hook) | bundled zip+XML extractor (phase 3, removes the dep) |
+| `.docx` extraction | **in-process** OOXML reader (`zip` + `quick-xml`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
 
 **Explicitly rejected:** Python (too slow — user direction), web-based UI frameworks
 (Electron/Tauri/webview — user direction), Baloo/Recoll/Tracker (heavy), subprocess-per-
@@ -177,9 +177,11 @@ filter bar). They are enforced by the same predicate whether the query is a `sea
   `-U`-style flags in a later phase).
 - **Realtime guarantee for content:** results are always computed from live disk state at
   query time. Editing a file then re-running the query immediately shows the change.
-- `.docx` content: a **preprocessor hook** extracts text (default: `docx2txt`
-  subprocess; phase-3 bundled fallback) so Office files behave like text. If the
-  extractor is unavailable, docx files are skipped and the UI notes it.
+- `.docx` content: text is extracted **in-process** from the OOXML package (a ZIP),
+  so Office files behave like text with no external tool to install. `<w:t>` run
+  text (and deleted `<w:delText>`), `<w:tab/>`, line breaks and table cells are
+  turned into whitespace that keeps words separated; headers, footers and comments
+  are included. If the file is not a valid package it is skipped, never fatal.
 - Binary files are never content-searched (binary detection quits on NUL, exactly like
   `rg`).
 
@@ -264,7 +266,7 @@ One query box, three effective combinations:
 |---|---|---|
 | Content search engine | **ripgrep's crates** (`grep-searcher`, `grep-regex`, `ignore`, `globset`) | The same code as the `rg` binary, in-process; no subprocess, no runtime dep |
 | Filesystem events | **`notify`** crate | Wraps inotify (Linux); same API on Windows/macOS |
-| `.docx` text extraction | **`docx2txt`** subprocess via preprocessor hook | apt-installable; bundled fallback in phase 3 |
+| `.docx` text extraction | **`zip` + `quick-xml`** in-process | The OOXML package is a ZIP of WordprocessingML; no subprocess, no apt-installed tool |
 | Open results | **`xdg-open`** | Desktop-standard "open file / containing folder" |
 | Build toolchain | **apt** `rustc`/`cargo` 1.85 (or rustup) + `build-essential`, `pkg-config`, X11/Wayland/GL dev libs | Verified available on target; one-time `sudo apt install` |
 
@@ -408,7 +410,7 @@ everything-for-linux/
 | Phase | Status |
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
-| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), **substring/fuzzy ranking (v0.17.0)**. **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey |
+| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), substring/fuzzy ranking (v0.17.0), **bundled docx extractor (v0.18.0)**. **Outstanding**: global hotkey |
 | **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |
@@ -427,7 +429,8 @@ are a fallback); docx extraction cost (only docx files, only when content search
 1. **Stack:** Rust + egui + embedded ripgrep crates + `notify` — **confirmed**. (Slint as
    GUI fallback, Go as language fallback, both documented but not pursued.)
 2. **Apt installs:** one-time `sudo apt install rustc cargo build-essential pkg-config
-   libxkbcommon-dev libwayland-dev libgl1-mesa-dev docx2txt` — **approved**.
+   libxkbcommon-dev libwayland-dev libgl1-mesa-dev` — **approved**. (No `docx2txt`:
+   docx extraction is in-process since v0.18.0.)
 3. **Default scope:** **`$HOME` of the running user**, configurable roots. Whole-FS is an
    opt-in config change, not the default.
 4. **Content search:** on-demand embedded ripgrep (always fresh) is the default **and** an

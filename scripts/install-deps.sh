@@ -8,7 +8,8 @@
 #   3. .cargo/config.toml pointing rustc at rust-lld + system crt objects,
 #      so no C compiler or pkg-config is required.
 #
-# Optional (only for .docx content search): sudo apt install docx2txt
+# Nothing else is needed: .docx content search uses an in-process OOXML
+# extractor (no `docx2txt`).
 set -e
 
 MULTIARCH=/usr/lib/x86_64-linux-gnu
@@ -82,6 +83,3 @@ fi
 echo ""
 echo "Done. Build with:"
 echo "    cd \"$PROJECT_DIR\" && cargo build --release"
-echo ""
-echo "Optional for .docx content search (needs sudo):"
-echo "    sudo apt install docx2txt"

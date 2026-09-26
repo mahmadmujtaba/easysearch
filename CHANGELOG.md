@@ -4,6 +4,25 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-09-26
+
+### Changed
+
+- **`.docx` content search is fully in-process (Phase 2).** The external
+  `docx2txt` tool is no longer needed or used. The engine reads the OOXML
+  package (a ZIP) itself and extracts the visible text from `word/document.xml`
+  plus headers, footers, footnotes, endnotes and comments: `<w:t>` run text
+  (and deleted `<w:delText>`), tabs, line breaks and table cells become
+  whitespace that keeps words separated, and character entities (`&amp;`, `&#…;`)
+  are resolved. Before, a missing `docx2txt` made docx content search silently
+  return nothing; now it works out of the box, and a malformed package is
+  skipped rather than fatal.
+- New dependencies `zip` (the `deflate` feature only) and `quick-xml`, both pure
+  Rust. `packaging/flatpak/cargo-sources.json` was regenerated for the offline
+  Flatpak build.
+- `scripts/install-deps.sh`, the README and `scope.md` no longer ask you to
+  install `docx2txt`.
+
 ## [0.17.0] - 2026-09-26
 
 ### Added
