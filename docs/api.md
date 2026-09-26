@@ -26,6 +26,12 @@ attaches the GUI to it. The daemon's log goes to
 libraries (OpenGL/EGL and the windowing stack) that any graphical Linux
 installation already has.
 
+The daemon also owns the **tray icon**, so closing the window (which frees the
+GUI process) leaves the index, the API and the tray running; the tray's *Open*
+either shows the window over the control socket or starts a fresh GUI attached to
+the same daemon. `POST /v1/shutdown` — or the tray's *Quit*, or
+`easysearch --stop` — stops the daemon itself.
+
 > **Security:** the API has no authentication and is bound to loopback. Do not
 > bind it to a non-loopback address or expose it through a proxy.
 >

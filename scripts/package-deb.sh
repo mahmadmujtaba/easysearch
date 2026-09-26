@@ -68,14 +68,16 @@ render_icon() {
     dest="$PKGROOT/usr/share/icons/hicolor/${size}x${size}/apps"
     install -d "$dest"
     if command -v magick >/dev/null 2>&1; then
-        magick -background none "$SVG" -resize "${size}x${size}" "$dest/$APP_ID.png"
+        # `PNG32:` forces an RGBA PNG, so the icon keeps its transparent
+        # background whatever the SVG delegate's own defaults are.
+        magick -background none "$SVG" -resize "${size}x${size}" "PNG32:$dest/$APP_ID.png"
     else
         rsvg-convert -w "$size" -h "$size" "$SVG" -o "$dest/$APP_ID.png"
     fi
     chmod 0644 "$dest/$APP_ID.png"
 }
 if command -v magick >/dev/null 2>&1 || command -v rsvg-convert >/dev/null 2>&1; then
-    for size in 64 128 256 512; do
+    for size in 16 24 32 48 64 128 256 512; do
         render_icon "$size"
     done
 else

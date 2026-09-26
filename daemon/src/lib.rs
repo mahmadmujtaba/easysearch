@@ -29,16 +29,23 @@
 use easysearch_core::api::{
     API_VERSION, CountDto, ErrorDto, Health, SearchResponseDto, StatusReport, category_from_str,
 };
+use easysearch_core::ipc;
 use easysearch_core::remote::percent_decode;
 use easysearch_core::{Engine, Query};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+mod tray;
+
 /// Cap on concurrently served requests (each request holds one thread).
 const MAX_CONCURRENCY: usize = 32;
+
+/// How many recent queries the tray menu remembers.
+const RECENT_CAP: usize = 12;
 
 pub struct Daemon {
     engine: Arc<Engine>,
@@ -48,6 +55,8 @@ pub struct Daemon {
     /// Set by [`Daemon::serve_forever`]; lets `POST /v1/shutdown` stop the
     /// accept loop (used to restart onto a freshly installed binary).
     server: OnceLock<Arc<Server>>,
+    /// Newest-first queries seen by the API, mirrored into the tray submenu.
+    recent: Arc<Mutex<Vec<String>>>,
 }
 
 impl Daemon {
@@ -58,7 +67,34 @@ impl Daemon {
             version: env!("CARGO_PKG_VERSION").to_string(),
             inflight: AtomicUsize::new(0),
             server: OnceLock::new(),
+            recent: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// The recent-queries list, shared with the tray menu.
+    pub fn recent_queries(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.recent)
+    }
+
+    /// Remember a query for the tray's *Recent searches* submenu.
+    ///
+    /// The daemon answers every client (GUI tabs, CLI, curl), so this is the
+    /// only place that sees them all; it keeps a small newest-first ring.
+    fn record_query(&self, q: &Query) {
+        let name = q.name.trim();
+        let label = if !name.is_empty() {
+            name
+        } else {
+            q.content.as_deref().unwrap_or("").trim()
+        };
+        if label.is_empty() {
+            return;
+        }
+        if let Ok(mut recent) = self.recent.lock() {
+            recent.retain(|r| r != label);
+            recent.insert(0, label.to_string());
+            recent.truncate(RECENT_CAP);
+        }
     }
 
     /// Accept connections until the server stops, one thread per request.
@@ -108,7 +144,10 @@ impl Daemon {
                 (200, self.watch_json(Duration::from_secs(timeout)))
             }
             (Method::Get, "/v1/search") => match parse_query_params(&params) {
-                Ok(q) => self.search_json(&q),
+                Ok(q) => {
+                    self.record_query(&q);
+                    self.search_json(&q)
+                }
                 Err(e) => (400, err_json(&e)),
             },
             (Method::Post, "/v1/search") | (Method::Post, "/v1/count") => {
@@ -123,7 +162,10 @@ impl Daemon {
                             ),
                             Err(e) => (400, err_json(&e)),
                         },
-                        Ok(q) => self.search_json(&q),
+                        Ok(q) => {
+                            self.record_query(&q);
+                            self.search_json(&q)
+                        }
                         Err(e) => (400, err_json(&format!("invalid query JSON: {e}"))),
                     },
                     Err(e) => (400, err_json(&format!("cannot read body: {e}"))),
@@ -249,6 +291,11 @@ fn header(name: &str, value: &str) -> Header {
 ///
 /// Shared by the `easysearch-daemon` binary and the combined single-binary app
 /// (which re-executes itself in daemon mode).
+///
+/// The **tray icon belongs to this process**, not to the window: closing the
+/// window frees the GUI's GL stack and its copy of the index, and the tray is
+/// still there to open a fresh one. `POST /v1/shutdown` (or the tray's *Quit*)
+/// stops the daemon itself.
 pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
     let server = Server::http(addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
     let bound = server
@@ -260,8 +307,97 @@ pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
         "easysearch-daemon {} — listening on http://{bound}",
         env!("CARGO_PKG_VERSION")
     );
-    Daemon::new(engine).serve_forever(Arc::new(server));
+    let daemon = Daemon::new(engine);
+    spawn_tray(Arc::clone(&daemon), bound.clone());
+    daemon.serve_forever(Arc::new(server));
     Ok(())
+}
+
+/// Start the tray item (if the desktop hosts one) and act on its menu.
+///
+/// Runs on its own thread; the returned handle is held there for the process's
+/// lifetime, since dropping it would unregister the item.
+fn spawn_tray(daemon: Arc<Daemon>, addr: String) {
+    let (rx, handle) = match tray::spawn_tray("EasySearch", daemon.recent_queries()) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("easysearch-daemon: no system tray: {e}");
+            return;
+        }
+    };
+    std::thread::Builder::new()
+        .name("tray".into())
+        .spawn(move || {
+            let _handle = handle;
+            while let Ok(msg) = rx.recv() {
+                match msg {
+                    tray::TrayMsg::Quit => {
+                        daemon.request_shutdown();
+                        break;
+                    }
+                    tray::TrayMsg::Open => open_window(&addr, None),
+                    tray::TrayMsg::Toggle => open_window(&addr, Some(ipc::Command::Toggle)),
+                    tray::TrayMsg::Search(q) => open_window(&addr, Some(ipc::Command::Search(q))),
+                }
+            }
+        })
+        .ok();
+}
+
+/// Hand `command` to a running window, or start one attached to this daemon.
+///
+/// The control socket is only useful while a window exists; when nothing is
+/// listening (the usual case, since closing the window now exits it) a fresh GUI
+/// is spawned on `addr` so the tray always opens something.
+fn open_window(addr: &str, command: Option<ipc::Command>) {
+    if let Some(command) = &command
+        && matches!(ipc::send(command), Ok(true))
+    {
+        return;
+    }
+    let Some(exe) = gui_exe() else {
+        eprintln!("easysearch-daemon: cannot find an `easysearch` executable to open a window");
+        return;
+    };
+    let mut child = std::process::Command::new(exe);
+    child.arg("--addr").arg(addr);
+    if let Some(ipc::Command::Search(q)) = &command {
+        child.arg("--search").arg(q);
+    }
+    child
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // Detach into its own session, so the window is not a child of the daemon.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        child.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    if let Err(e) = child.spawn() {
+        eprintln!("easysearch-daemon: cannot open the window: {e}");
+    }
+}
+
+/// The executable that opens a window.
+///
+/// The combined `easysearch` binary is both halves, so re-executing ourselves
+/// opens the GUI. The standalone `easysearch-daemon` has no window, so fall back
+/// to the app on `PATH`.
+fn gui_exe() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe()
+        && exe.file_name().and_then(|n| n.to_str()) == Some("easysearch")
+    {
+        return Some(exe);
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("easysearch"))
+        .find(|p| p.is_file())
 }
 
 fn err_json(msg: &str) -> String {

@@ -11,8 +11,8 @@
 //! unrelated), the GUI runs the engine in-process instead of failing.
 
 use easysearch_core::api::{API_VERSION, DEFAULT_ADDR, Health};
+use easysearch_core::ipc as gui_ipc;
 use easysearch_core::{Backend, Config, Engine, remote};
-use easysearch_gui::ipc as gui_ipc;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -241,6 +241,15 @@ pub fn run_gui(addr: &str) -> Result<(), String> {
     };
     let initial = search_from_args(&std::env::args().skip(1).collect::<Vec<_>>());
     easysearch_gui::run_with_query(std::sync::Arc::new(backend), initial).map_err(|e| e.to_string())
+}
+
+/// Ask a running daemon to stop (`POST /v1/shutdown`).
+///
+/// The CLI counterpart to the tray's *Quit*. The window is a separate process,
+/// so `--quit` cannot stop the service — and the daemon may be the only thing
+/// running, with no window to talk to at all.
+pub fn stop_daemon(addr: &str) -> Result<(), String> {
+    remote::request(addr, "POST", "/v1/shutdown", Some(b"{}")).map(|_| ())
 }
 
 /// Default daemon address (re-exported for the binary's help text).

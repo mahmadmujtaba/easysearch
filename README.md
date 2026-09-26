@@ -142,8 +142,10 @@ panes — a sidebar (categories with live counts, saved searches, indexed locati
 the results table (`#`, Name, Path, coloured type pill, Size, Modified, Created,
 Match, Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
 quick actions. Under it: view tabs, bulk actions, recent searches and a live status
-bar (index state, CPU, RAM, query stats, 100/110/125% zoom). It follows the
-desktop's light/dark scheme live and uses your system fonts.
+bar (index state, CPU, RAM, query stats, 100/110/125% zoom). The theme is an
+explicit choice — **Dark by default**, Light if you prefer — remembered in
+`gui.json`; it no longer follows the desktop. It draws with your system fonts,
+resolved through fontconfig from the desktop's configured family.
 
 Query semantics (Everything-style):
 
@@ -235,12 +237,15 @@ export -n WAYLAND_DISPLAY; easysearch-gui # force X11 (or: env -u WAYLAND_DISPLA
 
 ## System tray
 
-The app shows a tray icon (StatusNotifierItem over D-Bus) with an Open/Quit
-menu and a “Recent searches” submenu; left-click toggles the window. By
-default the **X button quits** the app; enable *Settings → “Keep running in
-tray when the window is closed”* to hide to the tray instead (then only
-“Quit” exits). Works on KDE/Qt natively and on GTK desktops that host SNI
-(GNOME with the AppIndicator extension, XFCE, Cinnamon, MATE).
+The tray icon (StatusNotifierItem over D-Bus) is owned by the **background
+service**, not the window, with an Open/Quit menu and a “Recent searches”
+submenu; left-click opens or toggles the window. **Closing the window exits the
+window** — freeing its GL stack and its copy of the index — while the service
+keeps indexing and keeps the tray, so *Open* (or `easysearch --toggle`) brings a
+fresh window back instantly. **Quit** in the tray, or `easysearch --stop`, stops
+the service itself. Works on KDE/Qt natively and on GTK desktops that host SNI
+(GNOME with the AppIndicator extension, XFCE, Cinnamon, MATE), and the app is
+fully usable without a tray.
 
 ## Realtime & watch limits
 

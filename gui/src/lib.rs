@@ -15,19 +15,16 @@ use easysearch_core::update::{CurlFetcher, InstallReport, Stage, UpdateConfig, U
 use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
 };
+use easysearch_core::{ipc, logo};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-pub mod ipc;
-mod logo;
-mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
@@ -151,27 +148,6 @@ impl Theme {
         }
     }
 }
-
-/// Font families to try for the UI (first one found on the system wins).
-const UI_FONT_PREFERENCE: &[&str] = &[
-    "Inter",
-    "Noto Sans",
-    "Cantarell",
-    "Ubuntu",
-    "DejaVu Sans",
-    "Liberation Sans",
-    "Roboto",
-    "Fira Sans",
-];
-const MONO_FONT_PREFERENCE: &[&str] = &[
-    "JetBrains Mono",
-    "Fira Code",
-    "Fira Mono",
-    "DejaVu Sans Mono",
-    "Liberation Mono",
-    "Noto Sans Mono",
-    "Ubuntu Mono",
-];
 
 const RECENT_AGE_SECS: i64 = 7 * 24 * 3600;
 const LARGE_MIN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
@@ -424,127 +400,6 @@ fn location_label(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-// --- system theme ---------------------------------------------------------
-
-/// Files whose modification indicates the desktop theme changed. KDE, GTK and
-/// XFCE rewrite these; GNOME keeps its settings in the `dconf` database.
-fn theme_watch_paths() -> Vec<PathBuf> {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return Vec::new();
-    };
-    [
-        ".config/kdeglobals",
-        ".config/gtk-3.0/settings.ini",
-        ".config/gtk-4.0/settings.ini",
-        ".config/dconf/user",
-        ".config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
-    ]
-    .iter()
-    .map(|p| home.join(p))
-    .collect()
-}
-
-/// Cheap hash of the watched theme files (a `stat` per file, no reads).
-fn theme_fingerprint() -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for path in theme_watch_paths() {
-        match std::fs::metadata(&path) {
-            Ok(md) => {
-                let mtime = md
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                mtime.hash(&mut hasher);
-                md.len().hash(&mut hasher);
-            }
-            Err(_) => 0u64.hash(&mut hasher),
-        }
-    }
-    hasher.finish()
-}
-
-/// Is the desktop configured for a dark scheme?
-///
-/// KDE's `kdeglobals` is the authoritative source on Plasma, so it is consulted
-/// first; then the XDG portal (via `dark-light`), which covers GNOME and others;
-/// then GTK's settings; and finally the app defaults to dark.
-fn detect_system_dark() -> bool {
-    if let Some(dark) = kde_globals_is_dark() {
-        return dark;
-    }
-    match dark_light::detect() {
-        dark_light::Mode::Dark => true,
-        dark_light::Mode::Light => false,
-        dark_light::Mode::Default => gtk_settings_is_dark().unwrap_or(true),
-    }
-}
-
-/// Decide from KDE's window background colour (`~/.config/kdeglobals`).
-fn kde_globals_is_dark() -> Option<bool> {
-    let home = std::env::var_os("HOME")?;
-    let text = std::fs::read_to_string(PathBuf::from(home).join(".config/kdeglobals")).ok()?;
-    kde_globals_dark_from(&text)
-}
-
-/// Parse the `[Colors:Window] BackgroundNormal` value out of a kdeglobals file.
-fn kde_globals_dark_from(text: &str) -> Option<bool> {
-    let mut in_window_section = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_window_section = line == "[Colors:Window]";
-            continue;
-        }
-        if in_window_section && let Some(value) = line.strip_prefix("BackgroundNormal=") {
-            let rgb: Vec<f32> = value
-                .split(',')
-                .filter_map(|c| c.trim().parse::<f32>().ok())
-                .collect();
-            if rgb.len() >= 3 {
-                // Rec. 601 luma, normalised to 0..=1.
-                let luma = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255.0;
-                return Some(luma < 0.5);
-            }
-        }
-    }
-    None
-}
-
-/// Decide from GTK's settings (`gtk-application-prefer-dark-theme` / theme name).
-fn gtk_settings_is_dark() -> Option<bool> {
-    let home = std::env::var_os("HOME")?;
-    for rel in [
-        ".config/gtk-4.0/settings.ini",
-        ".config/gtk-3.0/settings.ini",
-    ] {
-        let Ok(text) = std::fs::read_to_string(PathBuf::from(&home).join(rel)) else {
-            continue;
-        };
-        if let Some(dark) = gtk_settings_dark_from(&text) {
-            return Some(dark);
-        }
-    }
-    None
-}
-
-/// Parse a GTK `settings.ini` for a dark preference or a “dark” theme name.
-fn gtk_settings_dark_from(text: &str) -> Option<bool> {
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(v) = line.strip_prefix("gtk-application-prefer-dark-theme=") {
-            let v = v.trim();
-            return Some(v == "1" || v.eq_ignore_ascii_case("true"));
-        }
-        if let Some(v) = line.strip_prefix("gtk-theme-name=") {
-            return Some(v.to_ascii_lowercase().contains("dark"));
-        }
-    }
-    None
-}
-
 /// Run the GUI against an already-chosen search backend (blocks until exit).
 pub fn run(backend: Arc<Backend>) -> eframe::Result {
     run_with_query(backend, None)
@@ -622,21 +477,34 @@ fn daemon_from_env_or_args() -> Option<String> {
     None
 }
 
+/// Default for [`GuiPrefs::dark`].
+fn dark_by_default() -> bool {
+    true
+}
+
+/// Read `dark` leniently: a bool as-is, and `null` (the pre-0.33 "follow
+/// system") or a missing key as the default. Without this an old `gui.json`
+/// holding `"dark": null` would fail to parse and reset every preference.
+fn dark_from_json<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(de)?.unwrap_or_else(dark_by_default))
+}
+
 /// Persistent GUI preferences (`~/.config/easysearch/gui.json`).
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct GuiPrefs {
-    /// None = follow the system theme.
-    dark: Option<bool>,
+    /// Colour scheme: **always an explicit choice**, dark by default.
+    ///
+    /// The value used to be optional and `null` meant "follow the system"; the
+    /// app no longer follows it, so `null`/missing resolves to dark and an old
+    /// `gui.json` keeps loading instead of being reset.
+    #[serde(default = "dark_by_default", deserialize_with = "dark_from_json")]
+    dark: bool,
     /// Preview pane on by default (it can be turned off in Settings/View).
     show_preview: bool,
-    /// The X button quits instead of hiding to the tray.
-    ///
-    /// Default `false`: closing the window keeps EasySearch running in the
-    /// tray. Only meaningful when a tray is actually available. The field used
-    /// to be the inverse, named `close_to_tray`; old configs simply fall back to
-    /// the new default (serde ignores the unknown key), which is what we want.
-    quit_on_close: bool,
     /// Most recent first.
     history: Vec<String>,
     /// UI zoom factor (1.0 = 100%).
@@ -666,9 +534,8 @@ struct GuiPrefs {
 impl Default for GuiPrefs {
     fn default() -> Self {
         GuiPrefs {
-            dark: None,
+            dark: true,
             show_preview: true,
-            quit_on_close: false,
             history: Vec::new(),
             zoom: 1.0,
             include_dirs: true,
@@ -1019,15 +886,8 @@ struct App {
     search_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
-    tray_rx: Option<mpsc::Receiver<tray::TrayMsg>>,
-    // Held for its lifetime: dropping the handle unregisters the tray item.
-    #[allow(dead_code)]
-    tray_handle: Option<ksni::blocking::Handle<tray::AppTray>>,
-    tray_quit: bool,
     /// Our own view of window visibility (egui 0.31 exposes no readback).
     window_visible: bool,
-    /// Recent searches shared with the tray menu.
-    history_shared: Arc<Mutex<Vec<String>>>,
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
@@ -1075,11 +935,6 @@ struct App {
     ipc_rx: mpsc::Receiver<ipc::Command>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
-    /// Fingerprint of the desktop theme files, to follow system theme changes.
-    theme_fp: u64,
-    theme_at: Instant,
-    /// When the theme was last re-detected (slow safety net).
-    theme_detect_at: Instant,
     /// Human label for the search backend ("in-process" or "daemon HOST:PORT").
     backend_label: String,
 }
@@ -1118,22 +973,10 @@ impl App {
         // (the portable way to bind a global hotkey — see gui/src/ipc.rs).
         let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Command>();
         ipc::spawn_listener(ipc_tx);
-        let dark = match prefs.dark {
-            Some(d) => d,
-            None => detect_system_dark(),
-        };
+        let dark = prefs.dark;
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
         let backend_label = backend.label();
-        let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
-        let (tray_rx, tray_handle) =
-            match tray::spawn_tray("EasySearch", Arc::clone(&history_shared)) {
-                Ok((rx, handle)) => (Some(rx), Some(handle)),
-                Err(e) => {
-                    eprintln!("system tray unavailable: {e}");
-                    (None, None)
-                }
-            };
 
         // Restore the tabs that were open when the app last closed (at least one).
         let tab_prefs = if prefs.tabs.is_empty() {
@@ -1276,11 +1119,7 @@ impl App {
             search_rect: None,
             ui_font,
             mono_font,
-            tray_rx,
-            tray_handle,
-            tray_quit: false,
             window_visible: true,
-            history_shared,
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
@@ -1310,9 +1149,6 @@ impl App {
             ignore_msg: None,
             ipc_rx,
             pending_cmds: Vec::new(),
-            theme_fp: theme_fingerprint(),
-            theme_at: Instant::now(),
-            theme_detect_at: Instant::now(),
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
@@ -1321,7 +1157,6 @@ impl App {
             if !q.is_empty() {
                 app.run_query(&q);
                 app.prefs.commit_query(&q);
-                app.sync_history();
             }
         }
         app.send_query();
@@ -1543,7 +1378,6 @@ impl App {
                 self.active_tab -= 1;
             }
         }
-        self.sync_history();
         self.save_prefs();
     }
 
@@ -1632,14 +1466,7 @@ impl App {
         }
     }
 
-    /// Mirror the persisted history into the shared tray snapshot.
-    fn sync_history(&mut self) {
-        if let Ok(mut h) = self.history_shared.lock() {
-            h.clone_from(&self.prefs.history);
-        }
-    }
-
-    /// Run a query (from the tray's recent-searches menu).
+    /// Run a query (from the command line, a saved search or the tray).
     fn run_query(&mut self, q: &str) {
         let q = q.trim().to_string();
         if q.is_empty() {
@@ -1649,7 +1476,6 @@ impl App {
         self.last_edit = Instant::now();
         self.history_idx = None;
         self.prefs.commit_query(&self.query);
-        self.sync_history();
     }
 
     fn open(path: &Path) {
@@ -2755,72 +2581,135 @@ fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
     ui.painter().circle_filled(rect.center(), 4.0, color);
 }
 
-/// files, which cost ~14 MiB) and avoids huge `.ttc` collections — loading
-/// `Inter.ttc` copied 12 MiB and, because a collection's face 0 is not
-/// necessarily Regular, could also pick the wrong weight.
+/// Load the desktop's own fonts, so the app looks native.
+///
+/// egui draws from font *files* it is handed, so "use the system font" means
+/// asking fontconfig which file the configured family resolves to and passing
+/// that over — the bundled egui faces stay in the fallback chain for glyphs the
+/// system font lacks (emoji, CJK, rare symbols). The desktop's own choice comes
+/// first (KDE's `kdeglobals`, then GTK's `settings.ini`), falling back to
+/// fontconfig's `sans-serif` / `monospace`.
+///
+/// Resolving to a *file* also avoids copying a whole `.ttc` collection (an
+/// `Inter.ttc` is ~12 MiB) and the risk that a collection's face 0 is not the
+/// regular weight.
 fn load_system_fonts() -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     (
-        resolve_font(UI_FONT_PREFERENCE, false),
-        resolve_font(MONO_FONT_PREFERENCE, true),
+        resolve_system_font(&ui_font_candidates(), false),
+        resolve_system_font(&mono_font_candidates(), true),
     )
 }
 
-fn resolve_font(families: &[&str], mono: bool) -> Option<Vec<u8>> {
-    for family in families {
-        if let Some(bytes) = resolve_family(family, mono) {
+/// Family names to try for the UI font, most specific first.
+fn ui_font_candidates() -> Vec<String> {
+    let mut families: Vec<String> = configured_family(false).into_iter().collect();
+    families.push("sans-serif".to_string());
+    families
+}
+
+/// Family names to try for the monospace font, most specific first.
+fn mono_font_candidates() -> Vec<String> {
+    let mut families: Vec<String> = configured_family(true).into_iter().collect();
+    families.push("monospace".to_string());
+    families
+}
+
+/// The desktop's configured font family: KDE first, then GTK.
+fn configured_family(mono: bool) -> Option<String> {
+    kde_family(mono).or_else(|| gtk_family(mono))
+}
+
+/// KDE's `[General] font=` / `fixed=` (`Family,size,weight,…`).
+fn kde_family(mono: bool) -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let text = std::fs::read_to_string(PathBuf::from(home).join(".config/kdeglobals")).ok()?;
+    kde_family_from(&text, if mono { "fixed" } else { "font" })
+}
+
+/// The family out of a KDE `key=Family,size,…` line.
+fn kde_family_from(text: &str, key: &str) -> Option<String> {
+    let rest = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))?;
+    // The value is `Family,size,weight,…`; the family may itself contain spaces.
+    let family = rest.split(',').next().unwrap_or("").trim();
+    (!family.is_empty()).then(|| family.to_string())
+}
+
+/// GTK's `gtk-font-name` / `gtk-monospace-font-name` (`Family 10`).
+fn gtk_family(mono: bool) -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let key = if mono {
+        "gtk-monospace-font-name"
+    } else {
+        "gtk-font-name"
+    };
+    for rel in [
+        ".config/gtk-4.0/settings.ini",
+        ".config/gtk-3.0/settings.ini",
+    ] {
+        let Ok(text) = std::fs::read_to_string(PathBuf::from(&home).join(rel)) else {
+            continue;
+        };
+        if let Some(family) = gtk_family_from(&text, key) {
+            return Some(family);
+        }
+    }
+    None
+}
+
+/// The family out of a GTK `key=Family Size` line (the size is dropped).
+fn gtk_family_from(text: &str, key: &str) -> Option<String> {
+    let value = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))?
+        .trim();
+    let family = match value.rsplit_once(' ') {
+        Some((family, size)) if size.parse::<f32>().is_ok() => family.trim(),
+        _ => value,
+    };
+    (!family.is_empty()).then(|| family.to_string())
+}
+
+fn resolve_system_font(candidates: &[String], mono: bool) -> Option<Vec<u8>> {
+    for family in candidates {
+        if let Some(bytes) = fontconfig_file(family, mono) {
             return Some(bytes);
         }
     }
     None
 }
 
-fn resolve_family(family: &str, mono: bool) -> Option<Vec<u8>> {
-    let out = Command::new("fc-list")
+/// Ask fontconfig which font *file* it would use for `family` at regular weight.
+///
+/// `fc-match`, unlike `fc-list`, resolves aliases and generic names, so
+/// `sans-serif` finds whatever the system has actually chosen.
+fn fontconfig_file(family: &str, mono: bool) -> Option<Vec<u8>> {
+    let pattern = if mono {
+        format!("{family}:spacing=100:weight=regular:slant=roman")
+    } else {
+        format!("{family}:weight=regular:slant=roman")
+    };
+    let out = Command::new("fc-match")
         .arg("-f")
-        .arg("%{file}|W%{weight}|S%{slant}|P%{spacing}\n")
-        .arg(format!(":family={family}"))
+        .arg("%{file}")
+        .arg(&pattern)
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let want_spacing = if mono { "P100" } else { "P" };
-    let mut best: Option<(usize, PathBuf)> = None;
-    for line in text.lines() {
-        let mut f = line.split('|');
-        let (Some(file), Some(weight), Some(slant), Some(spacing)) =
-            (f.next(), f.next(), f.next(), f.next())
-        else {
-            continue;
-        };
-        if weight != "W80" || slant != "S0" {
-            continue;
-        }
-        // Proportional fonts report an empty spacing (`P`); monospace fonts 100.
-        let spacing_ok = spacing == want_spacing || (!mono && spacing == "P0");
-        if !spacing_ok {
-            continue;
-        }
-        let path = PathBuf::from(file);
-        if !matches!(
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_ascii_lowercase())
-                .as_deref(),
-            Some("ttf" | "otf")
-        ) {
-            continue;
-        }
-        let name_len = path
-            .file_name()
-            .map(|n| n.to_string_lossy().len())
-            .unwrap_or(usize::MAX);
-        if best.as_ref().is_none_or(|(len, _)| name_len < *len) {
-            best = Some((name_len, path));
-        }
+    let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    // Skip `.ttc` collections: face 0 is not necessarily the regular weight, and
+    // the whole collection would be copied into memory.
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    if !matches!(extension.as_deref(), Some("ttf" | "otf")) {
+        return None;
     }
-    std::fs::read(best?.1).ok()
+    std::fs::read(path).ok()
 }
 
 impl eframe::App for App {
@@ -2945,25 +2834,6 @@ impl eframe::App for App {
             self.counts_at = Instant::now();
         }
 
-        // "Follow system" tracks live theme changes: KDE/GTK/XFCE rewrite their
-        // config files when the user switches scheme, so poll a cheap fingerprint
-        // every second and re-detect when it moves. A slower unconditional check
-        // covers desktops that only report through the XDG portal.
-        if self.prefs.dark.is_none() && self.theme_at.elapsed() >= Duration::from_secs(1) {
-            self.theme_at = Instant::now();
-            let fingerprint = theme_fingerprint();
-            let due = self.theme_detect_at.elapsed() >= Duration::from_secs(15);
-            if fingerprint != self.theme_fp || due {
-                self.theme_fp = fingerprint;
-                self.theme_detect_at = Instant::now();
-                let dark = detect_system_dark();
-                if dark != self.dark {
-                    self.dark = dark;
-                    self.apply_style(ctx);
-                }
-            }
-        }
-
         self.poll_updates(ctx);
 
         while let Ok(msg) = self.dup_rx.try_recv() {
@@ -3051,7 +2921,6 @@ impl eframe::App for App {
         if self.search_was_focused && !search_focused && !self.query.is_empty() && !self.pending {
             let q = self.query.clone();
             self.prefs.commit_query(&q);
-            self.sync_history();
             self.save_prefs();
         }
         self.search_was_focused = search_focused;
@@ -3176,60 +3045,15 @@ impl eframe::App for App {
                     ctx.memory_mut(|m| m.request_focus(search_id()));
                 }
                 ipc::Command::Quit => {
-                    self.tray_quit = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         }
 
-        // Tray messages: toggle/open the window, run a search, or quit.
-        let mut tray_msgs = Vec::new();
-        if let Some(rx) = &self.tray_rx {
-            while let Ok(msg) = rx.try_recv() {
-                tray_msgs.push(msg);
-            }
-        }
-        for msg in tray_msgs {
-            match msg {
-                tray::TrayMsg::Open => {
-                    show_window(ctx);
-                    self.window_visible = true;
-                }
-                tray::TrayMsg::Toggle => {
-                    if self.window_visible {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                        self.window_visible = false;
-                    } else {
-                        show_window(ctx);
-                        self.window_visible = true;
-                    }
-                }
-                tray::TrayMsg::Search(q) => {
-                    self.run_query(&q);
-                    self.send_query();
-                }
-                tray::TrayMsg::Quit => {
-                    self.tray_quit = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        }
-
-        // Close button: keep running in the tray by default, so a search stays
-        // warm and the app can be brought back with one click. It only exits on
-        // an explicit Quit (menu, tray, or `easysearch --quit`), when the user
-        // has opted into quitting on close, or when there is no tray to restore
-        // the window from (otherwise the process would be unreachable).
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.tray_quit
-            && self.tray_handle.is_some()
-            && !self.prefs.quit_on_close
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.window_visible = false;
-        }
-        // else: let the close proceed and the app exit.
+        // The window closes; the daemon (and its tray) keeps running. That is the
+        // whole point of the split: this process owns the GL context and a copy
+        // of the index, and letting it exit is what keeps the footprint low.
+        // `CancelClose` is never sent — an explicit `--quit` is the same thing.
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -3356,59 +3180,37 @@ impl App {
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("Appearance").strong());
-                ui.radio(self.prefs.dark.is_none(), "Follow system theme")
-                    .clicked()
-                    .then(|| {
-                        self.prefs.dark = None;
-                        self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
-                        self.apply_style(ctx);
-                        self.prefs.save();
-                    });
-                ui.radio(self.prefs.dark == Some(true), "Dark")
-                    .clicked()
-                    .then(|| {
-                        self.prefs.dark = Some(true);
-                        self.dark = true;
-                        self.apply_style(ctx);
-                        self.prefs.save();
-                    });
-                ui.radio(self.prefs.dark == Some(false), "Light")
-                    .clicked()
-                    .then(|| {
-                        self.prefs.dark = Some(false);
-                        self.dark = false;
-                        self.apply_style(ctx);
-                        self.prefs.save();
-                    });
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    ui.radio(self.prefs.dark, "Dark")
+                        .clicked()
+                        .then(|| {
+                            self.prefs.dark = true;
+                            self.dark = true;
+                            self.apply_style(ctx);
+                            self.prefs.save();
+                        });
+                    ui.radio(!self.prefs.dark, "Light")
+                        .clicked()
+                        .then(|| {
+                            self.prefs.dark = false;
+                            self.dark = false;
+                            self.apply_style(ctx);
+                            self.prefs.save();
+                        });
+                });
                 if ui
                     .checkbox(&mut self.prefs.show_preview, "Preview pane")
                     .changed()
                 {
                     self.prefs.save();
                 }
-                let has_tray = self.tray_handle.is_some();
-                ui.add_enabled_ui(has_tray, |ui| {
-                    if ui
-                        .checkbox(&mut self.prefs.quit_on_close, "Quit when the window is closed")
-                        .on_hover_text(
-                            "Off (default): the X button hides the window and EasySearch keeps \
-                             running in the tray, so the index and your search stay warm. Use \
-                             Quit in the File menu or the tray to exit.",
-                        )
-                        .changed()
-                    {
-                        self.prefs.save();
-                    }
-                });
-                if !has_tray {
-                    ui.label(
-                        egui::RichText::new(
-                            "No system tray is available here, so closing the window quits.",
-                        )
-                        .small()
-                        .color(self.fg_dim()),
-                    );
-                }
+                ui.label(
+                    egui::RichText::new("Closing the window leaves EasySearch running in the \
+                                         tray, so the index and the search stay warm.")
+                    .small()
+                    .color(self.fg_dim()),
+                );
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Updates").strong());
                 if ui
@@ -3480,8 +3282,9 @@ impl App {
                 if ui
                     .checkbox(&mut content_index, "Background content index")
                     .on_hover_text(
-                        "Cache extracted document text in RAM to speed up repeated content \
-                         searches. Off: content queries read files live, always fresh.",
+                        "Cache extracted document text to speed up repeated content searches. \
+                         Off: content queries read files live, always fresh. The cache is \
+                         spooled to disk, not held in RAM.",
                     )
                     .changed()
                 {
@@ -3520,9 +3323,8 @@ impl App {
                     if ui.button("Reset GUI settings").clicked() {
                         self.prefs = GuiPrefs::default();
                         self.prefs.save();
-                        self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
+                        self.dark = self.prefs.dark;
                         self.apply_style(ctx);
-                        self.sync_history();
                     }
                 });
                 ui.add_space(10.0);
@@ -3603,8 +3405,27 @@ impl App {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Quit").clicked() {
-                            self.tray_quit = true;
+                        if ui
+                            .button("Close window")
+                            .on_hover_text(
+                                "Closes this window and frees it. EasySearch keeps \
+                                 running in the background (tray icon), so the index \
+                                 and the HTTP API stay available.",
+                            )
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button("Stop background service…")
+                            .on_hover_text(
+                                "Stops the indexing daemon as well, so nothing is left \
+                                 running. The index on disk is kept.",
+                            )
+                            .clicked()
+                        {
+                            self.engine.shutdown();
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ui.close_menu();
                         }
@@ -3632,7 +3453,6 @@ impl App {
                         ui.separator();
                         if ui.button("Clear search history").clicked() {
                             self.prefs.clear_history();
-                            self.sync_history();
                             ui.close_menu();
                         }
                     });
@@ -3645,23 +3465,14 @@ impl App {
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("Theme").small());
-                        if ui
-                            .radio(self.prefs.dark.is_none(), "Follow system")
-                            .clicked()
-                        {
-                            self.prefs.dark = None;
-                            self.dark = !matches!(dark_light::detect(), dark_light::Mode::Light);
-                            self.apply_style(ctx);
-                            self.prefs.save();
-                        }
-                        if ui.radio(self.prefs.dark == Some(true), "Dark").clicked() {
-                            self.prefs.dark = Some(true);
+                        if ui.radio(self.prefs.dark, "Dark").clicked() {
+                            self.prefs.dark = true;
                             self.dark = true;
                             self.apply_style(ctx);
                             self.prefs.save();
                         }
-                        if ui.radio(self.prefs.dark == Some(false), "Light").clicked() {
-                            self.prefs.dark = Some(false);
+                        if ui.radio(!self.prefs.dark, "Light").clicked() {
+                            self.prefs.dark = false;
                             self.dark = false;
                             self.apply_style(ctx);
                             self.prefs.save();
@@ -3989,7 +3800,6 @@ impl App {
                                     {
                                         let q = self.query.clone();
                                         self.prefs.commit_query(&q);
-                                        self.sync_history();
                                         self.history_idx = None;
                                         if let Some(first) = self.results.first() {
                                             App::open(&first.path);
@@ -4082,7 +3892,6 @@ impl App {
                     if primary_button(ui, &t, "Search", Some(Icon::Content)) {
                         let q = self.query.clone();
                         self.prefs.commit_query(&q);
-                        self.sync_history();
                         self.send_query();
                     }
                 });
@@ -6450,7 +6259,6 @@ impl App {
                                 .clicked()
                         {
                             self.prefs.clear_history();
-                            self.sync_history();
                         }
                     });
                 });
@@ -6620,7 +6428,6 @@ impl App {
         }
         self.history_idx = None;
         self.prefs.commit_query(&self.query.clone());
-        self.sync_history();
         self.send_query();
     }
 }
@@ -7097,32 +6904,37 @@ mod tests {
     }
 
     #[test]
-    fn kde_background_luma_decides_dark() {
-        let dark = "[General]\nDarkMode=true\n[Colors:Window]\nBackgroundNormal=32,35,38\n";
-        assert_eq!(kde_globals_dark_from(dark), Some(true));
-        let light = "[Colors:Window]\nBackgroundNormal=239,240,241\n";
-        assert_eq!(kde_globals_dark_from(light), Some(false));
-        // The colour from another section must not be mistaken for the window one.
-        let other = "[Colors:Button]\nBackgroundNormal=32,35,38\n";
-        assert_eq!(kde_globals_dark_from(other), None);
-        assert_eq!(kde_globals_dark_from(""), None);
-    }
+    fn gtk_and_kde_font_names_are_parsed() {
+        // GTK: `Family Size`, and the family may contain spaces.
+        assert_eq!(
+            gtk_family_from("[Settings]\ngtk-font-name=Noto Sans 10\n", "gtk-font-name").as_deref(),
+            Some("Noto Sans")
+        );
+        assert_eq!(
+            gtk_family_from(
+                "gtk-monospace-font-name=JetBrains Mono 12\n",
+                "gtk-monospace-font-name"
+            )
+            .as_deref(),
+            Some("JetBrains Mono")
+        );
+        // Without a size the whole value is the family.
+        assert_eq!(
+            gtk_family_from("gtk-font-name=DejaVu Sans\n", "gtk-font-name").as_deref(),
+            Some("DejaVu Sans")
+        );
+        assert_eq!(gtk_family_from("[Settings]\n", "gtk-font-name"), None);
 
-    #[test]
-    fn gtk_settings_decide_dark() {
+        // KDE: `Family,size,weight,…`.
         assert_eq!(
-            gtk_settings_dark_from("[Settings]\ngtk-theme-name=Adwaita-dark\n"),
-            Some(true)
+            kde_family_from("[General]\nfont=Noto Sans,10,-1,5,50,0,0,0,0,0\n", "font").as_deref(),
+            Some("Noto Sans")
         );
         assert_eq!(
-            gtk_settings_dark_from("[Settings]\ngtk-theme-name=Breeze\n"),
-            Some(false)
+            kde_family_from("[General]\nfixed=Hack,10\n", "fixed").as_deref(),
+            Some("Hack")
         );
-        assert_eq!(
-            gtk_settings_dark_from("gtk-application-prefer-dark-theme=1\n"),
-            Some(true)
-        );
-        assert_eq!(gtk_settings_dark_from("# nothing\n"), None);
+        assert_eq!(kde_family_from("[General]\n", "font"), None);
     }
 
     #[test]

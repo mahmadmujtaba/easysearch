@@ -1,33 +1,38 @@
-//! Control socket — driving a *running* GUI from the command line.
+//! Control socket — driving the *running GUI window* from the command line.
 //!
 //! Wayland deliberately has no global-hotkey API, and every desktop invents its
 //! own (KGlobalAccel, GNOME custom keybindings, the GlobalShortcuts portal). The
 //! portable answer is to let the desktop run a command and have that command
-//! talk to the instance that is already up:
+//! talk to the window that is already up:
 //!
 //! ```text
 //! easysearch --toggle      # show/hide the window
 //! easysearch --show        # bring it to the front
 //! easysearch --search TODO # run a search from a shortcut
-//! easysearch --quit        # ask it to exit
+//! easysearch --quit        # close the window (the service keeps running)
 //! ```
 //!
-//! The GUI listens on `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`, so
-//! only the same user can talk to it) and each invocation is one line of text.
-//! A shortcut in the desktop's own settings is all that is needed — see
-//! `docs/ui.md`.
+//! The GUI listens on `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`, so only
+//! the same user can talk to it) and each invocation is one line of text. The
+//! daemon also sends on it: the tray icon lives there now, and its *Open* /
+//! *Toggle* hand a command to the window when one is up, starting a fresh GUI
+//! when none is listening. See `docs/ui.md`.
+//!
+//! The socket is only about the window. Stopping the background service is
+//! `POST /v1/shutdown` (`easysearch --stop`), because the window may not exist.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-/// A command sent to the running GUI.
+/// A command sent to the running GUI window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Show the window if hidden, hide it if visible.
     Toggle,
     Show,
     Hide,
+    /// Close the window. The background service keeps running.
     Quit,
     /// Show the window and run this query.
     Search(String),
@@ -70,11 +75,11 @@ pub fn socket_path() -> PathBuf {
     dir.join("easysearch.sock")
 }
 
-/// Send one command to a running instance.
+/// Send one command to a running window.
 ///
 /// `Ok(false)` means nothing is listening — which is a normal state (no GUI is
-/// running yet), not an error. A stale socket left by a crashed instance is
-/// cleaned up.
+/// running), not an error. A stale socket left by a crashed instance is cleaned
+/// up.
 pub fn send(command: &Command) -> std::io::Result<bool> {
     send_to(&socket_path(), command)
 }
@@ -102,7 +107,7 @@ fn send_to(path: &std::path::Path, command: &Command) -> std::io::Result<bool> {
 
 /// Bind the control socket and forward commands to `tx` until the process ends.
 ///
-/// Does nothing when another instance is already serving it, so a second GUI
+/// Does nothing when another instance is already serving it, so a second window
 /// (or the standalone `easysearch-gui` binary) can never steal the socket.
 pub fn spawn_listener(tx: mpsc::Sender<Command>) {
     spawn_listener_at(&socket_path(), tx);

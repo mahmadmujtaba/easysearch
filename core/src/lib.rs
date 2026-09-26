@@ -16,6 +16,8 @@ pub mod content;
 pub mod content_index;
 pub mod disk_index;
 pub mod engine;
+pub mod ipc;
+pub mod logo;
 pub mod matcher;
 pub mod overlay;
 pub mod process;

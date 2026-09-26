@@ -15,8 +15,8 @@ USAGE:
 
 Run with no options to open the GUI. A search daemon is started automatically
 (this same binary re-executes itself in daemon mode) and the GUI attaches to
-it, so the HTTP API on the daemon address keeps working for other clients and
-the index keeps running after the GUI is closed.
+it. The daemon owns the index and the tray icon; closing the window leaves both
+running, and the HTTP API keeps answering for other clients.
 
 OPTIONS:
     --addr <HOST:PORT>   daemon address (default 127.0.0.1:5858)
@@ -32,10 +32,11 @@ CONTROL (talk to a running window — bind these to desktop shortcuts):
     --toggle             show the window if hidden, hide it if visible
     --show / --hide      show / hide the window
     --search <QUERY>     show the window and run a search
-    --quit               ask the running app to exit
+    --quit               close the window; the background service keeps running
+    --stop               stop the background service (`POST /v1/shutdown`)
 
-The first --toggle with nothing running starts the app, so one key can both
-launch it and toggle the window.
+The first --toggle, --show or --search with nothing running starts the app, so
+one key both launches it and drives it.
 ";
 
 fn main() -> ExitCode {
@@ -59,13 +60,28 @@ fn main() -> ExitCode {
     }
 
     // Control commands drive an already-running window (global-hotkey support);
-    // `--toggle` falls through to a normal start when nothing is listening.
+    // `--toggle`/`--show`/`--search` fall through to a normal start when nothing
+    // is listening.
     if let Some(code) = easysearch_app::control_command(&args) {
         return ExitCode::from(code as u8);
     }
 
     let addr = easysearch_app::addr_from_args(&args)
         .unwrap_or_else(|| easysearch_app::DEFAULT.to_string());
+
+    // `--stop` stops the background service itself (the window may not exist).
+    if args.iter().any(|a| a == "--stop") {
+        return match easysearch_app::stop_daemon(&addr) {
+            Ok(()) => {
+                println!("easysearch: asked the service on {addr} to stop");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("easysearch: cannot stop the service on {addr}: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     if args.iter().any(|a| a == "--daemon") {
         let quiet = args.iter().any(|a| a == "--quiet");

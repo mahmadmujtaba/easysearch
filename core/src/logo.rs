@@ -8,6 +8,9 @@
 //! comes from the process rather than from the desktop entry. Being transparent,
 //! it reads correctly on both the light and the dark theme.
 //!
+//! It lives in `core` because both frontends draw it: the GUI (`rgba`, for
+//! `egui::IconData` and the About dialog) and the daemon's tray item (`argb32`).
+//!
 //! The same artwork is installed as
 //! `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg`
 //! for launchers and software centres.
@@ -85,6 +88,27 @@ mod tests {
         let alpha: Vec<u8> = data.iter().skip(3).step_by(4).copied().collect();
         assert!(alpha.contains(&0), "expected fully transparent pixels");
         assert!(alpha.contains(&255), "expected opaque pixels in the mark");
+    }
+
+    #[test]
+    fn the_installed_icon_is_the_transparent_export() {
+        // A launcher and the window decoration draw the icon from the packaging
+        // tree, so it must be the *transparent* export: the cream tile reads as
+        // a pasted-on white square on a dark panel. This is the guard that the
+        // two copies cannot drift apart.
+        const INSTALLED: &str = include_str!(
+            "../../packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg"
+        );
+        const TRANSPARENT: &str = include_str!("../../icons/transparent-logo.svg");
+        let body = INSTALLED
+            .split_once("-->\n")
+            .map(|(_, rest)| rest)
+            .expect("the installed icon carries the generated header comment");
+        assert_eq!(
+            body, TRANSPARENT,
+            "the packaging icon must be icons/transparent-logo.svg (transparent), not the \
+             cream `colored-logo.svg`"
+        );
     }
 
     #[test]

@@ -24,3 +24,5 @@ sha2 = "0.11.0"
 quick-xml = "0.41"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pdf-extract = "0.12.1"
+# The brand asset is decoded and rasterised on demand; only PNG is needed.
+image = { version = "0.25", default-features = false, features = ["png"] }

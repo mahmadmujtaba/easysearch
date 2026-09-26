@@ -1,4 +1,9 @@
-//! System tray icon (StatusNotifierItem over D-Bus).
+//! System tray icon (StatusNotifierItem over D-Bus) — owned by the **daemon**.
+//!
+//! The tray lives in the background service, not in the window, so that closing
+//! the window (which frees the GUI's GL stack and its copy of the index) leaves
+//! the tray icon in place. Its menu opens a fresh window attached to this
+//! daemon, and *Quit* stops the service.
 //!
 //! SNI is the shared tray protocol: KDE/Qt hosts it natively, and GTK-based
 //! desktops (GNOME + AppIndicator extension, XFCE, Cinnamon, MATE) do too, so
@@ -13,20 +18,20 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrayMsg {
-    /// Left-click on the icon: show/hide the window.
+    /// Left-click on the icon: show/hide the window (or open one).
     Toggle,
-    /// Menu item "Open": show and focus the window.
+    /// Menu item "Open": show and focus the window (or open one).
     Open,
     /// Re-run a query picked from the tray's "Recent searches" submenu.
     Search(String),
-    /// Menu item "Quit": close the app for real.
+    /// Menu item "Quit": stop the service (and with it the tray).
     Quit,
 }
 
 pub struct AppTray {
     pub tx: Sender<TrayMsg>,
     pub title: String,
-    /// Shared snapshot of recent searches (mirrored from the GUI prefs).
+    /// Recent queries, as observed by the daemon's own search API.
     pub history: Arc<Mutex<Vec<String>>>,
 }
 
@@ -98,7 +103,7 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
         items.push(MenuItem::Standard(StandardItem {
-            label: "Quit".into(),
+            label: format!("Quit {title} (stop the service)"),
             activate: Box::new(|t: &mut Self| {
                 let _ = t.tx.send(TrayMsg::Quit);
             }),
@@ -142,12 +147,12 @@ pub fn spawn_tray(
 const SIZE: u32 = 64;
 
 /// `SIZE`×`SIZE` ARGB32 (network byte order) pixmap for the StatusNotifierItem.
-/// It is the same mark as the window icon and the desktop entry — drawn from
-/// [`crate::logo`] — so the three cannot drift apart.
+/// It is the same transparent mark as the window icon and the desktop entry —
+/// drawn from [`easysearch_core::logo`] — so the three cannot drift apart.
 pub fn tray_icon_pixmap() -> Icon {
     Icon {
         width: SIZE as i32,
         height: SIZE as i32,
-        data: crate::logo::argb32(SIZE),
+        data: easysearch_core::logo::argb32(SIZE),
     }
 }

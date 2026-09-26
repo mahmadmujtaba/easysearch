@@ -4,6 +4,47 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-09-26
+
+### Changed
+
+- **The tray icon moved into the background service, and closing the window now
+  frees the window.** The tray belonged to the GUI, so hiding the window kept a
+  full GL context and a second copy of the index resident just to draw one icon.
+  The daemon owns the tray now: closing the window *exits the window process*,
+  while the index, the HTTP/JSON API and the tray keep running. The tray's *Open*
+  hands a command to the window if one is up and otherwise starts a fresh GUI
+  attached to the same daemon (`--toggle`/`--show` already did that). File ▸ now
+  offers *Close window* and *Stop background service…*, and `easysearch --stop`
+  is the CLI counterpart (the window is a separate process, so `--quit` cannot
+  stop the service). No tray available means the window simply closes.
+- **The theme is an explicit, remembered choice: Dark by default.** The app no
+  longer follows the desktop's light/dark setting, live or otherwise — Settings ▸
+  Appearance (and View ▸ Theme) offer *Dark* / *Light* only, stored as
+  `"dark"` in `gui.json`. A legacy `"dark": null` (the old “follow system”)
+  resolves to Dark rather than resetting the file, and the theme-file polling,
+  `dark-light` dependency and GTK/KDE scheme sniffing are gone.
+- **Fonts come from the system.** Instead of our own preference list, the app asks
+  fontconfig for the file the desktop's configured family resolves to (KDE's
+  `kdeglobals`, then GTK's `settings.ini`, then fontconfig's `sans-serif` /
+  `monospace`), via `fc-match`, and draws with that. The bundled egui faces are
+  kept only as glyph fallbacks (emoji, CJK, rare symbols).
+
+### Added
+
+- **The installed icon can no longer regress to an opaque tile.** The packaging
+  SVG must be the transparent export — a compile-time test compares it against
+  `icons/transparent-logo.svg` — and `scripts/package-deb.sh` renders its PNGs as
+  `PNG32:` at 16–512 px, so the icon the launcher shows always carries an alpha
+  channel. `make install` also refreshes the hicolor icon cache, which is why a
+  stale (cream) icon could survive an upgrade.
+
+### Internal
+
+- `ipc` (the control socket) and `logo` (the brand asset + rasteriser) moved into
+  `core`, since the daemon and the GUI both need them; `ksni` and `dark-light`
+  left the GUI crate.
+
 ## [0.32.1] - 2026-09-26
 
 ### Changed

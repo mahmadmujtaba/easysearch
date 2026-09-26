@@ -250,7 +250,8 @@ easysearch --toggle        # show the window if hidden, hide it if visible
 easysearch --show          # bring it to the front
 easysearch --hide
 easysearch --search TODO   # open it and run a search
-easysearch --quit          # ask it to exit (the index daemon keeps running)
+easysearch --quit          # close the window (the background service keeps running)
+easysearch --stop          # stop the background service as well
 ```
 
 Bind one of those as a **custom shortcut** in your desktop:
@@ -269,17 +270,25 @@ instance and quietly do nothing otherwise. The socket lives at
 can reach it.
 
 Hiding (`--hide`, or the tray's *Toggle*) is not the same as quitting: the window
-governs only itself, so the daemon and its index keep serving the CLI and the HTTP
-API either way.
+governs only itself, so the background service and its index keep running either
+way. `--stop` stops that service — the window may not exist at all, which is why
+it is not a window command.
 
 ## Theming and fonts
 
-The app follows your desktop's light/dark setting **live** — switching the scheme
-in the desktop settings flips the app without a restart (it reads KDE's
-`kdeglobals`, GTK's `settings.ini`, or the XDG portal). It draws with your system
-UI font and a system monospace font, falling back to bundled fonts for glyphs the
-system font lacks. You can override the theme in Settings, or pin it with
-`"dark": true|false` in `gui.json`.
+**The theme is your choice, remembered.** Settings ▸ Appearance (and
+View ▸ Theme) offer **Dark** and **Light**; Dark is the default, and the choice
+is stored as `"dark": true|false` in `gui.json`. The app does not follow the
+desktop's scheme — an explicit, persistent setting was preferred over a scheme
+that changes under the UI. An older `gui.json` with `"dark": null` (the previous
+“follow system”) simply resolves to Dark.
+
+**Fonts come from the system.** The app asks fontconfig which file the desktop's
+configured family resolves to — KDE's `kdeglobals`, then GTK's `settings.ini`,
+then fontconfig's own `sans-serif` / `monospace` — and draws with that, for both
+the UI and the monospace face (paths, sizes). It does not ship its own font: the
+bundled egui faces remain only as glyph fallbacks for what the system font lacks
+(emoji, CJK, rare symbols).
 
 ## Notes and limits
 
@@ -293,9 +302,11 @@ system font lacks. You can override the theme in Settings, or pin it with
 - The **Fuzzy** and **Duplicate Finder** buttons from the reference design are
   deliberately absent rather than present-but-dead; so are Tags and Rename/Delete.
   [`pending.md`](pending.md) §4 lists them.
-- The tray icon offers Open, the recent-searches list, and Quit.
-- **Closing the window keeps EasySearch running** in the tray by default, so a
-  search stays warm and the app reopens instantly. Exit from the tray's *Quit*,
-  File ▸ Quit, or `easysearch --quit`. Settings has *Quit when the window is
-  closed* if you would rather the X button exit; with no tray available the window
-  is closed for real, since there would be no way back.
+- The tray icon offers Open, the recent-searches list, and Quit (which stops the
+  background service). It lives in the service, so it is still there after the
+  window is closed.
+- **Closing the window frees the window**, not the app: the background service
+  keeps indexing, keeps the tray, and answers the CLI and the HTTP/JSON API. Use
+  *File ▸ Close window* (or the **X**) to do that, *File ▸ Stop background
+  service…* (or `easysearch --stop`) to stop it too, and `easysearch --toggle`
+  to get a window back.

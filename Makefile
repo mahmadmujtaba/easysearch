@@ -160,6 +160,10 @@ install: release
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi
+	@# Refresh the icon cache, or a previously installed (opaque) icon can win.
+	@if command -v gtk-update-icon-cache >/dev/null 2>&1; then \
+		gtk-update-icon-cache -q -t $(DATADIR)/icons/hicolor 2>/dev/null || true; \
+	fi
 	@echo "Installed into $(INSTALLDIR): easysearch, easysearch-cli, easysearch-gui, easysearch-daemon"
 	@echo "Desktop integration into $(DATADIR): applications, metainfo, icons/hicolor"
 
