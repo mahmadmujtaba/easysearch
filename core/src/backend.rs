@@ -88,6 +88,17 @@ impl Backend {
         }
     }
 
+    /// Return freed heap pages to the OS — in this process, or in the engine
+    /// child when the engine is a separate process.
+    pub fn trim_memory(&self) {
+        match self {
+            Backend::Local(e) => e.trim_memory(),
+            Backend::Child(c) => {
+                let _ = c.trim_memory();
+            }
+        }
+    }
+
     /// Stop the engine child (no-op in-process). Returns true if an engine was
     /// asked to stop — useful before relaunching onto a newly installed binary.
     pub fn shutdown(&self) -> bool {

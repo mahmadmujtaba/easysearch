@@ -33,6 +33,10 @@ pub enum Op {
     Rebuild,
     /// Change live index settings (and optionally rebuild).
     Config,
+    /// Return freed heap pages to the OS (`malloc_trim`) — sent when the UI
+    /// leaves content search, whose live-scan buffers are the largest transient
+    /// allocation it makes.
+    Trim,
     /// Stop the engine process.
     Shutdown,
 }

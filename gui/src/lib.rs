@@ -274,8 +274,11 @@ impl TabState {
         TabState {
             query: p.query.clone(),
             regex_mode: p.regex_mode,
-            content_mode: p.content_mode,
-            full_text: p.full_text,
+            // The scope is **not** restored: filename search is the default, and
+            // content search (ripgrep over whole files) is an explicit choice made
+            // in the session. The rest of the tab is restored as it was.
+            content_mode: false,
+            full_text: false,
             case_sensitive: p.case_sensitive,
             hidden: p.hidden,
             full_path: p.full_path,
@@ -503,6 +506,8 @@ struct GuiPrefs {
     fuzzy: bool,
     /// Let the content pattern span lines (content search only). Slower.
     multiline: bool,
+    /// Whether the “content search uses more memory” warning has been shown.
+    content_warning_seen: bool,
 }
 
 impl Default for GuiPrefs {
@@ -522,6 +527,7 @@ impl Default for GuiPrefs {
             update_checked_at: 0,
             fuzzy: false,
             multiline: false,
+            content_warning_seen: false,
         }
     }
 }
@@ -874,6 +880,8 @@ struct App {
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
+    /// The one-time “content search uses more memory” notice.
+    show_content_warning: bool,
     /// Snapshot state of every tab; the active one is mirrored in the fields
     /// above and refreshed via [`App::snapshot`] before a switch or a save.
     tabs: Vec<TabState>,
@@ -1121,6 +1129,7 @@ impl App {
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
+            show_content_warning: false,
             tabs,
             active_tab,
             dirty: false,
@@ -3136,6 +3145,9 @@ impl eframe::App for App {
         if self.show_shortcuts {
             self.shortcuts_dialog(ctx);
         }
+        if self.show_content_warning {
+            self.content_warning_dialog(ctx);
+        }
         if self.show_saved {
             self.saved_dialog(ctx);
         }
@@ -3165,6 +3177,43 @@ impl App {
                 ctx.load_texture("easysearch-logo", image, egui::TextureOptions::LINEAR)
             })
             .clone()
+    }
+
+    /// The one-time notice shown when content search is first switched on.
+    fn content_warning_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Content search")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Content search uses more memory and CPU.").strong());
+                ui.add_space(4.0);
+                ui.label(
+                    "EasySearch is built for filename search, which reads only the index. \
+                     Searching inside files runs the embedded ripgrep pass over your files: \
+                     it reads them live (so results are always current), and it holds working \
+                     buffers for the files it scans — expect noticeably more memory and CPU \
+                     while it runs, and slower first results on a large tree.",
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(
+                        "The optional background content cache is spooled to disk, not RAM, \
+                         and is off by default (Settings ▸ Indexing).",
+                    )
+                    .small()
+                    .color(self.fg_dim()),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Got it").clicked() {
+                        self.prefs.content_warning_seen = true;
+                        self.prefs.save();
+                        self.show_content_warning = false;
+                    }
+                });
+            });
     }
 
     fn about_dialog(&mut self, ctx: &egui::Context) {
@@ -3484,10 +3533,14 @@ impl App {
                         }
                     });
                     ui.menu_button("Search", |ui| {
-                        let changed = ui
-                            .checkbox(&mut self.content_mode, "Match contents")
-                            .changed()
-                            | ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
+                        let mut content_on = self.content_mode;
+                        let content_changed = ui
+                            .checkbox(&mut content_on, "Match contents")
+                            .on_hover_text(
+                                "Search inside files (ripgrep). Uses more memory and CPU.",
+                            )
+                            .changed();
+                        let changed = ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
                             | ui.checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
                                 .changed()
                             | ui.checkbox(
@@ -3500,7 +3553,14 @@ impl App {
                             | ui.checkbox(&mut self.hidden, "Hidden files").changed()
                             | ui.checkbox(&mut self.full_path, "Full path match")
                                 .changed();
-                        if changed {
+                        if content_changed {
+                            let was = self.content_mode;
+                            self.content_mode = content_on;
+                            if !content_on {
+                                self.full_text = false;
+                            }
+                            self.after_scope_change(was, content_on);
+                        } else if changed {
                             self.send_query();
                         }
                         ui.separator();
@@ -3715,12 +3775,18 @@ impl App {
                         Some(Icon::Content),
                         None,
                         "Content Search",
-                        "Search inside file contents (ripgrep, always fresh)",
+                        "Search inside file contents (ripgrep, always fresh). \
+                         Uses more memory and CPU than filename search.",
                         self.content_mode,
                         true,
                     ) {
-                        self.content_mode = !self.content_mode;
-                        self.send_query();
+                        let was = self.content_mode;
+                        let on = !was;
+                        self.content_mode = on;
+                        if !on {
+                            self.full_text = false;
+                        }
+                        self.after_scope_change(was, on);
                     }
                     if tool_button(
                         ui,
@@ -4251,10 +4317,45 @@ impl App {
         if self.scope() == s {
             return;
         }
-        self.content_mode = matches!(s, Scope::Contents | Scope::FullText);
+        let was = self.content_mode;
+        let on = matches!(s, Scope::Contents | Scope::FullText);
+        self.content_mode = on;
         self.full_text = s == Scope::FullText;
         self.full_path = s == Scope::FullPath;
+        self.after_scope_change(was, on);
+    }
+
+    /// Finish a scope change: warn when content search is switched **on**, and
+    /// release what a content search was holding when it is switched **off**,
+    /// then re-run the query.
+    fn after_scope_change(&mut self, was_content: bool, is_content: bool) {
+        if is_content && !was_content && !self.prefs.content_warning_seen {
+            self.show_content_warning = true;
+        }
+        if was_content && !is_content {
+            self.release_content_memory();
+        }
         self.send_query();
+    }
+
+    /// Drop everything a content search left behind and return the pages.
+    ///
+    /// Content search scans whole files through the engine's ripgrep pass — the
+    /// heaviest thing this app does. Leaving the scope drops the rows it
+    /// produced and asks the engine to `malloc_trim`, rather than keeping both
+    /// resident until the next search happens to replace them.
+    fn release_content_memory(&mut self) {
+        self.results.clear();
+        self.results.shrink_to_fit();
+        self.truncated = false;
+        self.error = None;
+        self.preview = None;
+        self.hash = None;
+        self.dups = None;
+        self.checked.clear();
+        self.pending = false;
+        self.engine.trim_memory();
+        self.dirty = true;
     }
 
     fn category_label(&self) -> String {
@@ -4286,9 +4387,16 @@ impl App {
         self.hidden = false;
         self.case_sensitive = false;
         self.full_path = false;
+        let was_content = self.content_mode;
         self.content_mode = false;
+        self.full_text = false;
         if self.under.is_some() {
             self.set_under(None);
+        } else if was_content {
+            // Clearing the filters left content search; release its memory
+            // before the re-run (set_under would send the query itself).
+            self.release_content_memory();
+            self.send_query();
         } else {
             self.send_query();
         }
@@ -5787,6 +5895,18 @@ impl App {
                         .color(t.dim),
                     );
                 }
+            }
+            if self.content_mode {
+                ui.label(
+                    egui::RichText::new("· content search: more memory & CPU")
+                        .size(11.5)
+                        .color(t.warn),
+                )
+                .on_hover_text(
+                    "Content search scans your files live with ripgrep, so it needs more \
+                     memory and CPU than filename search. Switching the scope back to \
+                     Filenames releases it.",
+                );
             }
             if self.status.degraded {
                 let txt = if self.status.watch_failures > 0 {

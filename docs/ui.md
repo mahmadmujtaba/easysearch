@@ -47,6 +47,14 @@ where the query matches the file name **or** its contents. *Contents* and *Full
 text* use the same pattern for content matching; the difference is whether the
 name must also match (`Contents`) or may match instead (`Full text`).
 
+The scope is **not** restored on restart: a fresh start is always **Filenames**,
+because content search is the expensive one and should be a deliberate choice.
+Switching to *Contents* / *Full text* shows a one-time notice (content search
+reads your files whole and so uses noticeably more memory and CPU than filename
+search) and adds a reminder to the status bar while it is on. Switching **back**
+to *Filenames* drops the rows the content search produced and asks the engine to
+release its pages, rather than leaving them resident until the next search.
+
 **Location** (and the sidebar's *Indexed Locations*) restricts the search to one
 directory; Back/Forward in the toolbar walk your location history.
 

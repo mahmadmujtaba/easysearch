@@ -255,6 +255,11 @@ impl ChildEngine {
         self.call(Op::Rebuild, None).map(|_| ())
     }
 
+    /// Ask the engine to return freed heap pages to the OS.
+    pub fn trim_memory(&self) -> Result<(), String> {
+        self.call(Op::Trim, None).map(|_| ())
+    }
+
     /// Ask the engine to stop (it exits; the owner then reaps it).
     pub fn shutdown(&self) -> Result<(), String> {
         self.call(Op::Shutdown, None).map(|_| ())

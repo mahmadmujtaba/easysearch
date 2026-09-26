@@ -4,6 +4,32 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-09-26
+
+### Changed
+
+- **Filename search is the default, on every start.** The search scope is no
+  longer restored across restarts: tabs come back with their query and filters
+  but always in **Filenames**, so opening the app can never drop you into the
+  expensive content search by surprise. Content search remains a per-session
+  choice (it is still remembered while you switch tabs).
+- **Leaving content search releases its memory.** Content search runs ripgrep
+  over your files, so it is the heaviest thing the app does. Switching the scope
+  back to *Filenames* (or clearing the filters, or unticking *Match contents*)
+  now drops the rows that search produced and asks the engine to return its freed
+  heap pages (`malloc_trim`), instead of keeping both resident until the next
+  search happens to replace them.
+- **Content search warns before it costs you.** Switching to *Contents* / *Full
+  text* shows a one-time notice (more memory and CPU, slower first results, and
+  the content cache is spooled to disk, not RAM); the status bar carries a
+  reminder while the scope is active, and the *Content Search* button's hover
+  text says so too.
+
+### Added
+
+- A `trim` op in the engine protocol, with `Engine::trim_memory`,
+  `ChildEngine::trim_memory` and `Backend::trim_memory` behind it.
+
 ## [0.34.0] - 2026-09-26
 
 ### Changed

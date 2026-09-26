@@ -593,6 +593,16 @@ impl Engine {
         }
     }
 
+    /// Return freed heap pages to the OS (`malloc_trim(0)`).
+    ///
+    /// Content search scans whole files through ripgrep, and the buffers it uses
+    /// are the largest transient allocation this engine makes; once the caller
+    /// leaves that mode, this hands the freed pages back instead of letting the
+    /// allocator keep them resident.
+    pub fn trim_memory(&self) {
+        trim_allocator();
+    }
+
     /// Block until the initial build finishes (bounded by `timeout`).
     pub fn wait_live(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;

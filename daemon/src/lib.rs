@@ -83,6 +83,10 @@ impl Daemon {
                 Err(e) => Response::failed(id, e),
             },
             Op::Shutdown => Response::done(id),
+            Op::Trim => {
+                self.engine.trim_memory();
+                Response::done(id)
+            }
         }
     }
 
