@@ -4,6 +4,25 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-09-26
+
+### Added
+
+- **A third theme, “Brand”, drawn from the logo**: a deep teal ground with the
+  mark's teal as the accent, its pink for errors and archives, and its lime for
+  “good”. Settings ▸ Appearance and View ▸ Theme now offer **Dark** (default),
+  **Light** and **Brand**. The choice is stored by name; the old boolean
+  `"dark"` (and the pre-0.33 `null`) is still read, so `gui.json` files keep
+  working.
+- **The logo in the top-right of the menu bar**, with its version on hover.
+- **Colourful icons instead of coloured dots and text chips.** The sidebar's
+  categories, saved searches and locations are now painted glyphs (a folder for
+  a location, a clock for *Recent*, a frame for *Images*, `<>` for *Code*, a
+  note for *Audio*, …), and result rows — including **directories** — show a
+  coloured type icon (folder, document, image, archive, audio, video, code,
+  plain file) instead of the `DIR`/`PDF` text chip. All drawn with egui's
+  painter, so no icon theme or bundled asset is needed.
+
 ## [0.35.0] - 2026-09-26
 
 ### Changed

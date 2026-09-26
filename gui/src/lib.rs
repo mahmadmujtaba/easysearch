@@ -36,6 +36,18 @@ const APP_ID: &str = "io.github.easysearch.EasySearch";
 /// Selectable UI zoom levels (1.0 = 100%).
 const ZOOM_LEVELS: &[f32] = &[1.0, 1.1, 1.25];
 
+/// The colour scheme the user picked, stored by name in `gui.json`.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum ThemeChoice {
+    /// The original Tokyo-Night-style dark palette.
+    #[default]
+    Dark,
+    Light,
+    /// Drawn from the logo: teal ground, teal accent, pink and lime highlights.
+    Brand,
+}
+
 /// Complete colour scheme for one appearance mode.
 ///
 /// Both modes define *every* surface explicitly, so light mode never inherits a
@@ -125,8 +137,40 @@ impl Theme {
         kind_av: egui::Color32::from_rgb(0x7a, 0x3f, 0xc9),
     };
 
-    fn of(dark: bool) -> Theme {
-        if dark { Self::DARK } else { Self::LIGHT }
+    /// The brand palette, taken from the logo: a deep teal ground, the mark's
+    /// teal as the accent, its pink for errors and archives, and its lime for
+    /// “good”. Dark, so every surface is tuned for a dark ground (see
+    /// [`accent_soft`](Theme::accent_soft) and [`shadow`](Theme::shadow)).
+    const BRAND: Theme = Theme {
+        dark: true,
+        bg: egui::Color32::from_rgb(0x0e, 0x15, 0x17),
+        panel: egui::Color32::from_rgb(0x12, 0x20, 0x1f),
+        card: egui::Color32::from_rgb(0x18, 0x30, 0x2e),
+        hover: egui::Color32::from_rgb(0x1f, 0x3d, 0x3a),
+        active: egui::Color32::from_rgb(0x27, 0x50, 0x49),
+        stripe: egui::Color32::from_rgb(0x14, 0x26, 0x25),
+        stroke: egui::Color32::from_rgb(0x24, 0x44, 0x40),
+        text: egui::Color32::from_rgb(0xea, 0xf3, 0xf0),
+        dim: egui::Color32::from_rgb(0xa2, 0xba, 0xb5),
+        faint: egui::Color32::from_rgb(0x6e, 0x88, 0x83),
+        accent: egui::Color32::from_rgb(0x4e, 0xc5, 0xbe),
+        good: egui::Color32::from_rgb(0xb9, 0xd6, 0x4e),
+        warn: egui::Color32::from_rgb(0xe4, 0xb3, 0x63),
+        bad: egui::Color32::from_rgb(0xf4, 0x68, 0x91),
+        kind_dir: egui::Color32::from_rgb(0x4e, 0xc5, 0xbe),
+        kind_img: egui::Color32::from_rgb(0x74, 0xd3, 0xd3),
+        kind_doc: egui::Color32::from_rgb(0xe4, 0xb3, 0x63),
+        kind_code: egui::Color32::from_rgb(0xb5, 0x8a, 0xc9),
+        kind_arch: egui::Color32::from_rgb(0xf4, 0x68, 0x91),
+        kind_av: egui::Color32::from_rgb(0xd9, 0x8c, 0xb3),
+    };
+
+    fn of(choice: ThemeChoice) -> Theme {
+        match choice {
+            ThemeChoice::Dark => Self::DARK,
+            ThemeChoice::Light => Self::LIGHT,
+            ThemeChoice::Brand => Self::BRAND,
+        }
     }
 
     /// Soft accent used behind selected rows and labels.
@@ -189,6 +233,54 @@ fn category_color(t: &Theme, cat: &Category) -> egui::Color32 {
         Category::Archives => t.kind_arch,
         Category::Audio | Category::Video => t.kind_av,
         Category::Large { .. } => t.warn,
+    }
+}
+
+/// The glyph that stands for a sidebar category.
+fn category_icon(cat: &Category) -> Icon {
+    match cat {
+        Category::All => Icon::CatAll,
+        Category::Recent { .. } => Icon::Clock,
+        Category::Images => Icon::CatImage,
+        Category::Docs => Icon::CatDoc,
+        Category::Code => Icon::CatCode,
+        Category::Archives => Icon::CatArchive,
+        Category::Audio => Icon::CatAudio,
+        Category::Video => Icon::CatVideo,
+        Category::Large { .. } => Icon::CatLarge,
+    }
+}
+
+/// The glyph that stands for a file, by its extension (a folder for folders).
+fn file_icon(path: &Path, is_dir: bool) -> Icon {
+    if is_dir {
+        return Icon::Folder;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "ico" | "avif") => {
+            Icon::CatImage
+        }
+        Some("mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "opus") => Icon::CatAudio,
+        Some("mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "mpg" | "mpeg" | "wmv") => {
+            Icon::CatVideo
+        }
+        Some(
+            "zip" | "tar" | "gz" | "xz" | "bz2" | "7z" | "rar" | "zst" | "deb" | "rpm" | "jar",
+        ) => Icon::CatArchive,
+        Some(
+            "pdf" | "doc" | "docx" | "odt" | "rtf" | "xls" | "xlsx" | "csv" | "ods" | "ppt"
+            | "pptx" | "odp" | "txt" | "md" | "log",
+        ) => Icon::CatDoc,
+        Some(
+            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "c" | "cpp" | "h" | "hpp" | "java"
+            | "rb" | "sh" | "toml" | "json" | "yaml" | "yml" | "html" | "css" | "sql" | "php"
+            | "lua" | "zig" | "ex" | "exs" | "kt" | "swift" | "xml" | "ini" | "conf",
+        ) => Icon::CatCode,
+        _ => Icon::File,
     }
 }
 
@@ -454,32 +546,51 @@ pub fn select_backend() -> Arc<Backend> {
     Arc::new(Backend::local(easysearch_core::Config::load()))
 }
 
-/// Default for [`GuiPrefs::dark`].
-fn dark_by_default() -> bool {
-    true
+/// Default for [`GuiPrefs::theme`].
+fn default_theme() -> ThemeChoice {
+    ThemeChoice::Dark
 }
 
-/// Read `dark` leniently: a bool as-is, and `null` (the pre-0.33 "follow
-/// system") or a missing key as the default. Without this an old `gui.json`
-/// holding `"dark": null` would fail to parse and reset every preference.
-fn dark_from_json<'de, D>(de: D) -> Result<bool, D::Error>
+/// Read the theme leniently: a name (`"dark"`, `"light"`, `"brand"`), or the
+/// older boolean the field used to be (`"dark": true|false`, and `null` — the
+/// pre-0.33 "follow system", which now means Dark), so an existing `gui.json`
+/// keeps loading instead of being reset.
+fn theme_from_json<'de, D>(de: D) -> Result<ThemeChoice, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(Option::<bool>::deserialize(de)?.unwrap_or_else(dark_by_default))
+    use serde::de::Error as _;
+    match Option::<serde_json::Value>::deserialize(de)? {
+        None | Some(serde_json::Value::Null) => Ok(ThemeChoice::Dark),
+        Some(serde_json::Value::Bool(true)) => Ok(ThemeChoice::Dark),
+        Some(serde_json::Value::Bool(false)) => Ok(ThemeChoice::Light),
+        Some(serde_json::Value::String(name)) => match name.to_ascii_lowercase().as_str() {
+            "dark" => Ok(ThemeChoice::Dark),
+            "light" => Ok(ThemeChoice::Light),
+            "brand" => Ok(ThemeChoice::Brand),
+            other => Err(D::Error::custom(format!("unknown theme {other:?}"))),
+        },
+        // Anything else (a number, an object) falls back to the default rather
+        // than discarding every other preference in the file.
+        Some(_) => Ok(ThemeChoice::Dark),
+    }
 }
 
 /// Persistent GUI preferences (`~/.config/easysearch/gui.json`).
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct GuiPrefs {
-    /// Colour scheme: **always an explicit choice**, dark by default.
+    /// Colour scheme: **always an explicit choice**, Dark by default.
     ///
-    /// The value used to be optional and `null` meant "follow the system"; the
-    /// app no longer follows it, so `null`/missing resolves to dark and an old
-    /// `gui.json` keeps loading instead of being reset.
-    #[serde(default = "dark_by_default", deserialize_with = "dark_from_json")]
-    dark: bool,
+    /// Stored by name. The field used to be a boolean called `dark`, and before
+    /// that an optional one where `null` meant "follow the system"; both are read
+    /// back ([`theme_from_json`]), so an old `gui.json` keeps working.
+    #[serde(
+        default = "default_theme",
+        alias = "dark",
+        deserialize_with = "theme_from_json"
+    )]
+    theme: ThemeChoice,
     /// Preview pane on by default (it can be turned off in Settings/View).
     show_preview: bool,
     /// Most recent first.
@@ -513,7 +624,7 @@ struct GuiPrefs {
 impl Default for GuiPrefs {
     fn default() -> Self {
         GuiPrefs {
-            dark: true,
+            theme: ThemeChoice::Dark,
             show_preview: true,
             history: Vec::new(),
             zoom: 1.0,
@@ -856,7 +967,7 @@ struct App {
     scroll_to: Option<usize>,
     sort: Option<Sort>,
     preview: Option<Preview>,
-    dark: bool,
+    theme: ThemeChoice,
     /// The logo, rasterised on first use (see [`App::logo`]).
     logo_tex: Option<egui::TextureHandle>,
     history_idx: Option<usize>,
@@ -964,7 +1075,7 @@ impl App {
         // (the portable way to bind a global hotkey — see gui/src/ipc.rs).
         let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Command>();
         ipc::spawn_listener(ipc_tx);
-        let dark = prefs.dark;
+        let theme = prefs.theme;
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
         let backend_label = backend.label();
@@ -1114,7 +1225,7 @@ impl App {
             scroll_to: None,
             sort: start.sort,
             preview: None,
-            dark,
+            theme,
             logo_tex: None,
             history_idx: None,
             search_was_focused: false,
@@ -1279,7 +1390,7 @@ impl App {
 
     /// The active colour scheme.
     fn theme(&self) -> Theme {
-        Theme::of(self.dark)
+        Theme::of(self.theme)
     }
 
     fn fg_dim(&self) -> egui::Color32 {
@@ -1615,6 +1726,18 @@ enum Icon {
     Terminal,
     Reveal,
     Open,
+    // Sidebar categories and result types — drawn as coloured glyphs rather
+    // than coloured dots, so the column reads as icons (see `paint_icon`).
+    Folder,
+    File,
+    CatAll,
+    CatImage,
+    CatDoc,
+    CatCode,
+    CatArchive,
+    CatAudio,
+    CatVideo,
+    CatLarge,
 }
 
 fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui::Color32) {
@@ -1708,6 +1831,121 @@ fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui
                 ],
                 stroke,
             ));
+        }
+        // --- sidebar / result glyphs -------------------------------------
+        Icon::Folder => {
+            // Tab + body, filled (so it reads as an icon at 14 px).
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(-0.9, -0.6), p(-0.15, -0.1)),
+                egui::CornerRadius::same(1),
+                color,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(-0.9, -0.25), p(0.9, 0.8)),
+                egui::CornerRadius::same(2),
+                color,
+            );
+        }
+        Icon::File => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.65, -0.9), p(0.65, 0.9)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([p(0.2, -0.9), p(0.65, -0.45)], stroke);
+        }
+        Icon::CatAll => {
+            for (dx, dy) in [(-0.8, -0.8), (0.05, -0.8), (-0.8, 0.05), (0.05, 0.05)] {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(p(dx, dy), p(dx + 0.75, dy + 0.75)),
+                    egui::CornerRadius::same(2),
+                    color,
+                );
+            }
+        }
+        Icon::CatImage => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.85, -0.7), p(0.85, 0.7)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_filled(p(-0.38, -0.32), s * 0.15, color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-0.65, 0.55), p(-0.05, -0.02), p(0.35, 0.55)],
+                color,
+                egui::Stroke::NONE,
+            ));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(0.05, 0.55), p(0.45, 0.18), p(0.75, 0.55)],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+        Icon::CatDoc => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.65, -0.9), p(0.65, 0.9)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            for i in 0..3 {
+                let y = -0.45 + i as f32 * 0.42;
+                painter.line_segment([p(-0.4, y), p(0.4, y)], stroke);
+            }
+        }
+        Icon::CatCode => {
+            painter.line_segment([p(-0.15, -0.5), p(-0.7, 0.0)], stroke);
+            painter.line_segment([p(-0.7, 0.0), p(-0.15, 0.5)], stroke);
+            painter.line_segment([p(0.15, -0.5), p(0.7, 0.0)], stroke);
+            painter.line_segment([p(0.7, 0.0), p(0.15, 0.5)], stroke);
+            painter.line_segment([p(0.35, -0.75), p(-0.35, 0.75)], stroke);
+        }
+        Icon::CatArchive => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.85, -0.8), p(0.85, 0.8)),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([p(-0.85, -0.3), p(0.85, -0.3)], stroke);
+            painter.line_segment([p(-0.25, 0.05), p(0.25, 0.05)], stroke);
+        }
+        Icon::CatAudio => {
+            // A quaver: filled head, stem, flag.
+            painter.circle_filled(p(-0.35, 0.5), s * 0.3, color);
+            painter.line_segment(
+                [p(-0.05, 0.5), p(-0.05, -0.75)],
+                egui::Stroke::new(2.0_f32, color),
+            );
+            painter.line_segment(
+                [p(-0.05, -0.75), p(0.5, -0.45)],
+                egui::Stroke::new(2.0_f32, color),
+            );
+        }
+        Icon::CatVideo => {
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(-0.9, -0.6), p(0.9, 0.6)),
+                egui::CornerRadius::same(2),
+                color,
+            );
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-0.2, -0.32), p(-0.2, 0.32), p(0.4, 0.0)],
+                egui::Color32::from_rgb(0x10, 0x14, 0x18),
+                egui::Stroke::NONE,
+            ));
+        }
+        Icon::CatLarge => {
+            for i in 0..3 {
+                let h = 0.4 + i as f32 * 0.35;
+                let x = -0.75 + i as f32 * 0.55;
+                painter.rect_filled(
+                    egui::Rect::from_min_max(p(x, 0.8 - h), p(x + 0.35, 0.8)),
+                    egui::CornerRadius::same(1),
+                    color,
+                );
+            }
         }
     }
 }
@@ -1846,13 +2084,14 @@ fn detail_row(ui: &mut egui::Ui, t: &Theme, key: &str, value: &str) {
     });
 }
 
-/// Full-width sidebar row: colour dot, label, optional right-aligned value, and
+/// Full-width sidebar row: colour icon, label, optional right-aligned value, and
 /// an accent bar when selected. Painted manually so the text is centred
 /// regardless of which system font is in use.
 fn nav_item(
     ui: &mut egui::Ui,
     t: &Theme,
-    dot: egui::Color32,
+    icon: Icon,
+    color: egui::Color32,
     label: &str,
     right: Option<&str>,
     selected: bool,
@@ -1873,8 +2112,14 @@ fn nav_item(
     }
 
     let dot_x = rect.min.x + 15.0;
-    ui.painter()
-        .circle_filled(egui::pos2(dot_x, rect.center().y), 3.5, dot);
+    let icon_rect =
+        egui::Rect::from_center_size(egui::pos2(dot_x, rect.center().y), egui::vec2(15.0, 15.0));
+    paint_icon(
+        ui.painter(),
+        icon_rect,
+        icon,
+        if selected { t.accent } else { color },
+    );
 
     // Right-aligned value (e.g. a facet count) reserves its own space.
     let value_font = egui::FontId::new(11.5, egui::FontFamily::Proportional);
@@ -2122,11 +2367,12 @@ fn type_chip(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::R
         egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45)),
         egui::StrokeKind::Inside,
     );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        chip_label(path, is_dir),
-        egui::FontId::new(10.5, egui::FontFamily::Proportional),
+    // A coloured glyph rather than the extension text: the name already ends in
+    // the extension, and an icon reads at a glance.
+    paint_icon(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), egui::vec2(17.0, 17.0)),
+        file_icon(path, is_dir),
         color,
     );
     resp
@@ -2503,17 +2749,11 @@ fn mime_for(path: &Path, is_dir: bool) -> String {
     .to_string()
 }
 
-/// Small rounded pill naming a file's type (PDF, DOCX, MD, DIR, …).
+/// Small rounded pill naming a file's type (an icon: folder, image, document…).
 fn type_pill(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::Response {
     let color = type_color(t, path, is_dir);
-    let galley = ui.painter().layout_no_wrap(
-        chip_label(path, is_dir),
-        egui::FontId::new(10.0, egui::FontFamily::Proportional),
-        color,
-    );
-    let pad = egui::vec2(7.0, 3.0);
-    let (rect, resp) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
-    let radius = egui::CornerRadius::same(4);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 20.0), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(5);
     ui.painter().rect_filled(rect, radius, t.chip_fill(color));
     ui.painter().rect_stroke(
         rect,
@@ -2521,7 +2761,12 @@ fn type_pill(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::R
         egui::Stroke::new(1.0_f32, color.gamma_multiply(0.45)),
         egui::StrokeKind::Inside,
     );
-    ui.painter().galley(rect.min + pad, galley, color);
+    paint_icon(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), egui::vec2(13.0, 13.0)),
+        file_icon(path, is_dir),
+        color,
+    );
     resp
 }
 
@@ -2546,17 +2791,6 @@ fn short_dir(path: &Path) -> String {
     }
 }
 
-fn chip_label(path: &Path, is_dir: bool) -> String {
-    if is_dir {
-        return "DIR".to_string();
-    }
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(e) if !e.is_empty() => e.chars().take(4).collect::<String>().to_ascii_uppercase(),
-        _ => "FILE".to_string(),
-    }
-}
-
-/// Accent colour for a file's type.
 fn type_color(t: &Theme, path: &Path, is_dir: bool) -> egui::Color32 {
     if is_dir {
         return t.kind_dir;
@@ -3283,22 +3517,26 @@ impl App {
                 ui.label(egui::RichText::new("Appearance").strong());
                 ui.horizontal(|ui| {
                     ui.label("Theme");
-                    ui.radio(self.prefs.dark, "Dark")
-                        .clicked()
-                        .then(|| {
-                            self.prefs.dark = true;
-                            self.dark = true;
+                    for (choice, label, hover) in [
+                        (ThemeChoice::Dark, "Dark", "The original dark palette."),
+                        (ThemeChoice::Light, "Light", "The light palette."),
+                        (
+                            ThemeChoice::Brand,
+                            "Brand",
+                            "The logo's colours: a deep teal ground, teal accent, pink and lime.",
+                        ),
+                    ] {
+                        if ui
+                            .radio(self.prefs.theme == choice, label)
+                            .on_hover_text(hover)
+                            .clicked()
+                        {
+                            self.prefs.theme = choice;
+                            self.theme = choice;
                             self.apply_style(ctx);
                             self.prefs.save();
-                        });
-                    ui.radio(!self.prefs.dark, "Light")
-                        .clicked()
-                        .then(|| {
-                            self.prefs.dark = false;
-                            self.dark = false;
-                            self.apply_style(ctx);
-                            self.prefs.save();
-                        });
+                        }
+                    }
                 });
                 if ui
                     .checkbox(&mut self.prefs.show_preview, "Preview pane")
@@ -3424,7 +3662,7 @@ impl App {
                     if ui.button("Reset GUI settings").clicked() {
                         self.prefs = GuiPrefs::default();
                         self.prefs.save();
-                        self.dark = self.prefs.dark;
+                        self.theme = self.prefs.theme;
                         self.apply_style(ctx);
                     }
                 });
@@ -3578,17 +3816,17 @@ impl App {
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("Theme").small());
-                        if ui.radio(self.prefs.dark, "Dark").clicked() {
-                            self.prefs.dark = true;
-                            self.dark = true;
-                            self.apply_style(ctx);
-                            self.prefs.save();
-                        }
-                        if ui.radio(!self.prefs.dark, "Light").clicked() {
-                            self.prefs.dark = false;
-                            self.dark = false;
-                            self.apply_style(ctx);
-                            self.prefs.save();
+                        for (choice, label) in [
+                            (ThemeChoice::Dark, "Dark"),
+                            (ThemeChoice::Light, "Light"),
+                            (ThemeChoice::Brand, "Brand"),
+                        ] {
+                            if ui.radio(self.prefs.theme == choice, label).clicked() {
+                                self.prefs.theme = choice;
+                                self.theme = choice;
+                                self.apply_style(ctx);
+                                self.prefs.save();
+                            }
                         }
                     });
                     ui.menu_button("Tools", |ui| {
@@ -3650,6 +3888,12 @@ impl App {
                             self.show_shortcuts = true;
                             ui.close_menu();
                         }
+                    });
+                    // The mark, at the far right of the menu bar.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mark = self.logo(ui.ctx());
+                        ui.add(egui::Image::new((mark.id(), egui::vec2(22.0, 22.0))))
+                            .on_hover_text(format!("EasySearch {}", env!("CARGO_PKG_VERSION")));
                     });
                 });
             });
@@ -4510,7 +4754,17 @@ impl App {
                 .get(i)
                 .map(|c| human_count(*c))
                 .unwrap_or_else(|| "—".to_string());
-            if nav_item(ui, t, category_color(t, cat), label, Some(&count), selected).clicked() {
+            if nav_item(
+                ui,
+                t,
+                category_icon(cat),
+                category_color(t, cat),
+                label,
+                Some(&count),
+                selected,
+            )
+            .clicked()
+            {
                 chosen = Some(if selected { Category::All } else { *cat });
             }
         }
@@ -4557,7 +4811,7 @@ impl App {
                 continue;
             }
             let active = self.query == s.query;
-            if nav_item(ui, t, t.warn, &s.name, None, active).clicked() {
+            if nav_item(ui, t, Icon::Bookmark, t.warn, &s.name, None, active).clicked() {
                 apply = Some(i);
             }
         }
@@ -4583,7 +4837,7 @@ impl App {
                 .get(i)
                 .map(|n| human_count(*n))
                 .unwrap_or_default();
-            if nav_item(ui, t, t.kind_dir, label, Some(&count), active).clicked() {
+            if nav_item(ui, t, Icon::Folder, t.kind_dir, label, Some(&count), active).clicked() {
                 pick = Some(if active { None } else { Some(s) });
             }
         }
@@ -4592,7 +4846,17 @@ impl App {
             && !locs.iter().any(|(_, p)| p.to_string_lossy() == under)
         {
             ui.add_space(4.0);
-            if nav_item(ui, t, t.accent, &location_label(&under), None, true).clicked() {
+            if nav_item(
+                ui,
+                t,
+                Icon::Folder,
+                t.accent,
+                &location_label(&under),
+                None,
+                true,
+            )
+            .clicked()
+            {
                 pick = Some(None);
             }
         }

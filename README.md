@@ -145,9 +145,11 @@ the results table (`#`, Name, Path, coloured type pill, Size, Modified, Created,
 Match, Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
 quick actions. Under it: view tabs, bulk actions, recent searches and a live status
 bar (index state, CPU, RAM, query stats, 100/110/125% zoom). The theme is an
-explicit choice — **Dark by default**, Light if you prefer — remembered in
-`gui.json`; it no longer follows the desktop. It draws with your system fonts,
-resolved through fontconfig from the desktop's configured family.
+explicit choice — **Dark by default**, **Light**, or **Brand** (the logo's teal
+palette) — remembered in `gui.json`; it no longer follows the desktop. It draws
+with your system fonts, resolved through fontconfig from the desktop's
+configured family, and its sidebar and result icons are painted in the theme's
+own colours.
 
 Query semantics (Everything-style):
 

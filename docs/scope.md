@@ -396,11 +396,14 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
   (exact > prefix > substring), then path hits, with a small bonus for short names. In
   fuzzy mode the same column is driven by the engine's subsequence score
   (word-start/runs up, gaps down, short names preferred).
-- **Theming:** an explicit, remembered light/dark choice (`dark` in
-  `~/.config/easysearch/gui.json`, **Dark** by default); it does **not** follow the
-  desktop's scheme, and a legacy `null` resolves to Dark. Uses the system UI/mono fonts,
-  resolved with `fc-match` (KDE, then GTK, then fontconfig's `sans-serif`/`monospace`);
-  bundled egui fonts are only a glyph fallback. Empty state suggests what to search or
+- **Theming:** an explicit, remembered choice (`theme` in
+  `~/.config/easysearch/gui.json`): **Dark** (default), **Light**, or **Brand**
+  (the logo's teal palette). It does **not** follow the desktop's scheme, and a
+  legacy `"dark": true|false`/`null` resolves to Dark. Sidebar categories and
+  result rows use painted colour glyphs (folder, document, image, …) rather than
+  dots or text chips. Uses the system UI/mono fonts, resolved with `fc-match`
+  (KDE, then GTK, then fontconfig's `sans-serif`/`monospace`); bundled egui
+  fonts are only a glyph fallback. Empty state suggests what to search or
   reports indexing progress.
 - CLI mirror (`easysearch-cli search "*.pdf"`) prints matched paths for scripting.
 

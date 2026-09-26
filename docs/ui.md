@@ -282,11 +282,11 @@ sight, and the app and its engine keep running and indexing. *Quit*
 ## Theming and fonts
 
 **The theme is your choice, remembered.** Settings ▸ Appearance (and
-View ▸ Theme) offer **Dark** and **Light**; Dark is the default, and the choice
-is stored as `"dark": true|false` in `gui.json`. The app does not follow the
-desktop's scheme — an explicit, persistent setting was preferred over a scheme
-that changes under the UI. An older `gui.json` with `"dark": null` (the previous
-“follow system”) simply resolves to Dark.
+View ▸ Theme) offer **Dark** (the default), **Light**, and **Brand** — a deep
+teal palette taken from the logo (teal accent, pink and lime highlights). The
+choice is stored by name as `"theme"` in `gui.json`; an older `"dark":
+true|false` (or `null`, the previous “follow system”) is still read, resolving to
+Dark rather than resetting the file.
 
 **Fonts come from the system.** The app resolves the desktop's configured family
 with `fc-match` — KDE's `kdeglobals` (`font` / `fixed`), then GTK's
