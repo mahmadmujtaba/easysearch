@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.32.0** (2026-09-26), in rough priority order. Everything
+Outstanding items at **v0.34.0** (2026-09-26), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -81,9 +81,9 @@ Both scripts fail fast with install instructions when their tool is missing, so
   StatusNotifierWatcher; `--talk-name=org.kde.StatusNotifierWatcher` is granted,
   but sandboxed tray items are the least dependable part of Flatpak. Everything
   else works without it.
-- **Flatpak: the HTTP/JSON API is unreachable from the host.** Network is not
-  granted, so the daemon binds loopback *inside* the sandbox only. Add
-  `--share=network` if you want to `curl` it from outside.
+- **Flatpak: no network surface to expose.** The engine talks to the app over the
+  child's stdin/stdout, so nothing binds a port inside or outside the sandbox —
+  there is no host-reaching API and no `--share=network` to add.
 - **Flatpak: only `$HOME` is visible.** Grant `--filesystem=host:ro` to search
   the rest of the disk.
 - **Empty files have no preview.** A 0-byte text file shows “No text preview
@@ -115,7 +115,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | `Created` **column** in the table | **Built in v0.27.0** — a sortable *Created* column, read live via `stat` birth time (`—` where the filesystem has none), so no on-disk format change was needed |
 | `Full Text (content + name)` scope | **Built in v0.25.0** — the *Full text (name or contents)* scope, `--any`, or `content_or_name` on the API |
 | Per-location counts in the sidebar | **Built in v0.26.0** — each quick location shows its own result count for the current query |
-| `Follow symlinks` advanced checkbox | **Built in v0.22.0** — Tools ▸ Ignore files… and Settings ▸ Indexing, live via `POST /v1/config` |
+| `Follow symlinks` advanced checkbox | **Built in v0.22.0** — Tools ▸ Ignore files… and Settings ▸ Indexing, live via the engine's `config` op |
 | `Content: Any` filter | Not built (no meaningful second value today) |
 
 The reference also has a single tab strip; this app keeps its **multi-search
@@ -124,8 +124,8 @@ bottom strip for view switching.
 
 ## 5. SQLite index — done
 
-The index lives in a SQLite database in a `db/` folder, written by the daemon and
-read by every consumer (GUI, CLI, HTTP API). It is created when missing and
+The index lives in a SQLite database in a `db/` folder, written by the engine and
+read by every consumer (the app, the GUI, the CLI). It is created when missing and
 rebuilt when the schema changes or a build was interrupted; live changes are
 folded into it in batched transactions before each query, and a large delta
 backlog triggers a full rebuild. Design and measurements are in
@@ -142,18 +142,19 @@ Taken on this machine: KDE/Plasma on Wayland, release build, ~85 000 files,
 | Process | RSS | Peak RSS |
 | --- | --- | --- |
 | `easysearch` (GUI) | **92 MiB** | 94 MiB |
-| `easysearch --daemon` | **51 MiB** | 65 MiB |
+| `easysearch --engine` | **51 MiB** | 65 MiB |
 | Total resident | **~143 MiB** | — |
 
 For comparison, the budget in [`scope.md` §9](scope.md#9-resource-footprint-budget-non-negotiable-targets)
 documents ≈ 151 MiB for the GUI (v0.1.0, 137k files). So memory is at or under
 the documented expectation, not a regression.
 
-Worth revisiting if you want it lower: the GUI and the daemon are two processes
-that each map the same index, so the *same* page-cache pages and the same
-initialisation cost are paid twice. The alternative — the GUI as a thin client
-over the HTTP API, with a single owner of the index — would remove one process
-and its copy of the index from the resident set.
+Worth revisiting if you want it lower: the app and its engine are two processes,
+and the GUI keeps an in-process engine as a spawn fallback, so the same
+page-cache pages and the same initialisation cost can be paid twice. The
+alternative — the GUI strictly as a thin client over the child protocol, with the
+engine as the single owner of the index — would remove the fallback's copy of the
+index from the resident set.
 
 **Resolved in v0.32.0 — the 1.4 GB `easysearch` process.** An installed build was
 seen holding ~1.44 GB resident (100 % anonymous heap, vs 66 MB of database on
@@ -175,13 +176,13 @@ deliverable; these are gated on request:
 **Phase 2 — polish**
 - ~~Bundled docx extractor (drop the `docx2txt` dependency)~~ — **done in v0.18.0** (in-process `zip` + `quick-xml` OOXML reader)
 - ~~Global hotkey~~ — **done in v0.19.0** (control socket: `easysearch --toggle/--show/--hide/--search/--quit`, bound as a desktop custom shortcut)
-- ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, `?fuzzy=1`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
-- ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)
+- ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
+- ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via the engine's `config` op)
 
 **Phase 3 — stretch**
 - `fanotify` watcher (no per-directory watch limits; needs privileges)
 - ~~PDF / ODT text extraction~~ — **done in v0.20.0** (ODT via the same `zip` + `quick-xml` package reader; PDF via `pdf-extract`, text layer only, guarded with `catch_unwind`)
-- ~~Multiline content regex~~ — **done in v0.21.0** (`--multiline`, `?multiline=1`, the filter-bar "Multiline" chip; off by default because it is much slower)
+- ~~Multiline content regex~~ — **done in v0.21.0** (`--multiline`, the filter-bar "Multiline" chip; off by default because it is much slower)
 - Windows / macOS builds
 
 ---

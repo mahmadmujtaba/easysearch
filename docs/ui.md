@@ -89,9 +89,8 @@ syntax; `**/node_modules/` matches at any depth) with **Save & rebuild**,
 - **Settings ▸ Indexing** offers the same two switches and a link to the editor,
   plus **Background content index** (see below).
 
-Both switches are **live**: they are pushed to the running engine (or, over
-`POST /v1/config`, to the daemon) and followed by a rebuild, so they take effect
-immediately rather than at the next restart.
+Both switches are **live**: they are pushed to the running engine and followed by
+a rebuild, so they take effect immediately rather than at the next restart.
 
 **Background content index** (`Settings ▸ Indexing`) caches the text it extracts
 from `.docx`/`.odt`/`.pdf` files so repeated content searches are nearly free.
@@ -250,8 +249,7 @@ easysearch --toggle        # show the window if hidden, hide it if visible
 easysearch --show          # bring it to the front
 easysearch --hide
 easysearch --search TODO   # open it and run a search
-easysearch --quit          # close the window (the background service keeps running)
-easysearch --stop          # stop the background service as well
+easysearch --quit          # stop the app and the engine
 ```
 
 Bind one of those as a **custom shortcut** in your desktop:
@@ -269,10 +267,9 @@ instance and quietly do nothing otherwise. The socket lives at
 `$XDG_RUNTIME_DIR/easysearch.sock` with mode `0600`, so only your own user
 can reach it.
 
-Hiding (`--hide`, or the tray's *Toggle*) is not the same as quitting: the window
-governs only itself, so the background service and its index keep running either
-way. `--stop` stops that service — the window may not exist at all, which is why
-it is not a window command.
+Hiding (`--hide`) is not the same as quitting: the window is just put out of
+sight, and the app and its engine keep running and indexing. *Quit*
+(`easysearch --quit`) stops the app and the engine together.
 
 ## Theming and fonts
 
@@ -283,30 +280,31 @@ desktop's scheme — an explicit, persistent setting was preferred over a scheme
 that changes under the UI. An older `gui.json` with `"dark": null` (the previous
 “follow system”) simply resolves to Dark.
 
-**Fonts come from the system.** The app asks fontconfig which file the desktop's
-configured family resolves to — KDE's `kdeglobals`, then GTK's `settings.ini`,
-then fontconfig's own `sans-serif` / `monospace` — and draws with that, for both
-the UI and the monospace face (paths, sizes). It does not ship its own font: the
-bundled egui faces remain only as glyph fallbacks for what the system font lacks
-(emoji, CJK, rare symbols).
+**Fonts come from the system.** The app resolves the desktop's configured family
+with `fc-match` — KDE's `kdeglobals` (`font` / `fixed`), then GTK's
+`gtk-font-name` / `gtk-monospace-font-name`, then fontconfig's `sans-serif` /
+`monospace` — and draws with that, for both the UI and the monospace face (paths,
+sizes). It does not ship its own font: the bundled egui faces remain only as glyph
+fallbacks for what the system font lacks (emoji, CJK, rare symbols).
 
 ## Notes and limits
 
 - A **0-byte file** shows “No text preview for this file” rather than an empty
   document.
-- The **content index** (the optional document-text cache) has no UI switch yet;
-  set `content_index_enabled` in `config.json` and restart. It is **off at boot**
-  and, by default, **spooled to disk** rather than held in RAM, so it does not
-  grow the resident set; use `--content-in-memory` for the old RAM-backed mode.
-  See [`config.md`](config.md).
+- The **content index** (the optional document-text cache) is a live switch in
+  **Settings ▸ Indexing** (*Background content index*). It is **off at boot**
+  and, by default, **spooled to disk** (`<disk_index_dir>/content/`) rather than
+  held in RAM, so it does not grow the resident set; use `--content-in-memory` for
+  the RAM-backed mode. See [`config.md`](config.md).
 - The **Fuzzy** and **Duplicate Finder** buttons from the reference design are
   deliberately absent rather than present-but-dead; so are Tags and Rename/Delete.
   [`pending.md`](pending.md) §4 lists them.
-- The tray icon offers Open, the recent-searches list, and Quit (which stops the
-  background service). It lives in the service, so it is still there after the
-  window is closed.
-- **Closing the window frees the window**, not the app: the background service
-  keeps indexing, keeps the tray, and answers the CLI and the HTTP/JSON API. Use
-  *File ▸ Close window* (or the **X**) to do that, *File ▸ Stop background
-  service…* (or `easysearch --stop`) to stop it too, and `easysearch --toggle`
-  to get a window back.
+- The tray icon offers Open, Recent searches, and Quit EasySearch (which stops
+  the app and the engine). It lives in the app process (with the window), so it is
+  still there after the window is hidden.
+- **Closing the window hides it to the tray**, not quitting the app: the engine
+  keeps indexing while it is hidden. Use the **X** or *File ▸ Hide window* to hide
+  it, and *Quit* (tray ▸ *Quit EasySearch*, *File ▸ Quit EasySearch*, or
+  `easysearch --quit`) to stop the app and the engine. There is no separate
+  "close to tray" or "quit on close" setting — the **X** always just hides.
+  `easysearch --toggle` brings a hidden window back.

@@ -9,7 +9,7 @@
 //! it reads correctly on both the light and the dark theme.
 //!
 //! It lives in `core` because both frontends draw it: the GUI (`rgba`, for
-//! `egui::IconData` and the About dialog) and the daemon's tray item (`argb32`).
+//! `egui::IconData` and the About dialog) and the tray item (`argb32`).
 //!
 //! The same artwork is installed as
 //! `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg`

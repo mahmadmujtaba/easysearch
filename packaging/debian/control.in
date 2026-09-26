@@ -17,10 +17,10 @@ Description: Instant file and content search for Linux
  regex; content search uses the embedded ripgrep engine and always reads files
  live rather than serving stale results.
  .
- This package installs the combined GUI + search-daemon binary
- (easysearch), the scriptable CLI (easysearch-cli) and a headless daemon
+ This package installs the combined app + search-engine binary
+ (easysearch), the scriptable CLI (easysearch-cli) and a headless engine
  (easysearch-daemon), plus a desktop entry, an AppStream metainfo file and the
  application icons.
  .
- The search engine and the daemon API are bound to loopback only and are
- unauthenticated; do not expose them to a network.
+ The engine runs as a child process of the app and is reached over private
+ pipes; nothing listens on the network, so there is no endpoint to expose.

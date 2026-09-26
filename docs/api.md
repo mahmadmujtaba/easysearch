@@ -1,93 +1,77 @@
-# Daemon HTTP API
+# Engine protocol
 
-`easysearch-daemon` runs the search engine as its own process and serves it over
-a small HTTP/JSON API on **localhost only** (`127.0.0.1:5858` by default).
+EasySearch runs the engine as a **child process** of the app. The app spawns it
+(`easysearch --engine`, the same binary), keeps its stdin/stdout, and they
+exchange JSON frames over those pipes. There is no socket, no listening port and
+no HTTP: the pipes are private to the process pair, so nothing about the index is
+reachable from anywhere else on the machine.
 
-Splitting the engine out of the GUI means the index keeps running — and any
-other client keeps working — even when no GUI is running. Clients:
+That is the whole point of the split — the index keeps running (and the window can
+be closed and reopened) without a networked service to secure.
 
-| Client | How it talks to the engine |
+| Process | What it is |
 | --- | --- |
-| `easysearch` | **the single-file app**: opens the GUI and starts a daemon by re-executing itself when none is listening (falling back to an in-process engine if it cannot). This is what end users run. |
-| `easysearch-gui` | the GUI alone (dev convenience): attaches to a daemon (`--daemon ADDR`, `EASYSEARCH_DAEMON`, or auto-detected on the default address) |
-| `easysearch-cli` (CLI) | in-process by default; `--remote ADDR` queries a daemon |
-| anything else | plain HTTP + JSON (`curl`, scripts, another language) |
+| app (`easysearch`) | window + tray; spawns the engine, owns its pipes, kills it on exit |
+| engine (`easysearch --engine`, or the standalone `easysearch-daemon`) | owns the index; answers frames on its stdin/stdout |
+| `easysearch-gui` | the window alone (dev convenience): runs the engine in-process |
+| `easysearch-cli` | the CLI: runs the engine in-process, so a script needs no app |
 
-### Sharing the single binary
+### Lifetime
 
-```sh
-make dist          # → dist/easysearch  (one self-contained file)
+The engine's lifetime is its parent's:
+
+- The app spawns it at startup and **hides the window** (not the app) when the
+  window is closed, so the engine keeps indexing; the tray's *Open* brings the
+  window back. Quitting the app (tray *Quit*, *File ▸ Quit EasySearch*, or
+  `easysearch --quit`) stops the engine too, and the loader reaps it.
+- The engine's stderr goes to `$XDG_CACHE_HOME/easysearch/engine.log` (stdout is
+  the protocol and is never used for logging — that is why the "index live" line
+  goes to stderr).
+- A crashed engine is noticed as a failed status poll; the app reports it in the
+  status bar rather than dying with it.
+
+> **One index owner:** exactly one engine should own the on-disk index at a time.
+> The app is careful to spawn only one; if you also run the CLI, it opens the same
+> index in-process, so prefer one or the other for heavy writing. Reads are safe
+> (SQLite WAL).
+
+## Frames
+
+One JSON object per line, in both directions. A JSON string escapes its own
+newlines, so a frame is always exactly one line and no length prefix is needed.
+
+```text
+→ {"id":1,"op":"search","payload":{…Query…}}
+← {"id":1,"data":{…SearchResponse…}}
+← {"id":2,"error":"bad regex: …"}
 ```
 
-The GUI and the daemon are the same executable: running it starts a daemon (the
-same file, re-executed with `--daemon`, detached into its own session) and
-attaches the GUI to it. The daemon's log goes to
-`$XDG_CACHE_HOME/easysearch/daemon.log`. It needs only the usual desktop
-libraries (OpenGL/EGL and the windowing stack) that any graphical Linux
-installation already has.
+A reply carries **either** `data` **or** `error`, and repeats the request's `id`.
+Requests are multiplexed by id: the engine answers each one on its own thread, so
+a slow content search never blocks the status poller or the next query. Replies
+are written whole, so they cannot interleave.
 
-The daemon also owns the **tray icon**, so closing the window (which frees the
-GUI process) leaves the index, the API and the tray running; the tray's *Open*
-either shows the window over the control socket or starts a fresh GUI attached to
-the same daemon. `POST /v1/shutdown` — or the tray's *Quit*, or
-`easysearch --stop` — stops the daemon itself.
+A request that cannot even be parsed is answered with `id: 0` and an `error`.
 
-> **Security:** the API has no authentication and is bound to loopback. Do not
-> bind it to a non-loopback address or expose it through a proxy.
->
-> **One index owner:** only one process should own the on-disk index at a time.
-> When a daemon is running, have the GUI/CLI attach to it rather than starting a
-> second in-process engine — otherwise both rewrite the same index cache (the
-> writes are atomic renames, so nothing is corrupted, but the work is duplicated).
+## Ops
 
-## Running
-
-```sh
-make daemon                              # release build, 127.0.0.1:5858
-./target/release/easysearch-daemon --addr 127.0.0.1:5858 --quiet
-```
-
-## Endpoints
-
-| Method | Path | Description |
+| `op` | `payload` | `data` |
 | --- | --- | --- |
-| `GET` | `/v1/health` | `{ok, version, api, uptime_secs}` — liveness/version probe |
-| `GET` | `/v1/status` | `{status:{…}, files, dirs}` — index/watcher state |
-| `POST` | `/v1/search` | body: a `Query` object → `SearchResponse` |
-| `GET` | `/v1/search` | same, with query parameters (see below) |
-| `POST` | `/v1/count` | body: a `Query` object → `{"count":n}` (counts only, no rows) |
-| `POST` | `/v1/rebuild` | rebuild the on-disk index in the background → `{ok:true}` |
-| `POST` | `/v1/ignore` | body `{"respect":bool,"follow_symlinks":bool,"content_index":bool,"rebuild":bool}` — every field is optional; only what is present changes. Sets whether `.gitignore`/`.ignore` files are honored, whether symlinks are followed, and whether the background content cache is on, then rebuilds when a walk setting changed → `{ok:true}`. `POST /v1/config` is an alias. All three are reported in `/v1/status` (`status.respect_ignore_files`, `status.follow_symlinks`, `status.content_index`). |
-| `POST` | `/v1/shutdown` | ask the daemon to stop and exit → `{ok:true}` (used to restart onto a freshly installed binary) |
-| `GET` | `/v1/watch` | long-poll: the `/v1/status` payload, returned when it changes or after `?timeout=<secs>` (default 25, max 120) |
+| `health` | – | `{ok, version, api, uptime_secs}` |
+| `status` | – | `{status:{…}, files, dirs}` |
+| `search` | a `Query` object | `SearchResponse` |
+| `count` | a `Query` object (its `limit` is ignored) | `{count:n}` |
+| `rebuild` | – | – |
+| `config` | `{respect?, follow_symlinks?, content_index?, rebuild?}` | – |
+| `shutdown` | – | – |
 
-Errors are always JSON: `{"error":"…"}` with a `4xx`/`5xx` status.
+`config` fields are all optional: only what is present changes. `respect` and
+`follow_symlinks` are walk settings, so a change rebuilds the index (`rebuild`
+defaults to `true`); `content_index` is the background content cache and takes
+effect immediately. All three are reported in `status`
+(`status.respect_ignore_files`, `status.follow_symlinks`, `status.content_index`).
 
-### `GET /v1/search` parameters
-
-| Parameter | Meaning |
-| --- | --- |
-| `query` / `q` | Everything-style name query (glob terms, `!` to exclude) |
-| `regex` | `1`/`true` — treat terms as regex |
-| `case` | `1`/`true` — case-sensitive |
-| `content` | regex searched inside file contents |
-| `any` / `content_or_name` | `1`/`true` — with `content`, match the name **or** the content instead of requiring both |
-| `fuzzy` | `1`/`true` — fzf-style subsequence matching for name terms (`!` terms stay literal) |
-| `multiline` | `1`/`true` — the `content` pattern may span lines (slower) |
-| `hidden` | `1`/`true` — include hidden files |
-| `path` | `1`/`true` — match the full path, not just the basename |
-| `dirs` | `0`/`false` — exclude folders from results |
-| `under` | only return paths inside this directory (e.g. `under=/home/me/Downloads`) |
-| `ext` | comma-separated file extensions (e.g. `ext=pdf,docx,md`, case-insensitive, leading `.` optional); when set, directories are excluded and only these final extensions match |
-| `min_size` | minimum file size in bytes, inclusive; when set, directories are excluded |
-| `max_size` | maximum file size in bytes, inclusive; when set, directories are excluded |
-| `modified_within` | only entries modified within the last N seconds (alias `modified_within_secs`; future mtimes always match) |
-| `limit` | maximum results (default 1000) |
-| `category` | `all`, `recent`, `images`, `docs`, `code`, `archives`, `audio`, `video`, `large` |
-
-Unknown parameters are a `400` (fail loudly rather than silently ignoring).
-
-### `Query` object (`POST /v1/search`)
+### `Query`
 
 ```json
 {
@@ -104,22 +88,22 @@ Unknown parameters are a `400` (fail loudly rather than silently ignoring).
   "min_size": null,
   "max_size": null,
   "modified_within_secs": null,
+  "fuzzy": false,
+  "multiline": false,
+  "content_or_name": false,
   "limit": 100
 }
 ```
 
-`category` accepts either a variant name (`"All"`, `"Images"`, …) or the
-parameterised form used internally, e.g. `{"Recent":{"max_age_secs":604800}}`.
-`under` is an optional directory prefix — only paths inside it are returned —
-and is what the GUI uses for its sidebar *Locations* chips.
-
-`extensions` (default `[]`) restricts files to these final extensions; entries
-are canonicalised (whitespace trimmed, one leading `.` stripped, lowercased,
-deduped) and, when the list is non-empty, directories never match.
-`min_size` / `max_size` (default `null`) are inclusive byte bounds; when either
-is set, directories never match. `modified_within_secs` (default `null`) keeps
-entries whose age `now - mtime` is at most that many seconds. All three fields
-are optional, so older clients that omit them keep working.
+`name` is the Everything-style query (glob terms, `!term` to exclude) and
+`content` an optional regex matched inside file contents; `content_or_name` makes
+the two alternatives ("Full text") instead of both required. `category` accepts a
+variant name (`"All"`, `"Images"`, …) or the parameterised form
+(`{"Recent":{"max_age_secs":604800}}`). `under` restricts results to a directory
+prefix (the GUI's *Locations* chips). `extensions` (canonicalised, deduped) and
+`min_size` / `max_size` / `modified_within_secs` are optional; when set, folders
+never match. `fuzzy` is fzf-style subsequence matching for the name terms;
+`multiline` lets the content pattern span lines (slower).
 
 ### `SearchResponse`
 
@@ -134,58 +118,18 @@ are optional, so older clients that omit them keep working.
 }
 ```
 
-### `CountDto` (`POST /v1/count`)
-
-```json
-{ "count": 4213 }
-```
-
-`/v1/count` takes the same `Query` object as `/v1/search` (its `limit` is
-ignored) and returns only how many entries match — the engine walks the index
-with the same predicate as a search, so the two always agree. The GUI uses this
-to fill the per-category counts in its sidebar without transferring rows.
-
 Paths are sent as (lossy) UTF-8 strings; a path that is not valid UTF-8 is
 replaced with U+FFFD.
 
-## Examples
+## Driving it by hand
+
+The standalone `easysearch-daemon` binary speaks the same protocol, so you can
+type frames at it:
 
 ```sh
-# Liveness
-curl -s http://127.0.0.1:5858/v1/health
-
-# All PDFs, newest-first is up to the client — the API returns index order
-curl -s 'http://127.0.0.1:5858/v1/search?query=*.pdf&limit=20'
-
-# Regex content search
-curl -s -X POST http://127.0.0.1:5858/v1/search \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"","content":"fn main\\(","regex_mode":true,"limit":10,"category":"All","include_dirs":false,"case_sensitive":false,"include_hidden":false,"full_path":false}'
-
-# How many results would there be? (no rows transferred)
-curl -s -X POST http://127.0.0.1:5858/v1/count \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"*.pdf","category":"All","include_dirs":false,"limit":1}'
-
-# Everything under one directory only
-curl -s 'http://127.0.0.1:5858/v1/search?query=*.log&under=/home/me/Downloads&limit=20'
-
-# Smallest files only, via jq
-curl -s 'http://127.0.0.1:5858/v1/search?query=*.log&limit=50' | jq -r '.results[] | "\(.size)\t\(.path)"' | sort -n
-
-# Follow index changes (long-poll loop)
-while true; do curl -s 'http://127.0.0.1:5858/v1/watch?timeout=25' | jq -c '.status.state'; done
-
-# CLI against the daemon
-easysearch-cli --remote 127.0.0.1:5858 search 'invoice 2026' --limit 20
-easysearch-cli --remote 127.0.0.1:5858 status
+# One frame in, one frame out (stdout is protocol-only).
+printf '{"id":1,"op":"health"}\n' | easysearch-daemon --quiet
 ```
 
-## Why long-polling instead of SSE/WebSocket
-
-Change notification uses long-polling (`/v1/watch`). It works with every HTTP
-client, needs no framing layer, and is not defeated by the server's chunk
-encoder: `tiny_http` streams through `chunked_transfer::Encoder`, which buffers
-small writes, so short server-sent-event frames would never be flushed to the
-client. A WebSocket endpoint would require an additional framing + handshake
-implementation for little gain over long-polling at this scale.
+`daemon/tests/roundtrip.rs` does exactly this to pin the wire format, and
+`core/src/child.rs` is the client the app uses.

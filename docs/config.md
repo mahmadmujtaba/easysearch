@@ -50,13 +50,13 @@ app manages itself.
 | `exclude_network` | `true` | Skip network mounts (`nfs`, `cifs`/`smb`, `sshfs`, `gvfsd-fuse`, `9p`, …). |
 | `exclude_fstypes` | `[]` | *Extra* filesystem types to skip, on top of the built-in list (pseudo filesystems, container overlays, network FS). Union, not replacement. |
 | `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files inside the searched tree, plus the global ignore file at `~/.config/easysearch/ignore`. This is what keeps `node_modules/`, `target/` and the like out of the index. |
-| `follow_symlinks` | `false` | Follow symbolic links into their targets while walking, so the contents of a symlinked folder are indexed too. Off by default (it can duplicate subtrees); cycles are detected and skipped. Both this and `respect_ignore_files` can be toggled live from the GUI or `POST /v1/config`. |
+| `follow_symlinks` | `false` | Follow symbolic links into their targets while walking, so the contents of a symlinked folder are indexed too. Off by default (it can duplicate subtrees); cycles are detected and skipped. Both this and `respect_ignore_files` can be toggled live from **Settings ▸ Indexing** (the app pushes the change to the engine). |
 
 ## Where the index is stored
 
 | Key | Default | Effect |
 |---|---|---|
-| `storage` | `"sqlite"` | `"sqlite"` keeps the index in a SQLite database (WAL mode) — the daemon is the only writer, and queries are answered from it. `"mmap"` uses the original memory-mapped binary index instead, which is faster for bare name queries but has no query language. See [`sqlite.md`](sqlite.md) for the trade-offs. |
+| `storage` | `"sqlite"` | `"sqlite"` keeps the index in a SQLite database (WAL mode) — the engine is the only writer, and queries are answered from it. `"mmap"` uses the original memory-mapped binary index instead, which is faster for bare name queries but has no query language. See [`sqlite.md`](sqlite.md) for the trade-offs. |
 | `db_dir` | `null` | Where the database lives. `null` means a `db/` folder beside the mmap index — so setting `disk_index_dir` moves the database too. |
 | `persist_index` | `true` | `false` keeps **nothing** on disk: no database, no mmap file. Everything lives in RAM and is rebuilt on every start (useful for throwaway/portable use; a big `$HOME` costs real memory). |
 | `disk_index_dir` | `null` | Where the mmap index lives (`index-v1.bin`). `null` means `$XDG_CACHE_HOME/easysearch` (i.e. `~/.cache/easysearch`). Only used when `storage` is `"mmap"`. |
@@ -70,10 +70,10 @@ queries:
 
 | Key | Default | Effect |
 |---|---|---|
-| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) is cached so repeated content searches do not re-extract it. **Off at boot** and **live-toggleable** — **Settings ▸ Indexing ▸ Background content index**, or `POST /v1/config` — and switching it off frees the cache, so it costs nothing while off. |
+| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) is cached so repeated content searches do not re-extract it. **Off at boot** and **live-toggleable** — **Settings ▸ Indexing ▸ Background content index** (the app pushes it to the engine) — and switching it off frees the cache, so it costs nothing while off. |
 | `content_index_max_file_bytes` | `8388608` (8 MB) | Files larger than this are not cached (they are still searched live). |
 | `content_index_total_cap_bytes` | `268435456` (256 MB) | Total size of the cache; LRU-evicted beyond this. With the default disk store this bounds the spool directory; with `content_index_in_memory` it bounds resident memory. |
-| `content_index_in_memory` | `false` | **Where** the cache lives: `false` spools text to `<disk_index_dir>/content/` and reads it back per lookup, so documents do not stay resident; `true` keeps it in RAM. Set at boot with `--content-in-memory` or `EASYSEARCH_CONTENT_MEMORY=1` (the launcher flag reaches the daemon the app spawns through the environment). |
+| `content_index_in_memory` | `false` | **Where** the cache lives: `false` spools text to `<disk_index_dir>/content/` and reads it back per lookup, so documents do not stay resident; `true` keeps it in RAM. Set at boot with `--content-in-memory` or `EASYSEARCH_CONTENT_MEMORY=1` (the launcher flag reaches the engine child the app spawns through the environment). |
 
 ## Behaviour and limits
 
@@ -95,8 +95,8 @@ cp .gitignore ~/.config/easysearch/ignore
 There is a GUI for this (no hand-editing required): **Tools ▸ Ignore files…**
 edits the file with a **Save & rebuild** button, and **Settings ▸ Indexing**
 toggles `respect_ignore_files`. The toggle is **live**: it is pushed to the
-running engine (or the daemon, over `POST /v1/ignore`) and followed by a rebuild,
-so it takes effect without restarting anything.
+running engine (the app's child process) and followed by a rebuild, so it takes
+effect without restarting anything.
 
 ## Related files
 
@@ -107,4 +107,4 @@ so it takes effect without restarting anything.
 | `~/.config/easysearch/ignore` | global ignore patterns |
 | `~/.cache/easysearch/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
 | `~/.cache/easysearch/index-v1.bin` | the mmap index, when `storage = "mmap"` |
-| `~/.cache/easysearch/daemon.log` | the daemon's log when started by the combined binary |
+| `~/.cache/easysearch/engine.log` | the engine child's log |

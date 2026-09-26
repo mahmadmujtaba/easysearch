@@ -4,6 +4,56 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-09-26
+
+### Changed
+
+- **The engine is now a child process of the app, over pipes — there is no HTTP,
+  no socket and no port.** The daemon used to listen on `127.0.0.1:5858` and
+  answer a REST-ish JSON API; that meant a local service to secure (no auth, any
+  process on the machine could reach it) and a third tier (app, daemon, CLI) to
+  keep in step. The app now spawns `easysearch --engine` as its own child, keeps
+  its stdin/stdout, and they exchange one JSON object per line
+  ([`docs/api.md`](docs/api.md), the new *Engine protocol*). Nothing about the
+  index is reachable from outside the process pair, so there is no endpoint to
+  expose. Requests are multiplexed by id and answered on the engine's own
+  threads, so a slow content search never blocks the status poller. The engine's
+  log is `~/.cache/easysearch/engine.log`.
+- **The tray moved back into the app, and closing the window hides it.** With the
+  engine as a child of the app, the tray belongs to the app process too: the X
+  button hides the window (the engine keeps indexing, the tray stays), and *Quit*
+  — the tray's *Quit*, *File ▸ Quit EasySearch*, or `easysearch --quit` — stops
+  the app and its engine together. `easysearch --stop`, the "quit on close"
+  setting and the "Stop background service" menu item are gone; the File menu has
+  *Hide window* and *Quit EasySearch*.
+- **The CLI runs the engine in-process.** There is no daemon to attach to, so
+  `easysearch-cli --remote ADDR` is gone; a script gets an answer without
+  touching the app. `easysearch-cli self-update --restart-app` (was
+  `--restart-daemon`) asks the running app to quit so the next launch uses the
+  new binary.
+- **`easysearch-gui` (the standalone dev binary) runs the engine in-process.**
+  `--daemon ADDR` / `EASYSEARCH_DAEMON` are gone with the HTTP tier.
+
+### Removed
+
+- `core/src/remote.rs` (the HTTP/1.1 client), the `tiny_http` dependency, the
+  daemon's HTTP routing and query-parameter parsing, `--addr`, `easysearch
+  --stop`, and `core::api::DEFAULT_ADDR` / `percent_decode` /
+  `category_from_str`. `core/src/api.rs` is now just the protocol's wire types.
+
+### Added
+
+- `core/src/proto.rs` (the frame types) and `core/src/child.rs` (the client the
+  app uses to drive its engine child).
+
+### Docs
+
+- A full sweep for the old architecture: `docs/api.md` is now the engine
+  protocol; `scope.md`, `ui.md`, `config.md`, `sqlite.md`, `packaging.md`,
+  `updates.md`, `pending.md`, `README.md`, the screenshots guide, the Makefile
+  and the packaging prose no longer describe an HTTP service, a `--daemon`/`--addr`
+  flag, or a desktop-followed theme.
+
 ## [0.33.0] - 2026-09-26
 
 ### Changed

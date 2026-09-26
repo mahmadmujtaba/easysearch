@@ -10,7 +10,6 @@
 //! preview/details panel — over a view tab strip, recent searches and a live
 //! status bar. Tokyo Night palette; Wayland-first windowing.
 
-use easysearch_core::api::DEFAULT_ADDR;
 use easysearch_core::update::{CurlFetcher, InstallReport, Stage, UpdateConfig, Updater};
 use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
@@ -22,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
@@ -443,38 +444,11 @@ fn window_icon() -> egui::IconData {
 
 /// Choose the search backend for the standalone `easysearch-gui` binary.
 ///
-/// `--daemon <addr>` (or `EASYSEARCH_DAEMON=<addr>`) uses that daemon;
-/// otherwise a daemon already listening on [`DEFAULT_ADDR`] is used when
-/// reachable; otherwise the engine runs in-process, so the GUI always works.
+/// The engine runs in this process. The standalone GUI is a development
+/// convenience — prefer the combined `easysearch` app, which spawns the engine as
+/// its child, so a closed window leaves the index running and the tray available.
 pub fn select_backend() -> Arc<Backend> {
-    if let Some(addr) = daemon_from_env_or_args() {
-        eprintln!("easysearch-gui: using daemon at {addr}");
-        return Arc::new(Backend::remote(addr));
-    }
-    if easysearch_core::remote::probe(DEFAULT_ADDR, Duration::from_millis(300)) {
-        eprintln!("easysearch-gui: using daemon at {DEFAULT_ADDR}");
-        return Arc::new(Backend::remote(DEFAULT_ADDR));
-    }
-    eprintln!("easysearch-gui: no daemon on {DEFAULT_ADDR} — using the in-process engine");
     Arc::new(Backend::local(easysearch_core::Config::load()))
-}
-
-fn daemon_from_env_or_args() -> Option<String> {
-    if let Ok(addr) = std::env::var("EASYSEARCH_DAEMON")
-        && !addr.trim().is_empty()
-    {
-        return Some(addr);
-    }
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if let Some(rest) = arg.strip_prefix("--daemon=") {
-            return Some(rest.to_string());
-        }
-        if arg == "--daemon" {
-            return args.next();
-        }
-    }
-    None
 }
 
 /// Default for [`GuiPrefs::dark`].
@@ -886,8 +860,17 @@ struct App {
     search_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
+    tray_rx: Option<mpsc::Receiver<tray::TrayMsg>>,
+    // Held for its lifetime: dropping the handle unregisters the tray item.
+    #[allow(dead_code)]
+    tray_handle: Option<ksni::blocking::Handle<tray::AppTray>>,
+    /// Set by a real Quit (menu, tray, `--quit`), so the close handler lets the
+    /// window close instead of hiding it to the tray.
+    tray_quit: bool,
     /// Our own view of window visibility (egui 0.31 exposes no readback).
     window_visible: bool,
+    /// Recent searches shared with the tray menu.
+    history_shared: Arc<Mutex<Vec<String>>>,
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
@@ -935,7 +918,7 @@ struct App {
     ipc_rx: mpsc::Receiver<ipc::Command>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
-    /// Human label for the search backend ("in-process" or "daemon HOST:PORT").
+    /// Human label for the search backend ("in-process" or "engine pid N").
     backend_label: String,
 }
 
@@ -977,6 +960,17 @@ impl App {
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
         let backend_label = backend.label();
+        // The tray lives here, in the app process, next to the engine child it
+        // spawned: the icon represents this app, and its Quit stops it.
+        let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
+        let (tray_rx, tray_handle) =
+            match tray::spawn_tray("EasySearch", Arc::clone(&history_shared)) {
+                Ok((rx, handle)) => (Some(rx), Some(handle)),
+                Err(e) => {
+                    eprintln!("system tray unavailable: {e}");
+                    (None, None)
+                }
+            };
 
         // Restore the tabs that were open when the app last closed (at least one).
         let tab_prefs = if prefs.tabs.is_empty() {
@@ -1119,7 +1113,11 @@ impl App {
             search_rect: None,
             ui_font,
             mono_font,
+            tray_rx,
+            tray_handle,
+            tray_quit: false,
             window_visible: true,
+            history_shared,
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
@@ -1463,6 +1461,13 @@ impl App {
         if let Some(s) = self.sort {
             let needle = self.last_sent.clone();
             sort_results(&mut self.results, s, &needle, self.prefs.fuzzy);
+        }
+    }
+
+    /// Mirror the persisted history into the shared tray snapshot.
+    fn sync_history(&mut self) {
+        if let Ok(mut h) = self.history_shared.lock() {
+            h.clone_from(&self.prefs.history);
         }
     }
 
@@ -3045,15 +3050,62 @@ impl eframe::App for App {
                     ctx.memory_mut(|m| m.request_focus(search_id()));
                 }
                 ipc::Command::Quit => {
+                    // A real quit: window *and* engine child.
+                    self.tray_quit = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         }
 
-        // The window closes; the daemon (and its tray) keeps running. That is the
-        // whole point of the split: this process owns the GL context and a copy
-        // of the index, and letting it exit is what keeps the footprint low.
-        // `CancelClose` is never sent — an explicit `--quit` is the same thing.
+        // Keep the tray's recent-searches menu in step with the persisted list.
+        self.sync_history();
+
+        // Tray messages: open/toggle the window, re-run a search, or quit.
+        let mut tray_msgs = Vec::new();
+        if let Some(rx) = &self.tray_rx {
+            while let Ok(msg) = rx.try_recv() {
+                tray_msgs.push(msg);
+            }
+        }
+        for msg in tray_msgs {
+            match msg {
+                tray::TrayMsg::Open => {
+                    show_window(ctx);
+                    self.window_visible = true;
+                }
+                tray::TrayMsg::Toggle => {
+                    if self.window_visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.window_visible = false;
+                    } else {
+                        show_window(ctx);
+                        self.window_visible = true;
+                    }
+                }
+                tray::TrayMsg::Search(q) => {
+                    show_window(ctx);
+                    self.window_visible = true;
+                    self.run_query(&q);
+                    self.send_query();
+                }
+                tray::TrayMsg::Quit => {
+                    self.tray_quit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
+        // The X button hides to the tray, so the engine child keeps indexing and
+        // the app comes back with one click. Only an explicit Quit (menu, tray,
+        // `--quit`) exits, and without a tray the window simply closes.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.tray_quit
+            && self.tray_handle.is_some()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.window_visible = false;
+        }
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -3290,7 +3342,7 @@ impl App {
                 {
                     self.engine.set_content_index(content_index);
                     // Mirror it so the checkbox holds still until the fresh
-                    // status (a remote daemon's is polled) arrives.
+                    // status (the engine's is polled) arrives.
                     if !content_index {
                         self.status.content_index = ContentIndexStatus::Disabled;
                     } else if !matches!(
@@ -3406,26 +3458,27 @@ impl App {
                         }
                         ui.separator();
                         if ui
-                            .button("Close window")
+                            .button("Hide window")
                             .on_hover_text(
-                                "Closes this window and frees it. EasySearch keeps \
-                                 running in the background (tray icon), so the index \
-                                 and the HTTP API stay available.",
+                                "Hides the window but keeps EasySearch running in the tray, \
+                                 so the engine keeps indexing (and a search stays warm). \
+                                 Open it again from the tray or `easysearch --toggle`.",
                             )
                             .clicked()
                         {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            self.window_visible = false;
                             ui.close_menu();
                         }
                         if ui
-                            .button("Stop background service…")
+                            .button("Quit EasySearch")
                             .on_hover_text(
-                                "Stops the indexing daemon as well, so nothing is left \
-                                 running. The index on disk is kept.",
+                                "Stops the app and its engine process. The index on disk \
+                                 is kept, so the next start is instant.",
                             )
                             .clicked()
                         {
-                            self.engine.shutdown();
+                            self.tray_quit = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ui.close_menu();
                         }
@@ -5373,8 +5426,8 @@ impl App {
         }
     }
 
-    /// Relaunch onto the freshly installed binary: stop the daemon (so the new
-    /// process starts the new one) and hand over to a detached copy of ourselves.
+    /// Relaunch onto the freshly installed binary: stop the app's engine child
+    /// (so the new process starts the new one) and hand over to a detached copy.
     fn restart_into_new_version(&mut self) {
         self.engine.shutdown();
         std::thread::sleep(Duration::from_millis(400));
@@ -5500,7 +5553,7 @@ impl App {
                         ui.add_space(6.0);
                         ui.label(
                             egui::RichText::new(
-                                "Restart to run the new version — the search daemon restarts with it.",
+                                "Restart to run the new version — the engine restarts with it.",
                             )
                             .color(t.dim),
                         );
@@ -5671,7 +5724,7 @@ impl App {
         if let Some(on) = toggle {
             self.engine.set_respect_ignore(on);
             // Mirror it at once so the checkbox does not flicker while a remote
-            // daemon's status is still in flight.
+            // engine's status is still in flight.
             self.status.respect_ignore_files = on;
             self.ignore_msg = Some(if on {
                 "Honoring ignore files — reindexing…".to_string()

@@ -121,7 +121,7 @@ pub struct Config {
     /// resident. Turning this on trades up to `content_index_total_cap_bytes` of
     /// memory for another pass not having to touch the disk. Set it at boot with
     /// `--content-in-memory`, or `EASYSEARCH_CONTENT_MEMORY=1` — which is how a
-    /// launcher flag reaches the daemon the app spawns.
+    /// launcher flag reaches the engine child the app spawns.
     pub content_index_in_memory: bool,
     /// Period of the degraded-mode rescan (seconds), used when kernel watch
     /// limits are exhausted.
@@ -215,7 +215,7 @@ impl Config {
             Err(_) => Config::default(),
         };
         // Boot-time override: the launcher passes the flag through the
-        // environment so it reaches the daemon the app spawns.
+        // environment so it reaches the engine child the app spawns.
         if let Some(on) =
             content_memory_from_env(std::env::var("EASYSEARCH_CONTENT_MEMORY").ok().as_deref())
         {

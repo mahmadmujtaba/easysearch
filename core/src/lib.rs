@@ -11,6 +11,7 @@
 
 pub mod api;
 pub mod backend;
+pub mod child;
 pub mod config;
 pub mod content;
 pub mod content_index;
@@ -21,7 +22,7 @@ pub mod logo;
 pub mod matcher;
 pub mod overlay;
 pub mod process;
-pub mod remote;
+pub mod proto;
 pub mod roots;
 pub mod sqlite_index;
 pub mod update;
@@ -29,8 +30,8 @@ pub mod walker;
 pub mod watcher;
 
 pub use backend::Backend;
+pub use child::ChildEngine;
 pub use config::Config;
 pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
 pub use matcher::{Category, CompiledQuery, Query};
-pub use remote::Remote;
 pub use update::{Available, Fetcher, InstallReport, Stage, UpdateConfig, UpdateError, Updater};

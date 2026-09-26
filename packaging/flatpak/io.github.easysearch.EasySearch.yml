@@ -46,7 +46,7 @@ modules:
 
     build-commands:
       - cargo build --release --workspace --locked --offline
-      # easysearch is the GUI *and* the daemon; the separate easysearch-gui
+      # easysearch is the app *and* the engine; the separate easysearch-gui
       # binary is a development convenience and is not shipped.
       - install -Dpm0755 target/release/easysearch  /app/bin/easysearch
       - install -Dpm0755 target/release/easysearch-cli        /app/bin/easysearch-cli

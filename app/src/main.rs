@@ -1,9 +1,13 @@
 //! `easysearch` — EasySearch in a single file.
 //!
-//! One executable that is both the GUI and the search daemon: run it and it
-//! starts a daemon for you (re-executing itself) and opens the GUI attached to
-//! it. Run it as `easysearch --daemon` to run only the engine, which is
-//! also what the auto-start path uses internally.
+//! One executable that is both the **app** (window + tray) and the **engine**:
+//! run it and it opens the GUI and spawns the engine as its child
+//! (`easysearch --engine`, the same binary with the pipes attached). The engine
+//! owns the index; the app owns the window and the tray. Closing the window
+//! hides it, so the engine keeps indexing; quitting stops both.
+//!
+//! There is no socket, no port and no HTTP: the app and its engine talk over the
+//! child's stdin/stdout (`docs/api.md`).
 
 use std::process::ExitCode;
 
@@ -13,15 +17,15 @@ EasySearch — realtime file and content search
 USAGE:
     easysearch [OPTIONS]
 
-Run with no options to open the GUI. A search daemon is started automatically
-(this same binary re-executes itself in daemon mode) and the GUI attaches to
-it. The daemon owns the index and the tray icon; closing the window leaves both
-running, and the HTTP API keeps answering for other clients.
+Run with no options to open the GUI. The engine (this same binary, re-executed
+with --engine) is started as a child process and owns the index; the app keeps
+its pipes, so nothing is exposed to the network. Closing the window hides it to
+the tray and the engine keeps running; quitting stops both.
 
 OPTIONS:
-    --addr <HOST:PORT>   daemon address (default 127.0.0.1:5858)
-    --daemon             run only the search daemon, no GUI
-    --quiet              daemon: don't log when the index becomes live
+    --engine             run only the engine, speaking JSON on stdin/stdout
+                         (this is how the app spawns it; not for humans)
+    --quiet              engine: don't log when the index becomes live
     --content-in-memory  keep the content cache in RAM instead of spooling it to
                          disk; faster for repeated content searches, but it holds
                          up to the configured cap (256 MB) resident
@@ -32,8 +36,7 @@ CONTROL (talk to a running window — bind these to desktop shortcuts):
     --toggle             show the window if hidden, hide it if visible
     --show / --hide      show / hide the window
     --search <QUERY>     show the window and run a search
-    --quit               close the window; the background service keeps running
-    --stop               stop the background service (`POST /v1/shutdown`)
+    --quit               stop the app (window and engine)
 
 The first --toggle, --show or --search with nothing running starts the app, so
 one key both launches it and drives it.
@@ -43,8 +46,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Before anything can start a thread: bound glibc's malloc arenas, and take
-    // the content-cache mode from the command line so the daemon spawned below
-    // inherits it through the environment.
+    // the content-cache mode from the command line so the engine child inherits
+    // it through the environment.
     easysearch_core::process::cap_malloc_arenas();
     if args.iter().any(|a| a == "--content-in-memory") {
         easysearch_core::process::use_content_memory();
@@ -66,26 +69,10 @@ fn main() -> ExitCode {
         return ExitCode::from(code as u8);
     }
 
-    let addr = easysearch_app::addr_from_args(&args)
-        .unwrap_or_else(|| easysearch_app::DEFAULT.to_string());
-
-    // `--stop` stops the background service itself (the window may not exist).
-    if args.iter().any(|a| a == "--stop") {
-        return match easysearch_app::stop_daemon(&addr) {
-            Ok(()) => {
-                println!("easysearch: asked the service on {addr} to stop");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("easysearch: cannot stop the service on {addr}: {e}");
-                ExitCode::FAILURE
-            }
-        };
-    }
-
-    if args.iter().any(|a| a == "--daemon") {
+    // The engine half: the parent has its pipes attached.
+    if args.iter().any(|a| a == "--engine") {
         let quiet = args.iter().any(|a| a == "--quiet");
-        return match easysearch_app::run_daemon(&addr, quiet) {
+        return match easysearch_app::run_engine(quiet) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("easysearch: {e}");
@@ -94,7 +81,7 @@ fn main() -> ExitCode {
         };
     }
 
-    match easysearch_app::run_gui(&addr) {
+    match easysearch_app::run_gui() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("easysearch: {e}");

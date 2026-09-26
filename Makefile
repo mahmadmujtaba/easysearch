@@ -8,10 +8,10 @@
 #   make check      type-check without producing binaries
 #   make clippy     lint
 #   make fmt        format sources
-#   make run        build + run EasySearch (one binary: GUI + daemon)
+#   make run        build + run EasySearch (one binary: window + engine child)
 #   make run-dev    same, dev profile
 #   make run-gui    run just the GUI binary (dev tool)
-#   make daemon     run just the search daemon (HTTP/JSON API)
+#   make daemon     run just the engine (JSON frames on stdin/stdout)
 #   make dist       copy the shareable single binary to dist/
 #   make install    release binaries to ~/.local/bin + desktop entry and icon
 #                   to ~/.local/share (so the launcher and the window
@@ -73,8 +73,8 @@ clippy:
 fmt:
 	$(CARGO_BIN) fmt --all
 
-## Build and launch EasySearch. This one binary is both the GUI and
-## the search daemon: it starts a daemon (re-executing itself) and attaches.
+## Build and launch EasySearch. This one binary is both the app (window +
+## tray) and the engine: it spawns the engine as its child and attaches.
 run: release
 	./$(BIN_DIR)/easysearch
 
@@ -130,13 +130,14 @@ validate-packaging:
 	 fi; \
 	 echo "appstreamcli: no errors"
 
-## Build and launch the search daemon (GUI and CLI then attach to it).
+## Run just the engine (normally the app's child; this drives it by hand).
+## It speaks JSON frames on stdin/stdout — see docs/api.md.
 daemon: release
-	./$(BIN_DIR)/easysearch-daemon --addr 127.0.0.1:5858
+	./$(BIN_DIR)/easysearch-daemon
 
-## Build and launch the daemon (dev profile).
+## Run just the engine (dev profile).
 daemon-dev: build
-	./target/debug/easysearch-daemon --addr 127.0.0.1:5858
+	./target/debug/easysearch-daemon
 
 ## Install release binaries into ~/.local/bin, plus the desktop entry, the icon
 ## and the AppStream metadata into ~/.local/share.

@@ -47,8 +47,8 @@ and no web view. Queries understand globs, several terms, exclusions and regex;
 content search uses the embedded ripgrep engine and always reads files live
 rather than serving stale results.
 
-This package installs the combined GUI + search-daemon binary
-(easysearch), the scriptable CLI (easysearch-cli) and a headless daemon
+This package installs the combined app + search-engine binary
+(easysearch), the scriptable CLI (easysearch-cli) and a headless engine
 (easysearch-daemon), plus a desktop entry, an AppStream metainfo file and the
 application icons.
 
@@ -61,8 +61,8 @@ cargo build --release --workspace --locked
 %install
 rm -rf %{buildroot}
 install -d %{buildroot}%{_bindir}
-# easysearch is the GUI *and* the daemon (it re-executes itself with
-# --daemon), so easysearch-gui — a development convenience that would add
+# easysearch is the app *and* the engine (it re-executes itself with
+# --engine), so easysearch-gui — a development convenience that would add
 # another ~17 MB — is deliberately not packaged.
 install -Dpm0755 target/release/easysearch  %{buildroot}%{_bindir}/easysearch
 install -Dpm0755 target/release/easysearch-cli        %{buildroot}%{_bindir}/easysearch-cli

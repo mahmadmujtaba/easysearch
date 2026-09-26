@@ -27,9 +27,9 @@ tools being supplied by the environment. On Fedora the same job is done by
 All three formats install the same payload:
 
 ```
-/usr/bin/easysearch                  the app: GUI + search daemon in one file
+/usr/bin/easysearch                  the app: GUI + engine in one file
 /usr/bin/easysearch-cli                        scriptable CLI
-/usr/bin/easysearch-daemon                 headless daemon (HTTP/JSON API)
+/usr/bin/easysearch-daemon                 headless engine (stdio protocol; normally a child of the app)
 /usr/share/applications/io.github.easysearch.EasySearch.desktop
 /usr/share/metainfo/io.github.easysearch.EasySearch.metainfo.xml
 /usr/share/icons/hicolor/{scalable,64x64,128x128,256x256,512x512}/apps/io.github.easysearch.EasySearch.{svg,png}
@@ -39,7 +39,7 @@ All three formats install the same payload:
 ```
 
 `easysearch-gui` is a development convenience that duplicates `easysearch`
-(which already runs the GUI *and* the daemon) and would add another ~17 MB, so
+(which already runs the GUI *and* the engine) and would add another ~17 MB, so
 it is deliberately not packaged. `make install` still installs it locally.
 
 `make install` is the user-local counterpart to these packages: it drops the
@@ -62,7 +62,7 @@ packaging/
   icons/            hicolor icon theme tree; the SVG is `icons/transparent-logo.svg`
                     under the application id, and PNGs are rendered from it at
                     build time. The app embeds a 512 px copy —
-                    `gui/assets/logo.png` — for its window icon, tray pixmap and
+                    `core/assets/logo.png` — for its window icon, tray pixmap and
                     About dialog.
   debian/           control template (substituted by the build script)
   rpm/              spec template (substituted by the build script)
@@ -129,10 +129,10 @@ where the other lives. Keep them in step by hand:
 - `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg` —
   `transparent-logo.svg` plus a header comment. The file name has to match the
   application id for icon themes and launchers to find it.
-- `gui/assets/logo.png` — a 512 px render of `transparent-logo.png`, compiled
+- `core/assets/logo.png` — a 512 px render of `transparent-logo.png`, compiled
   into the binary for the window icon, the tray pixmap and the About dialog. It
   is genuinely transparent (alpha 0), and the tray's ARGB32 buffer is
-  premultiplied for it; `gui/src/logo.rs` has tests for both.
+  premultiplied for it; `core/src/logo.rs` has tests for both.
 
 `make deb` also renders PNG icons (16–512 px) from the SVG in the packaging tree,
 so a `.deb` carries both.
@@ -169,10 +169,9 @@ Things worth knowing:
 - **Filesystem access.** The sandbox only sees what `finish-args` grants. It
   grants `--filesystem=home` because that is the app's default search root. To
   search the rest of the disk, add `--filesystem=host:ro`.
-- **The HTTP/JSON API stays inside the sandbox.** Network access is not granted,
-  so the daemon listens on loopback *within* the sandbox and other host
-  processes cannot reach it. If that matters to you, add `--share=network`.
-  If binding loopback ever fails, the app falls back to an in-process engine.
+- **No network API.** The engine talks to the app over private pipes, so there
+  is no listening socket and nothing an outside process could reach. Network
+  access is not granted, and none is needed.
 - **Tray icon.** `ksni` needs the StatusNotifierWatcher on the session bus;
   `--talk-name=org.kde.StatusNotifierWatcher` is granted. Tray icons in a
   sandbox remain the least reliable part of Flatpak; the app works without it.

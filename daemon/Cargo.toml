@@ -3,7 +3,7 @@ name = "easysearch-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Realtime search daemon: owns the index and serves a localhost HTTP/JSON API"
+description = "Realtime search engine: owns the index and answers JSON frames on stdin/stdout (a child of the app)"
 
 [lib]
 name = "easysearch_daemon"
@@ -15,10 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 easysearch-core = { path = "../core" }
-tiny_http = "0.12"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
-# The tray icon is a StatusNotifierItem on the session D-Bus, hosted by the
-# daemon so that it outlives the window.
-ksni = { version = "0.3", features = ["blocking"] }
-libc = "0.2"

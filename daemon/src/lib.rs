@@ -1,62 +1,32 @@
-//! `easysearch-daemon` — owns the search engine and serves it over a
-//! localhost HTTP/JSON API, so the GUI (and any other client: scripts, another
-//! language, curl) is just a consumer. See `docs/api.md`.
+//! `easysearch-daemon` — the search engine running as a **child process**.
 //!
-//! Endpoints:
-//! ```text
-//! GET  /v1/health   → {"ok":true,"version":..,"api":1,"uptime_secs":..}
-//! GET  /v1/status   → {"status":{..},"files":..,"dirs":..}
-//! POST /v1/search   → Query (JSON) → SearchResponse (JSON)
-//! GET  /v1/search?query=..&regex=1&content=..&limit=..&category=..&under=..
-//!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
-//! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
-//! POST /v1/rebuild  → {"ok":true}
-//! POST /v1/ignore   → {"respect":bool,"follow_symlinks":bool,"content_index":bool,"rebuild":bool} → {"ok":true}
-//! POST /v1/config   → alias of /v1/ignore (live index settings)
-//! POST /v1/shutdown → {"ok":true}, then the daemon stops (and exits)
-//! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
-//!                              returned when it changes (or on timeout)
-//! ```
+//! It owns the index and answers requests as JSON frames on its stdin/stdout
+//! ([`easysearch_core::proto`]). There is deliberately **no socket and no HTTP**:
+//! the only way to reach it is the pipe its parent holds, so the index is not
+//! exposed to anything else on the machine. The parent (the app, the CLI, a test)
+//! spawns it, sends requests and kills it on exit.
 //!
-//! Bind address defaults to `127.0.0.1:5858` — the API is **localhost only**;
-//! it has no authentication, so do not expose it to a network.
-//!
-//! Change notification is long-polling rather than SSE/WebSocket: it works with
-//! every HTTP client (curl, any language), needs no framing layer, and — unlike
-//! server-sent events — is not defeated by `tiny_http`'s chunk encoder, which
-//! buffers small writes so short SSE frames are never flushed.
+//! End users normally never see this: the combined `easysearch` app spawns it as
+//! its own child. The standalone `easysearch-daemon` binary is the same engine,
+//! for tests and for anyone driving the protocol themselves.
 
-use easysearch_core::api::{
-    API_VERSION, CountDto, ErrorDto, Health, SearchResponseDto, StatusReport, category_from_str,
-};
-use easysearch_core::ipc;
-use easysearch_core::remote::percent_decode;
+use easysearch_core::api::{API_VERSION, CountDto, Health, SearchResponseDto, StatusReport};
+use easysearch_core::proto::{ConfigPatch, Op, Request, Response};
 use easysearch_core::{Engine, Query};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-mod tray;
-
-/// Cap on concurrently served requests (each request holds one thread).
+/// Cap on concurrently served requests (each request holds one thread). A slow
+/// content search must not block the status poller or the next query.
 const MAX_CONCURRENCY: usize = 32;
-
-/// How many recent queries the tray menu remembers.
-const RECENT_CAP: usize = 12;
 
 pub struct Daemon {
     engine: Arc<Engine>,
     started: Instant,
-    version: String,
-    inflight: AtomicUsize,
-    /// Set by [`Daemon::serve_forever`]; lets `POST /v1/shutdown` stop the
-    /// accept loop (used to restart onto a freshly installed binary).
-    server: OnceLock<Arc<Server>>,
-    /// Newest-first queries seen by the API, mirrored into the tray submenu.
-    recent: Arc<Mutex<Vec<String>>>,
 }
 
 impl Daemon {
@@ -64,501 +34,231 @@ impl Daemon {
         Arc::new(Daemon {
             engine,
             started: Instant::now(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            inflight: AtomicUsize::new(0),
-            server: OnceLock::new(),
-            recent: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
-    /// The recent-queries list, shared with the tray menu.
-    pub fn recent_queries(&self) -> Arc<Mutex<Vec<String>>> {
-        Arc::clone(&self.recent)
-    }
-
-    /// Remember a query for the tray's *Recent searches* submenu.
-    ///
-    /// The daemon answers every client (GUI tabs, CLI, curl), so this is the
-    /// only place that sees them all; it keeps a small newest-first ring.
-    fn record_query(&self, q: &Query) {
-        let name = q.name.trim();
-        let label = if !name.is_empty() {
-            name
-        } else {
-            q.content.as_deref().unwrap_or("").trim()
-        };
-        if label.is_empty() {
-            return;
-        }
-        if let Ok(mut recent) = self.recent.lock() {
-            recent.retain(|r| r != label);
-            recent.insert(0, label.to_string());
-            recent.truncate(RECENT_CAP);
-        }
-    }
-
-    /// Accept connections until the server stops, one thread per request.
-    pub fn serve_forever(self: Arc<Self>, server: Arc<Server>) {
-        let _ = self.server.set(Arc::clone(&server));
-        let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
-        for request in server.incoming_requests() {
-            while self.inflight.load(Ordering::Relaxed) >= MAX_CONCURRENCY {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            self.inflight.fetch_add(1, Ordering::Relaxed);
-            let daemon = Arc::clone(&self);
-            match std::thread::Builder::new()
-                .name("http".into())
-                .spawn(move || {
-                    daemon.handle(request);
-                    daemon.inflight.fetch_sub(1, Ordering::Relaxed);
-                }) {
-                Ok(h) => handles.push(h),
-                Err(e) => {
-                    eprintln!("daemon: cannot spawn handler thread: {e}");
-                    self.inflight.fetch_sub(1, Ordering::Relaxed);
-                }
-            }
-            handles.retain(|h| !h.is_finished());
-        }
-    }
-
-    fn handle(&self, mut request: Request) {
-        let method = request.method().clone();
-        let url = request.url().to_string();
-        let (path, params) = match url.split_once('?') {
-            Some((p, q)) => (p.to_string(), q.to_string()),
-            None => (url, String::new()),
-        };
-
-        // Streaming responses are not used (see the module docs), so every
-        // route answers with a complete JSON body.
-        let (code, body) = match (&method, path.as_str()) {
-            (Method::Get, "/v1/health") => (200, self.health_json()),
-            (Method::Get, "/v1/status") => (200, self.status_json()),
-            (Method::Get, "/v1/watch") => {
-                let timeout = param(&params, "timeout")
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(25)
-                    .min(120);
-                (200, self.watch_json(Duration::from_secs(timeout)))
-            }
-            (Method::Get, "/v1/search") => match parse_query_params(&params) {
-                Ok(q) => {
-                    self.record_query(&q);
-                    self.search_json(&q)
-                }
-                Err(e) => (400, err_json(&e)),
+    /// Answer one request. Never fails: an error becomes an `error` reply.
+    fn dispatch(&self, request: Request) -> Response {
+        let id = request.id;
+        match request.op {
+            Op::Health => as_reply(id, &self.health()),
+            Op::Status => as_reply(id, &self.status()),
+            Op::Search => match payload::<Query>(request.payload) {
+                Ok(q) => match self.engine.search(&q) {
+                    Ok(response) => as_reply(id, &SearchResponseDto::from_response(response)),
+                    Err(e) => Response::failed(id, e),
+                },
+                Err(e) => Response::failed(id, e),
             },
-            (Method::Post, "/v1/search") | (Method::Post, "/v1/count") => {
-                let count_only = path == "/v1/count";
-                let mut body = String::new();
-                match request.as_reader().read_to_string(&mut body) {
-                    Ok(_) => match serde_json::from_str::<Query>(&body) {
-                        Ok(q) if count_only => match self.engine.count(&q) {
-                            Ok(count) => (
-                                200,
-                                serde_json::to_string(&CountDto { count }).unwrap_or_default(),
-                            ),
-                            Err(e) => (400, err_json(&e)),
-                        },
-                        Ok(q) => {
-                            self.record_query(&q);
-                            self.search_json(&q)
-                        }
-                        Err(e) => (400, err_json(&format!("invalid query JSON: {e}"))),
-                    },
-                    Err(e) => (400, err_json(&format!("cannot read body: {e}"))),
-                }
-            }
-            (Method::Post, "/v1/rebuild") => {
+            Op::Count => match payload::<Query>(request.payload) {
+                Ok(q) => match self.engine.count(&q) {
+                    Ok(count) => as_reply(id, &CountDto { count }),
+                    Err(e) => Response::failed(id, e),
+                },
+                Err(e) => Response::failed(id, e),
+            },
+            Op::Rebuild => {
                 self.engine.rebuild();
-                (200, r#"{"ok":true}"#.to_string())
+                Response::done(id)
             }
-            (Method::Post, "/v1/shutdown") => {
-                self.request_shutdown();
-                (200, r#"{"ok":true}"#.to_string())
-            }
-            (Method::Post, "/v1/ignore") | (Method::Post, "/v1/config") => {
-                let mut body = String::new();
-                match request.as_reader().read_to_string(&mut body) {
-                    Ok(_) => {
-                        let value: serde_json::Value =
-                            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-                        // Each field is optional: only what is present is changed,
-                        // and the rebuild happens once at the end.
-                        let respect = value
-                            .get("respect")
-                            .or_else(|| value.get("respect_ignore_files"))
-                            .and_then(|v| v.as_bool());
-                        let follow = value.get("follow_symlinks").and_then(|v| v.as_bool());
-                        let content_index = value.get("content_index").and_then(|v| v.as_bool());
-                        let rebuild = value
-                            .get("rebuild")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(true);
-                        if let Some(on) = respect {
-                            self.engine.set_respect_ignore(on, false);
-                        }
-                        if let Some(on) = follow {
-                            self.engine.set_follow_symlinks(on, false);
-                        }
-                        if let Some(on) = content_index {
-                            self.engine.set_content_index(on);
-                        }
-                        if (respect.is_some() || follow.is_some()) && rebuild {
-                            self.engine.rebuild();
-                        }
-                        (200, r#"{"ok":true}"#.to_string())
+            Op::Config => match payload::<ConfigPatch>(request.payload) {
+                Ok(patch) => {
+                    // Each field is optional: only what is present changes, and a
+                    // walk-setting change rebuilds once at the end.
+                    if let Some(on) = patch.respect {
+                        self.engine.set_respect_ignore(on, false);
                     }
-                    Err(e) => (400, err_json(&format!("cannot read body: {e}"))),
+                    if let Some(on) = patch.follow_symlinks {
+                        self.engine.set_follow_symlinks(on, false);
+                    }
+                    if let Some(on) = patch.content_index {
+                        self.engine.set_content_index(on);
+                    }
+                    if (patch.respect.is_some() || patch.follow_symlinks.is_some()) && patch.rebuild
+                    {
+                        self.engine.rebuild();
+                    }
+                    Response::done(id)
                 }
-            }
-            (Method::Get, "/") => (200, self.health_json()),
-            _ => (404, err_json(&format!("no route for {method} {path}"))),
-        };
-        let response = Response::from_data(body.into_bytes())
-            .with_status_code(StatusCode(code))
-            .with_header(header("Content-Type", "application/json; charset=utf-8"));
-        if let Err(e) = request.respond(response) {
-            eprintln!("daemon: failed to send response: {e}");
+                Err(e) => Response::failed(id, e),
+            },
+            Op::Shutdown => Response::done(id),
         }
     }
 
-    /// Stop serving (after the response has gone out) so `run_forever` returns
-    /// and the process exits. Used by an in-place update to drop the old binary.
-    fn request_shutdown(&self) {
-        if let Some(server) = self.server.get() {
-            let server = Arc::clone(server);
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(150));
-                server.unblock();
-            });
-        }
-    }
-
-    fn health_json(&self) -> String {
-        let h = Health {
+    fn health(&self) -> Health {
+        Health {
             ok: true,
-            version: self.version.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
             api: API_VERSION,
             uptime_secs: self.started.elapsed().as_secs(),
-        };
-        serde_json::to_string(&h).unwrap_or_default()
+        }
     }
 
-    fn status_json(&self) -> String {
+    fn status(&self) -> StatusReport {
         let (files, dirs) = self.engine.counts();
-        let report = StatusReport {
+        StatusReport {
             status: self.engine.status_snapshot(),
             files,
             dirs,
-        };
-        serde_json::to_string(&report).unwrap_or_default()
-    }
-
-    fn search_json(&self, q: &Query) -> (u16, String) {
-        match self.engine.search(q) {
-            Ok(resp) => (
-                200,
-                serde_json::to_string(&SearchResponseDto::from_response(resp)).unwrap_or_default(),
-            ),
-            Err(e) => (400, err_json(&e)),
         }
     }
+}
 
-    /// Long-poll: return the status report as soon as it differs from the one
-    /// seen at request time, or after `timeout` at the latest.
-    fn watch_json(&self, timeout: Duration) -> String {
-        let start = self.status_json();
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(200));
-            let now = self.status_json();
-            if now != start {
-                return now;
+fn as_reply<T: Serialize>(id: u64, value: &T) -> Response {
+    match serde_json::to_value(value) {
+        Ok(data) => Response::ok(id, data),
+        Err(e) => Response::failed(id, e.to_string()),
+    }
+}
+
+fn payload<T: DeserializeOwned>(value: Option<serde_json::Value>) -> Result<T, String> {
+    let value = value.ok_or("this request needs a payload")?;
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
+/// Serve requests on stdin until stdin closes or a `shutdown` arrives.
+///
+/// Each request is answered on its own thread, so one long search does not
+/// serialize the others; replies are written whole, one JSON object per line.
+pub fn serve(engine: Arc<Engine>) -> Result<(), String> {
+    let daemon = Daemon::new(engine);
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    let inflight = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => break, // the parent went away
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<Request>(&line) {
+            Ok(request) => request,
+            Err(e) => {
+                // No id to answer: report against 0 so the parent can log it.
+                write_frame(&out, &Response::failed(0, format!("bad request: {e}")));
+                continue;
+            }
+        };
+
+        while inflight.load(Ordering::Relaxed) >= MAX_CONCURRENCY {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        inflight.fetch_add(1, Ordering::Relaxed);
+
+        let daemon = Arc::clone(&daemon);
+        let out = Arc::clone(&out);
+        // Clones for the task, so the originals stay usable below.
+        let task_inflight = Arc::clone(&inflight);
+        let task_stop = Arc::clone(&stop);
+        match std::thread::Builder::new()
+            .name("engine-req".into())
+            .spawn(move || {
+                let shutdown = request.op == Op::Shutdown;
+                let response = daemon.dispatch(request);
+                write_frame(&out, &response);
+                task_inflight.fetch_sub(1, Ordering::Relaxed);
+                if shutdown {
+                    task_stop.store(true, Ordering::Relaxed);
+                }
+            }) {
+            Ok(handle) => handles.push(handle),
+            Err(_) => {
+                inflight.fetch_sub(1, Ordering::Relaxed);
             }
         }
-        start
+        handles.retain(|h| !h.is_finished());
+
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
     }
-}
 
-fn header(name: &str, value: &str) -> Header {
-    Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid header")
-}
-
-/// Bind `addr` and serve requests until the process exits.
-///
-/// Shared by the `easysearch-daemon` binary and the combined single-binary app
-/// (which re-executes itself in daemon mode).
-///
-/// The **tray icon belongs to this process**, not to the window: closing the
-/// window frees the GUI's GL stack and its copy of the index, and the tray is
-/// still there to open a fresh one. `POST /v1/shutdown` (or the tray's *Quit*)
-/// stops the daemon itself.
-pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
-    let server = Server::http(addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
-    let bound = server
-        .server_addr()
-        .to_ip()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|| addr.to_string());
-    eprintln!(
-        "easysearch-daemon {} — listening on http://{bound}",
-        env!("CARGO_PKG_VERSION")
-    );
-    let daemon = Daemon::new(engine);
-    spawn_tray(Arc::clone(&daemon), bound.clone());
-    daemon.serve_forever(Arc::new(server));
+    // Let any in-flight reply reach the parent before the process ends.
+    for handle in handles {
+        let _ = handle.join();
+    }
     Ok(())
 }
 
-/// Start the tray item (if the desktop hosts one) and act on its menu.
-///
-/// Runs on its own thread; the returned handle is held there for the process's
-/// lifetime, since dropping it would unregister the item.
-fn spawn_tray(daemon: Arc<Daemon>, addr: String) {
-    let (rx, handle) = match tray::spawn_tray("EasySearch", daemon.recent_queries()) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!("easysearch-daemon: no system tray: {e}");
-            return;
-        }
-    };
-    std::thread::Builder::new()
-        .name("tray".into())
-        .spawn(move || {
-            let _handle = handle;
-            while let Ok(msg) = rx.recv() {
-                match msg {
-                    tray::TrayMsg::Quit => {
-                        daemon.request_shutdown();
-                        break;
-                    }
-                    tray::TrayMsg::Open => open_window(&addr, None),
-                    tray::TrayMsg::Toggle => open_window(&addr, Some(ipc::Command::Toggle)),
-                    tray::TrayMsg::Search(q) => open_window(&addr, Some(ipc::Command::Search(q))),
-                }
-            }
-        })
-        .ok();
-}
-
-/// Hand `command` to a running window, or start one attached to this daemon.
-///
-/// The control socket is only useful while a window exists; when nothing is
-/// listening (the usual case, since closing the window now exits it) a fresh GUI
-/// is spawned on `addr` so the tray always opens something.
-fn open_window(addr: &str, command: Option<ipc::Command>) {
-    if let Some(command) = &command
-        && matches!(ipc::send(command), Ok(true))
-    {
-        return;
-    }
-    let Some(exe) = gui_exe() else {
-        eprintln!("easysearch-daemon: cannot find an `easysearch` executable to open a window");
+/// Write one reply as a line, whole (never interleaved with another thread's).
+fn write_frame(out: &Mutex<std::io::Stdout>, response: &Response) {
+    let Ok(line) = serde_json::to_string(response) else {
         return;
     };
-    let mut child = std::process::Command::new(exe);
-    child.arg("--addr").arg(addr);
-    if let Some(ipc::Command::Search(q)) = &command {
-        child.arg("--search").arg(q);
+    if let Ok(mut out) = out.lock() {
+        let _ = out
+            .write_all(line.as_bytes())
+            .and_then(|_| out.write_all(b"\n"))
+            .and_then(|_| out.flush());
     }
-    child
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    // Detach into its own session, so the window is not a child of the daemon.
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        child.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    if let Err(e) = child.spawn() {
-        eprintln!("easysearch-daemon: cannot open the window: {e}");
-    }
-}
-
-/// The executable that opens a window.
-///
-/// The combined `easysearch` binary is both halves, so re-executing ourselves
-/// opens the GUI. The standalone `easysearch-daemon` has no window, so fall back
-/// to the app on `PATH`.
-fn gui_exe() -> Option<std::path::PathBuf> {
-    if let Ok(exe) = std::env::current_exe()
-        && exe.file_name().and_then(|n| n.to_str()) == Some("easysearch")
-    {
-        return Some(exe);
-    }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("easysearch"))
-        .find(|p| p.is_file())
-}
-
-fn err_json(msg: &str) -> String {
-    serde_json::to_string(&ErrorDto::new(msg)).unwrap_or_default()
-}
-
-fn truthy(v: &str) -> bool {
-    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
-}
-
-/// Value of one query parameter (percent-decoded), if present.
-fn param(params: &str, key: &str) -> Option<String> {
-    params.split('&').find_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        (k == key).then(|| percent_decode(v))
-    })
-}
-
-/// Build a [`Query`] from `GET /v1/search` query parameters.
-fn parse_query_params(params: &str) -> Result<Query, String> {
-    let mut q = Query::default();
-    for pair in params.split('&').filter(|p| !p.is_empty()) {
-        let (key, value) = match pair.split_once('=') {
-            Some((k, v)) => (k, percent_decode(v)),
-            None => (pair, String::new()),
-        };
-        match key {
-            "query" | "q" => q.name = value,
-            "regex" => q.regex_mode = truthy(&value),
-            "case" | "case_sensitive" => q.case_sensitive = truthy(&value),
-            "content" => {
-                q.content = if value.is_empty() { None } else { Some(value) };
-            }
-            "hidden" => q.include_hidden = truthy(&value),
-            "fuzzy" => q.fuzzy = truthy(&value),
-            "multiline" => q.multiline = truthy(&value),
-            "content_or_name" | "any" => q.content_or_name = truthy(&value),
-            "path" | "full_path" => q.full_path = truthy(&value),
-            "dirs" | "include_dirs" => q.include_dirs = truthy(&value),
-            "under" => {
-                q.under = if value.is_empty() { None } else { Some(value) };
-            }
-            // Comma-separated extensions; trim entries and ignore empties.
-            // Canonicalisation (leading dot, case) happens in `CompiledQuery`.
-            "ext" => {
-                q.extensions = value
-                    .split(',')
-                    .map(|e| e.trim().to_string())
-                    .filter(|e| !e.is_empty())
-                    .collect();
-            }
-            "min_size" => {
-                q.min_size = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("invalid min_size {value:?}"))?,
-                );
-            }
-            "max_size" => {
-                q.max_size = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("invalid max_size {value:?}"))?,
-                );
-            }
-            "modified_within" | "modified_within_secs" => {
-                q.modified_within_secs = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("invalid modified_within {value:?}"))?,
-                );
-            }
-            "limit" => {
-                q.limit = value
-                    .parse()
-                    .map_err(|_| format!("invalid limit {value:?}"))?;
-            }
-            "category" => {
-                q.category = category_from_str(&value)
-                    .ok_or_else(|| format!("unknown category {value:?}"))?;
-            }
-            other => return Err(format!("unknown parameter {other:?}")),
-        }
-    }
-    Ok(q)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easysearch_core::Category;
 
-    #[test]
-    fn parses_get_query_params() {
-        let q =
-            parse_query_params("query=*.pdf&regex=1&hidden=true&limit=5&category=docs").unwrap();
-        assert_eq!(q.name, "*.pdf");
-        assert!(q.regex_mode);
-        assert!(q.include_hidden);
-        assert_eq!(q.limit, 5);
-        assert_eq!(q.category, Category::Docs);
+    fn daemon() -> Arc<Daemon> {
+        // A config pointing at an empty temp dir: the walker has nothing to do.
+        let dir =
+            std::env::temp_dir().join(format!("easysearch-daemon-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config = easysearch_core::Config {
+            roots: vec![dir.to_string_lossy().into_owned()],
+            persist_index: false,
+            ..easysearch_core::Config::default()
+        };
+        let mut engine = Engine::new(config);
+        engine.start();
+        Daemon::new(Arc::new(engine))
     }
 
     #[test]
-    fn decodes_percent_escapes() {
-        let q = parse_query_params("query=annual%20report%20%2A.csv").unwrap();
-        assert_eq!(q.name, "annual report *.csv");
+    fn health_reports_the_protocol_version() {
+        let reply = daemon().dispatch(Request {
+            id: 4,
+            op: Op::Health,
+            payload: None,
+        });
+        let health: Health = serde_json::from_value(reply.into_data().unwrap()).unwrap();
+        assert!(health.ok);
+        assert_eq!(health.api, API_VERSION);
     }
 
     #[test]
-    fn rejects_bad_input() {
-        assert!(parse_query_params("nope=1").is_err());
-        assert!(parse_query_params("limit=abc").is_err());
-        assert!(parse_query_params("category=weird").is_err());
+    fn a_search_without_a_payload_is_an_error_reply() {
+        let reply = daemon().dispatch(Request {
+            id: 9,
+            op: Op::Search,
+            payload: None,
+        });
+        assert_eq!(reply.id, 9);
+        assert!(reply.error.is_some(), "a malformed request must not panic");
     }
 
     #[test]
-    fn parses_ext_and_size_and_recency_params() {
-        let q = parse_query_params(
-            "ext=pdf,%20docx,,md&min_size=1024&max_size=10485760&modified_within=3600",
-        )
-        .unwrap();
-        assert_eq!(q.extensions, vec!["pdf", "docx", "md"]);
-        assert_eq!(q.min_size, Some(1024));
-        assert_eq!(q.max_size, Some(10 * 1024 * 1024));
-        assert_eq!(q.modified_within_secs, Some(3600));
-
-        // The `modified_within_secs` alias is accepted too.
-        let q = parse_query_params("modified_within_secs=60").unwrap();
-        assert_eq!(q.modified_within_secs, Some(60));
-
-        assert!(parse_query_params("min_size=big").is_err());
-        assert!(parse_query_params("modified_within=soon").is_err());
+    fn a_config_patch_needs_no_rebuild_to_answer() {
+        let reply = daemon().dispatch(Request {
+            id: 11,
+            op: Op::Config,
+            payload: Some(serde_json::json!({"content_index": false})),
+        });
+        assert!(reply.into_data().is_ok());
     }
 
     #[test]
-    fn parses_the_fuzzy_flag() {
-        assert!(
-            !parse_query_params("query=x").unwrap().fuzzy,
-            "off by default"
-        );
-        assert!(parse_query_params("query=x&fuzzy=1").unwrap().fuzzy);
-        assert!(parse_query_params("query=x&fuzzy=true").unwrap().fuzzy);
-        assert!(!parse_query_params("query=x&fuzzy=no").unwrap().fuzzy);
-    }
-
-    #[test]
-    fn parses_the_multiline_flag() {
-        assert!(
-            !parse_query_params("query=x").unwrap().multiline,
-            "off by default"
-        );
-        assert!(
-            parse_query_params("query=x&content=a&multiline=1")
-                .unwrap()
-                .multiline
-        );
-        assert!(
-            !parse_query_params("query=x&multiline=false")
-                .unwrap()
-                .multiline
-        );
+    fn shutdown_is_a_clean_no_content_reply() {
+        let reply = daemon().dispatch(Request {
+            id: 12,
+            op: Op::Shutdown,
+            payload: None,
+        });
+        assert!(reply.error.is_none());
+        assert!(reply.data.is_none());
     }
 }

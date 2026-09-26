@@ -1,21 +1,21 @@
-//! Search backend: the engine either in-process or behind the daemon API.
+//! Search backend: the engine either in-process or in a child process.
 //!
-//! One type covers both, so the GUI and CLI can switch between "link the engine
-//! directly" and "talk to `easysearch-daemon`" without changing their call
-//! sites. See `docs/api.md`.
+//! One type covers both, so the GUI and CLI call the same methods whether the
+//! engine is linked into them or running as their child (see [`crate::child`]).
+//! There is no network transport: the engine's pipes are private to the pair.
 
+use crate::child::ChildEngine;
 use crate::config::Config;
-use crate::engine::{Engine, SearchResponse, State, Status};
+use crate::engine::{Engine, SearchResponse, Status};
 use crate::matcher::Query;
-use crate::remote::Remote;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub enum Backend {
     /// The engine lives in this process (zero IPC).
     Local(Arc<Engine>),
-    /// The engine lives in `easysearch-daemon`; queries go over HTTP.
-    Remote(Remote),
+    /// The engine runs as this process's child, over its stdin/stdout.
+    Child(ChildEngine),
 }
 
 impl Backend {
@@ -26,49 +26,53 @@ impl Backend {
         Backend::Local(Arc::new(engine))
     }
 
-    /// Talk to a daemon at `addr` (e.g. `127.0.0.1:5858`).
-    pub fn remote(addr: impl Into<String>) -> Backend {
-        Backend::Remote(Remote::new(addr))
+    /// Drive an engine child the caller has already spawned.
+    pub fn child(engine: ChildEngine) -> Backend {
+        Backend::Child(engine)
     }
 
-    pub fn is_remote(&self) -> bool {
-        matches!(self, Backend::Remote(_))
+    /// True when the engine is a separate process.
+    pub fn is_service(&self) -> bool {
+        matches!(self, Backend::Child(_))
     }
 
     /// Short human label for the status bar.
     pub fn label(&self) -> String {
         match self {
             Backend::Local(_) => "in-process".to_string(),
-            Backend::Remote(r) => format!("daemon {}", r.addr()),
+            Backend::Child(c) => match c.pid() {
+                Some(pid) => format!("engine pid {pid}"),
+                None => "engine".to_string(),
+            },
         }
     }
 
-    /// False when a remote daemon cannot be reached (always true in-process).
+    /// False when the engine child cannot be reached (always true in-process).
     pub fn connected(&self) -> bool {
         match self {
             Backend::Local(_) => true,
-            Backend::Remote(r) => r.connected(),
+            Backend::Child(c) => c.connected(),
         }
     }
 
     pub fn search(&self, q: &Query) -> Result<SearchResponse, String> {
         match self {
             Backend::Local(e) => e.search(q),
-            Backend::Remote(r) => r.search(q),
+            Backend::Child(c) => c.search(q),
         }
     }
 
     pub fn status_snapshot(&self) -> Status {
         match self {
             Backend::Local(e) => e.status_snapshot(),
-            Backend::Remote(r) => r.status(),
+            Backend::Child(c) => c.status(),
         }
     }
 
     pub fn counts(&self) -> (u64, u64) {
         match self {
             Backend::Local(e) => e.counts(),
-            Backend::Remote(r) => r
+            Backend::Child(c) => c
                 .report()
                 .map(|rep| (rep.files, rep.dirs))
                 .unwrap_or((0, 0)),
@@ -78,37 +82,37 @@ impl Backend {
     pub fn rebuild(&self) {
         match self {
             Backend::Local(e) => e.rebuild(),
-            Backend::Remote(r) => {
-                let _ = r.rebuild();
+            Backend::Child(c) => {
+                let _ = c.rebuild();
             }
         }
     }
 
-    /// Stop a remote daemon (no-op in-process). Returns true if a daemon was
+    /// Stop the engine child (no-op in-process). Returns true if an engine was
     /// asked to stop — useful before relaunching onto a newly installed binary.
     pub fn shutdown(&self) -> bool {
         match self {
             Backend::Local(_) => false,
-            Backend::Remote(r) => r.shutdown().is_ok(),
+            Backend::Child(c) => c.shutdown().is_ok(),
         }
     }
 
-    /// Turn honoring of ignore files on/off (in-process engine, or the daemon).
+    /// Turn honoring of ignore files on/off (in-process engine, or the child).
     pub fn set_respect_ignore(&self, on: bool) {
         match self {
             Backend::Local(e) => e.set_respect_ignore(on, true),
-            Backend::Remote(r) => {
-                let _ = r.set_respect_ignore(on);
+            Backend::Child(c) => {
+                let _ = c.set_respect_ignore(on);
             }
         }
     }
 
-    /// Turn following of symbolic links on/off (in-process engine, or daemon).
+    /// Turn following of symbolic links on/off (in-process engine, or the child).
     pub fn set_follow_symlinks(&self, on: bool) {
         match self {
             Backend::Local(e) => e.set_follow_symlinks(on, true),
-            Backend::Remote(r) => {
-                let _ = r.set_follow_symlinks(on);
+            Backend::Child(c) => {
+                let _ = c.set_follow_symlinks(on);
             }
         }
     }
@@ -118,8 +122,8 @@ impl Backend {
     pub fn set_content_index(&self, on: bool) {
         match self {
             Backend::Local(e) => e.set_content_index(on),
-            Backend::Remote(r) => {
-                let _ = r.set_content_index(on);
+            Backend::Child(c) => {
+                let _ = c.set_content_index(on);
             }
         }
     }
@@ -129,7 +133,7 @@ impl Backend {
     pub fn count(&self, q: &Query) -> Result<u64, String> {
         match self {
             Backend::Local(e) => e.count(q),
-            Backend::Remote(r) => r.count(q),
+            Backend::Child(c) => c.count(q),
         }
     }
 
@@ -137,16 +141,7 @@ impl Backend {
     pub fn wait_live(&self, timeout: Duration) -> bool {
         match self {
             Backend::Local(e) => e.wait_live(timeout),
-            Backend::Remote(_) => {
-                let deadline = Instant::now() + timeout;
-                while Instant::now() < deadline {
-                    if self.status_snapshot().state == State::Live {
-                        return true;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                false
-            }
+            Backend::Child(c) => c.wait_live(timeout),
         }
     }
 }

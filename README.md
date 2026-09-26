@@ -21,7 +21,7 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
 
 ## Screenshots
 
-The same window in both themes — everything follows the desktop: search box,
+The same window in both themes — every surface is themed: search box,
 filter bar, results table (`#`, Name, Path, Type, Size, Modified, **Created**,
 Match, Relevance), sidebar and preview pane.
 
@@ -40,8 +40,9 @@ filenames appear in them.
 
 | Binary | Purpose |
 |---|---|
-| `easysearch-cli` (CLI) | scriptable search + status |
-| `easysearch-gui` | native desktop app (search box, toggles, results list) |
+| `easysearch` (app) | the desktop app: window + tray, spawns the engine |
+| `easysearch-cli` (CLI) | scriptable search + status (runs the engine in-process) |
+| `easysearch-gui` | the window alone (dev convenience; engine in-process) |
 | `easysearch-core` (lib) | the engine: index, watcher, matcher, content search |
 
 ## Build (zero-sudo)
@@ -55,7 +56,8 @@ bundled `rust-lld` (no C compiler required):
 cargo build --release
 ```
 
-Binaries land in `target/release/easysearch-cli` and `target/release/easysearch-gui`.
+Binaries land in `target/release/easysearch`, `target/release/easysearch-cli` and
+`target/release/easysearch-gui`.
 
 > Optional, only for **.docx content search**: nothing. Word, OpenDocument and
 > PDF content is extracted in-process (v0.18.0–v0.20.0); no external tool is
@@ -110,7 +112,7 @@ To publish a release, see [`docs/updates.md`](docs/updates.md) and
 ## Usage
 
 ```sh
-# GUI + daemon in one binary (this is what end users run)
+# The app — window + tray; spawns the engine as a child (what end users run)
 make run                          # or: ./target/release/easysearch
 
 # CLI
@@ -202,9 +204,10 @@ Query semantics (Everything-style):
   background compaction (mmap backend).
 - **content_index_enabled**: `true` enables the background content cache
   (bounded, LRU; keeps repeated content searches fast). It can also be toggled
-  while running, in **Settings ▸ Indexing**, or over `POST /v1/config`. It is
-  **off at boot** and, by default, **spooled to disk** (`<disk_index_dir>/content/`)
-  rather than held in RAM, so it does not grow the resident set.
+  while running, in **Settings ▸ Indexing**, or via the engine's `config` op.
+  It is **off at boot** and, by default, **spooled to disk**
+  (`<disk_index_dir>/content/`) rather than held in RAM, so it does not grow the
+  resident set.
 - **content_index_in_memory**: `true` keeps that cache in RAM instead of on
   disk (up to `content_index_total_cap_bytes`). Start with
   `easysearch --content-in-memory` to set it for one run.
@@ -237,13 +240,13 @@ export -n WAYLAND_DISPLAY; easysearch-gui # force X11 (or: env -u WAYLAND_DISPLA
 
 ## System tray
 
-The tray icon (StatusNotifierItem over D-Bus) is owned by the **background
-service**, not the window, with an Open/Quit menu and a “Recent searches”
-submenu; left-click opens or toggles the window. **Closing the window exits the
-window** — freeing its GL stack and its copy of the index — while the service
-keeps indexing and keeps the tray, so *Open* (or `easysearch --toggle`) brings a
-fresh window back instantly. **Quit** in the tray, or `easysearch --stop`, stops
-the service itself. Works on KDE/Qt natively and on GTK desktops that host SNI
+The tray icon (StatusNotifierItem over D-Bus) is owned by the **app** — the same
+process as the window — with an Open/Quit menu and a “Recent searches” submenu;
+left-click opens or toggles the window. **Closing the window (X) hides it to the
+tray**, so the engine keeps indexing and *Open* (or `easysearch --toggle`) brings
+the window back instantly; **File ▸ Hide window** does the same. **Quit** in the
+tray, **File ▸ Quit EasySearch**, or `easysearch --quit` stops the app and the
+engine together. Works on KDE/Qt natively and on GTK desktops that host SNI
 (GNOME with the AppIndicator extension, XFCE, Cinnamon, MATE), and the app is
 fully usable without a tray.
 
@@ -262,7 +265,7 @@ sudo sysctl fs.inotify.max_user_watches=1048576   # persists until reboot
 ## Where the index lives (and why RAM stays low)
 
 The index is a **SQLite database** in `~/.cache/easysearch/db/`
-(`index.db`, WAL mode), owned by the daemon — the only writer:
+(`index.db`, WAL mode), owned by the engine — the only writer:
 
 - The bulk of the index is on disk; only a small **change overlay** of recent
   creates/edits/deletes stays resident. The overlay is folded into the database
@@ -283,11 +286,11 @@ The index is a **SQLite database** in `~/.cache/easysearch/db/`
   text to disk** (`~/.cache/easysearch/content/`, read back per lookup) instead
   of holding it in RAM — so searching content does not leave what it read
   resident. `--content-in-memory` opts back into the RAM map. Measured: with
-  ≈ 112 MB of text cached, the daemon sat at ≈ 11–15 MiB resident on disk vs
+  ≈ 112 MB of text cached, the engine sat at ≈ 11–15 MiB resident on disk vs
   ≈ 122 MiB in RAM.
 
 Measured on a real `$HOME`: ≈ 15 MiB idle for the headless engine (mmap mode, ≈137k
-files); on 100 479 entries the SQLite daemon sits at ≈ 51 MiB and the GUI at ≈ 92 MiB,
+files); on 100 479 entries the SQLite engine sits at ≈ 51 MiB and the GUI at ≈ 92 MiB,
 with filename queries at 1–26 ms and filtered queries at 1–2 ms (SQL pushdown).
 The GUI adds the native window/GL stack.
 
@@ -305,7 +308,7 @@ The GUI adds the native window/GL stack.
 | [`docs/scope.md`](docs/scope.md) | Scope, architecture, search semantics, realtime guarantees, footprint budget, delivery phases |
 | [`docs/ui.md`](docs/ui.md) | Using the GUI: layout, filters, saved searches, shortcuts, relevance scoring |
 | [`docs/config.md`](docs/config.md) | Every `config.json` key, its default and its effect |
-| [`docs/api.md`](docs/api.md) | The daemon's HTTP/JSON API |
+| [`docs/api.md`](docs/api.md) | The app↔engine JSON protocol over stdin/stdout |
 | [`docs/sqlite.md`](docs/sqlite.md) | The SQLite index: schema, flush/refresh policy, trade-offs |
 | [`docs/packaging.md`](docs/packaging.md) | Building `.deb`, `.rpm` and Flatpak packages |
 | [`docs/pending.md`](docs/pending.md) | What is still outstanding, prioritised |

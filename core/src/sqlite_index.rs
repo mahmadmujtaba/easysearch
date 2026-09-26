@@ -9,7 +9,7 @@
 //!
 //! Design notes:
 //!
-//! * **One writer.** The daemon owns the database and applies kernel events to
+//! * **One writer.** The engine owns the database and applies kernel events to
 //!   it; readers (the GUI, `easysearch-cli`) only ever `SELECT`. WAL mode is on, so
 //!   readers never block the writer and vice versa.
 //! * **Batched writes.** Realtime updates arrive as batches and are committed in
@@ -69,7 +69,7 @@ impl SqliteIndex {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let path = dir.join(DB_FILE);
         let conn = Connection::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        // WAL lets readers run while the daemon writes; NORMAL is the usual
+        // WAL lets readers run while the engine writes; NORMAL is the usual
         // durability/speed trade-off for a rebuildable cache.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;

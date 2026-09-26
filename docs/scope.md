@@ -45,7 +45,7 @@ repeated content queries, and is kept fresh by the same event pipeline.
   layer of **PDF** files.
 - Lightweight **native GUI** (search box, results list, match-mode toggles, status bar) —
   no web technologies.
-- **CLI** for scripting; optional headless **daemon** with a localhost HTTP API.
+- **CLI** for scripting; an optional headless **engine** server (`easysearch-daemon`) speaking the same JSON-frames protocol.
 - Minimal resource footprint (explicit budgets in §9).
 - Reuse ripgrep's proven engine and Linux's kernel event APIs instead of reimplementing
   them (§7). Cross-platform *design* (Linux first, Windows/macOS feasible later).
@@ -81,27 +81,29 @@ repeated content queries, and is kept fresh by the same event pipeline.
 │   ├── matcher ── globset (pattern mode) + regex crate (regex mode) over indexed paths       │
 │   ├── content  ── grep-searcher + grep-regex + ignore (ripgrep engine, in-process)          │
 │   │                 └─ preprocessor hook (docx extraction)                                   │
-│   ├── content_index (OPTIONAL, default off) ── background extractor + RAM text cache        │
+│   ├── content_index (OPTIONAL, default off) ── background extractor + disk-spooled cache    │
 │   │                 (bounded, LRU; kept fresh by the same watcher events)                    │
 │   └── queries  ── SQL pushdown (dir/ext/size/mtime/hidden) + one shared predicate          │
 │                     ∪ pending overlay deltas                                                 │
 │                                                                                             │
-│   app/  (one binary: easysearch) ── starts or attaches to the daemon, runs the GUI     │
-│   daemon/ (tiny_http)  OWNS the index ── localhost HTTP/JSON, keeps the database current     │
-│   cli/  (clap)         in-process or --remote ── scripted search / status                   │
-│   gui/  (eframe/egui)  the UI ── reads via the daemon when one is running                   │
+│   app/  (one binary: easysearch) ── spawns its engine child (--engine), runs the GUI + tray │
+│   daemon/ (stdio)      the engine server ── JSON frames on stdin/stdout, owns the index     │
+│   cli/  (clap)         in-process engine ── scripted search / status                        │
+│   gui/  (eframe/egui)  the UI (dev) ── runs the engine in-process                           │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **One owner of the index.** The daemon is the only writer of the SQLite database and
+- **One owner of the index.** The engine is the only writer of the SQLite database and
   keeps it current from kernel events; the GUI, CLI and any other client only read. WAL
   mode means readers never block the writer.
-- **The default path does use IPC** — deliberately. `easysearch` makes sure a daemon
-  is listening (re-executing itself with `--daemon`) and talks to it over localhost
-  HTTP/JSON. If a daemon cannot be started, the GUI falls back to an in-process engine, so
-  a single process is still a supported configuration (one writer either way).
-- The index is durable and shared: closing the GUI leaves the daemon indexing, and the next
-  start serves from the database immediately while it is re-validated in the background.
+- **The default path does use IPC** — deliberately. `easysearch` spawns its engine as a
+  child process (re-executing itself with `--engine`) and talks to it in JSON frames over
+  the child's stdin/stdout. If the child cannot be spawned, the app falls back to an
+  in-process engine, so a single process is still a supported configuration (one writer
+  either way).
+- The index is durable and shared: closing the window hides it to the tray and leaves the
+  engine indexing, and the next start serves from the database immediately while it is
+  re-validated in the background. *Quit* stops the app and the engine together.
 
 ### 3.1 Tech stack decisions (2026-08-20, per user direction)
 
@@ -121,12 +123,12 @@ require subprocess-per-query or a slower RE2 engine) and has a weaker native-GUI
 | Filesystem walk | **`ignore`** crate (gitignore-aware, parallel) | hand-rolled walkdir |
 | Realtime events | **`notify`** crate (inotify on Linux; ReadDirectoryChangesW / FSEvents elsewhere) | `inotifywait` subprocess (rejected: external dep, no cross-platform) |
 | Parallel search fan-out | **`rayon`** | hand-rolled threads |
-| Content text cache (optional) | in-RAM `HashMap` + byte-cap LRU | — (the SQLite index is separate; FTS5 is the natural next step) |
+| Content text cache (optional) | **disk-spooled** text + byte-cap LRU (`--content-in-memory` keeps it in RAM) | — (the SQLite index is separate; FTS5 is the natural next step) |
 | Index persistence | **SQLite** (`rusqlite`, bundled) — WAL, one writer, SQL pushdown for filters | `memmap2` + custom binary format (kept as the `storage = "mmap"` escape hatch), full-RAM (rejected: 80 MiB) |
 | GUI | **`eframe`/`egui`** (immediate-mode, native, Win/Linux/macOS) | Slint, iced, gtk4-rs (all viable; egui = minimal deps + instant re-render per keystroke) |
 | CLI | **`clap`** | hand-rolled parser |
-| Optional daemon HTTP | **`tiny_http`** (small, stdlib-ish) | axum (heavier) |
-| Serialization (daemon only) | **`serde_json`** | — |
+| Engine transport | **JSON frames over the child's stdin/stdout** (the app re-executes itself with `--engine`) | HTTP/`tiny_http` on loopback (rejected: a listening socket to secure for no gain) |
+| Serialization (engine protocol) | **`serde_json`** | — |
 | `.docx` / `.odt` / `.pdf` extraction | **in-process** (`zip` + `quick-xml`; `pdf-extract`), no external tool | external `docx2txt` subprocess (removed in v0.18.0) |
 
 **Explicitly rejected:** Python (too slow — user direction), web-based UI frameworks
@@ -156,7 +158,7 @@ Match is applied to each indexed path. Two modes, switchable per query:
   backend the coarse dimensions below are pushed into SQL, so a filtered query does not
   walk the whole table.
 
-**Filter dimensions** (all optional, all supported by the CLI, the HTTP API and the GUI's
+**Filter dimensions** (all optional, all supported by the CLI, the engine protocol and the GUI's
 filter bar). They are enforced by the same predicate whether the query is a `search` or a
 `count`, so the two can never disagree:
 
@@ -192,12 +194,13 @@ filter bar). They are enforced by the same predicate whether the query is a `sea
 
 **Optional background content index (default off).** When enabled (config/CLI flag), a
 background worker extracts text from newly indexed and changed files (skipping files over
-a size cap, default 8 MB) and caches it in RAM (byte cap, default 256 MB, LRU eviction).
-Content queries then hit the cache first — repeated queries become nearly free — and fall
-back to live search for files not yet indexed. Freshness contract is unchanged: watcher
-events (`create`/`modify`/`delete`) incrementally re-index changed files, so the cache
-never serves stale content beyond the same < 1 s window as the name index. Disabled =
-zero extra memory and zero background CPU (pure on-demand search).
+a size cap, default 8 MB) and spools it to disk under the disk index directory's
+`content/` (byte cap, default 256 MB, LRU eviction); `--content-in-memory` moves that cap
+into RAM instead. Content queries then hit the cache first — repeated queries become
+nearly free — and fall back to live search for files not yet indexed. Freshness contract
+is unchanged: watcher events (`create`/`modify`/`delete`) incrementally re-index changed
+files, so the cache never serves stale content beyond the same < 1 s window as the name
+index. Disabled = zero extra memory and zero background CPU (pure on-demand search).
 
 ### 4.3 Combining name + content
 
@@ -284,33 +287,35 @@ One query box, three effective combinations:
 
 ---
 
-## 8. Daemon HTTP API (localhost only) — implemented in `daemon/`
+## 8. Engine protocol — implemented in `daemon/`
 
-`easysearch-daemon` owns the engine as a **separate process** and serves it over
-`tiny_http`, bound to `127.0.0.1:5858` by default. Read-only; no auth, loopback
-only. Full reference: **`docs/api.md`**.
+`easysearch-daemon` is the **engine server**: it owns the index and answers JSON
+frames on its stdin/stdout. The app spawns the same `easysearch` binary with
+`--engine` and keeps the child's pipes, so there is no socket, no listening port
+and no HTTP. Full reference: [`api.md`](api.md).
 
-Splitting the engine out of the GUI means the index keeps running — and every
-client keeps working — even when no GUI is running at all:
+Splitting the engine into its own process means the index keeps running — and
+every client keeps working — while the window is hidden or absent:
 
-- `easysearch-gui` attaches to a daemon (`--daemon ADDR`, `EASYSEARCH_DAEMON`, or
-auto-detected on the default address) and falls back to an in-process engine when
-none is running, so it can never become unusable.
-- `easysearch-cli` (CLI) indexes in-process by default and supports `--remote ADDR`.
-- Any other client can use plain HTTP + JSON (`curl`, scripts, any language).
+- `easysearch` (app) spawns the engine at startup, keeps it indexing when the
+  window is closed to the tray, and reaps it on *Quit*.
+- `easysearch-cli` (CLI) runs the engine in-process, so a script needs no app.
+- `easysearch-gui` is the window alone (a development convenience) and runs the
+  engine in-process.
 
-| Endpoint | Purpose |
+| `op` | Purpose |
 |---|---|
-| `GET /v1/health` | liveness/version probe |
-| `GET /v1/status` | index size, watcher state (live/degraded), skipped-dir counts |
-| `POST /v1/search` | `Query` JSON → `{results:[{path,size,mtime,is_dir}], truncated, elapsed_ms, indexed}` |
-| `GET /v1/search` | same, via query parameters (`query`, `regex`, `content`, `case`, `hidden`, `path`, `dirs`, `limit`, `category`) |
-| `POST /v1/rebuild` | full rescan (e.g. after system restore) |
-| `GET /v1/watch` | long-poll: status returned when it changes, or on timeout |
+| `health` | liveness/version probe |
+| `status` | index size, watcher state (live/degraded), skipped-dir counts |
+| `search` | a `Query` JSON → `SearchResponse` |
+| `count` | a `Query` JSON → `{count:n}` (`limit` ignored) |
+| `rebuild` | full rescan (e.g. after system restore) |
+| `config` | walk settings and the content cache, live |
+| `shutdown` | stop the engine |
 
-Change notification is **long-polling**, not SSE/WebSocket: it works with every
-HTTP client and is not defeated by `tiny_http`'s chunked encoder, which buffers
-small writes (so short SSE frames are never flushed).
+Requests are multiplexed by id, so a slow content search never blocks the status
+poller; the frames, the `Query` and the `SearchResponse` are specified in
+[`api.md`](api.md).
 
 ## 9. Resource Footprint Budget (non-negotiable targets)
 
@@ -391,9 +396,12 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
   (exact > prefix > substring), then path hits, with a small bonus for short names. In
   fuzzy mode the same column is driven by the engine's subsequence score
   (word-start/runs up, gaps down, short names preferred).
-- **Theming:** follows the desktop's light/dark scheme live (KDE `kdeglobals`, GTK
-  settings, or the XDG portal) and uses the system UI/mono fonts. Empty state suggests
-  what to search or reports indexing progress.
+- **Theming:** an explicit, remembered light/dark choice (`dark` in
+  `~/.config/easysearch/gui.json`, **Dark** by default); it does **not** follow the
+  desktop's scheme, and a legacy `null` resolves to Dark. Uses the system UI/mono fonts,
+  resolved with `fc-match` (KDE, then GTK, then fontconfig's `sans-serif`/`monospace`);
+  bundled egui fonts are only a glyph fallback. Empty state suggests what to search or
+  reports indexing progress.
 - CLI mirror (`easysearch-cli search "*.pdf"`) prints matched paths for scripting.
 
 ## 11. Project Layout (Cargo workspace)
@@ -412,11 +420,12 @@ easysearch/
 ├── Cargo.toml                 ← workspace
 ├── core/                      ← library: walker, watcher, matcher, content,
 │   └── src/                     content_index, disk_index (mmap), sqlite_index,
-│                                engine, backend, remote, update, config, api
-├── app/                       ← the single binary users run (GUI + daemon mode)
-├── gui/                       ← eframe/egui frontend (+ the system tray, control socket)
+│                                engine, backend, child, proto, logo, ipc,
+│                                update, config, api
+├── app/                       ← the single binary users run (window + tray; spawns the engine)
+├── gui/                       ← eframe/egui frontend (window only; runs the engine in-process)
 ├── cli/                       ← clap frontend
-├── daemon/                    ← tiny_http frontend: owns the index
+├── daemon/                    ← stdio engine server: owns the index
 └── vendor/                    ← the arrayref shim (see Cargo.toml)
 ```
 
@@ -425,7 +434,7 @@ easysearch/
 | Phase | Status |
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
-| **2 — Polish** | **Done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), fuzzy ranking (v0.17.0), bundled docx extractor (v0.18.0), global hotkey via the control socket (v0.19.0) |
+| **2 — Polish** | **Done**: child engine (JSON frames over stdio), tray icon, settings dialog, tabs and session persistence, saved searches, explicit remembered theme (Dark default), packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), fuzzy ranking (v0.17.0), bundled docx extractor (v0.18.0), global hotkey via the control socket (v0.19.0) |
 | **3 — Stretch** | **Partly done**: **PDF / ODT extraction (v0.20.0)**, **multiline content regex (v0.21.0)**. **Outstanding**: `fanotify` watcher, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |

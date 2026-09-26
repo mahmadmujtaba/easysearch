@@ -1,8 +1,9 @@
 //! `easysearch-cli` — headless search CLI.
 //!
-//! By default it indexes in-process (no daemon needed). With `--remote ADDR` it
-//! instead queries a running `easysearch-daemon`, so the CLI keeps working even
-//! when no GUI is involved.
+//! It indexes in-process: there is no daemon to attach to, so a script gets an
+//! answer without starting (or disturbing) the GUI app. Running it while the app
+//! is up opens the same on-disk index read/write; if you only need counts or a
+//! quick lookup, that is fine, but the app remains the only *watcher*.
 
 use clap::{Parser, Subcommand};
 use easysearch_core::update::{CurlFetcher, Stage, UpdateConfig, Updater};
@@ -17,11 +18,6 @@ use std::time::Duration;
     about = "Realtime file and content search for Linux (Everything-style)"
 )]
 struct Cli {
-    /// Query a running daemon instead of indexing in this process
-    /// (e.g. --remote 127.0.0.1:5858).
-    #[arg(long, global = true, value_name = "ADDR")]
-    remote: Option<String>,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -106,9 +102,9 @@ enum Command {
         /// Install into this directory (default: the running binary's)
         #[arg(long, value_name = "DIR")]
         dir: Option<PathBuf>,
-        /// Stop a running daemon afterwards so it starts the new binary
+        /// Stop the running app afterwards, so the next start uses the new binary
         #[arg(long)]
-        restart_daemon: bool,
+        restart_app: bool,
     },
 }
 
@@ -116,11 +112,8 @@ fn main() {
     // Before clap or the in-process engine can start a thread.
     easysearch_core::process::cap_malloc_arenas();
     let cli = Cli::parse();
-    // Local (default) or a running daemon.
-    let backend = match &cli.remote {
-        Some(addr) => Backend::remote(addr.clone()),
-        None => Backend::local(Config::load()),
-    };
+    // The engine runs in this process: there is no service to attach to.
+    let backend = Backend::local(Config::load());
 
     match cli.command {
         Command::Search {
@@ -256,16 +249,8 @@ fn main() {
             manifest,
             pubkey,
             dir,
-            restart_daemon,
-        } => self_update(
-            check,
-            yes,
-            manifest,
-            pubkey,
-            dir,
-            restart_daemon,
-            cli.remote,
-        ),
+            restart_app,
+        } => self_update(check, yes, manifest, pubkey, dir, restart_app),
     }
 }
 
@@ -278,8 +263,7 @@ fn self_update(
     manifest: Option<String>,
     pubkey: Option<String>,
     dir: Option<PathBuf>,
-    restart_daemon: bool,
-    remote: Option<String>,
+    restart_app: bool,
 ) {
     if UpdateConfig::disabled() {
         eprintln!("updates are disabled (EASYSEARCH_NO_UPDATE is set)");
@@ -359,11 +343,11 @@ fn self_update(
             for f in &report.files {
                 println!("  {}", f.display());
             }
-            if restart_daemon && stop_daemon(remote.as_deref()) {
-                println!("stopped the running daemon — it will restart on the next launch");
+            if restart_app && stop_running_app() {
+                println!("stopped the running app — it will start the new binary next time");
             }
             if report.restart_required {
-                println!("restart the app (and daemon) to run the new version");
+                println!("restart the app to run the new version");
             }
         }
         Err(e) => {
@@ -392,10 +376,11 @@ fn confirm(prompt: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// Ask a daemon (the one on `--remote`, else the default address) to stop.
-fn stop_daemon(remote: Option<&str>) -> bool {
-    let addr = remote.unwrap_or(easysearch_core::api::DEFAULT_ADDR);
-    easysearch_core::remote::request(addr, "POST", "/v1/shutdown", Some(b"{}")).is_ok()
+/// Ask the running app to quit, so a self-update can replace the binaries and
+/// the next launch starts the new build. The app owns its engine child, so
+/// stopping the app stops the engine too.
+fn stop_running_app() -> bool {
+    easysearch_core::ipc::send(&easysearch_core::ipc::Command::Quit).unwrap_or(false)
 }
 
 /// Run `parse` on a flag value, printing a clear error and exiting non-zero on

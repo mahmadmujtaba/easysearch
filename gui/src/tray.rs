@@ -1,9 +1,9 @@
-//! System tray icon (StatusNotifierItem over D-Bus) — owned by the **daemon**.
+//! System tray icon (StatusNotifierItem over D-Bus).
 //!
-//! The tray lives in the background service, not in the window, so that closing
-//! the window (which frees the GUI's GL stack and its copy of the index) leaves
-//! the tray icon in place. Its menu opens a fresh window attached to this
-//! daemon, and *Quit* stops the service.
+//! The tray lives in the **app process**, alongside the window and the engine
+//! child it spawned: the engine's lifetime is the app's, so the app is also what
+//! owns the icon that represents it. Closing the window hides it to the tray and
+//! the engine keeps indexing; *Quit* stops the app (window + engine).
 //!
 //! SNI is the shared tray protocol: KDE/Qt hosts it natively, and GTK-based
 //! desktops (GNOME + AppIndicator extension, XFCE, Cinnamon, MATE) do too, so
@@ -18,20 +18,20 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrayMsg {
-    /// Left-click on the icon: show/hide the window (or open one).
+    /// Left-click on the icon: show/hide the window.
     Toggle,
-    /// Menu item "Open": show and focus the window (or open one).
+    /// Menu item "Open": show and focus the window.
     Open,
     /// Re-run a query picked from the tray's "Recent searches" submenu.
     Search(String),
-    /// Menu item "Quit": stop the service (and with it the tray).
+    /// Menu item "Quit": stop the app (window and engine).
     Quit,
 }
 
 pub struct AppTray {
     pub tx: Sender<TrayMsg>,
     pub title: String,
-    /// Recent queries, as observed by the daemon's own search API.
+    /// Shared snapshot of recent searches (mirrored from the GUI prefs).
     pub history: Arc<Mutex<Vec<String>>>,
 }
 
@@ -103,7 +103,7 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
         items.push(MenuItem::Standard(StandardItem {
-            label: format!("Quit {title} (stop the service)"),
+            label: format!("Quit {title}"),
             activate: Box::new(|t: &mut Self| {
                 let _ = t.tx.send(TrayMsg::Quit);
             }),

@@ -1,15 +1,15 @@
 # SQLite index (work in progress)
 
-The goal: the index lives in a **SQLite database** in a `db/` folder, a
-**background process keeps it up to date in realtime**, the GUI shows results
+The goal: the index lives in a **SQLite database** in a `db/` folder, the
+**engine child keeps it up to date in realtime**, the GUI shows results
 from it, the database is **created if missing**, and it is **refreshed** when a
 lot of changes arrive at once.
 
 ## Status
 
-**Done and active.** The engine now stores its index in SQLite by default; the
-daemon owns the database and keeps it current from kernel events, and every
-query (GUI, CLI, HTTP API) is answered from it.
+**Done and active.** The engine now stores its index in SQLite by default; it
+owns the database and keeps it current from kernel events, and every query
+(GUI, CLI) is answered from it.
 
 | Step | State |
 | --- | --- |
@@ -17,7 +17,7 @@ query (GUI, CLI, HTTP API) is answered from it.
 | `core/src/sqlite_index.rs`: schema, create, rebuild, live deltas, `search`, `count`, `candidates`, `meta_of` | **Done** — 11 unit tests |
 | Wired into `Engine` (base store, flush, refresh, counts) | **Done** |
 | The live/realtime integration suite runs against it | **Done** — the whole `live_search` suite passes on SQLite |
-| GUI access path | Through the daemon (decision 2 below) |
+| GUI access path | Through the engine child (decision 2 below) |
 
 Verified end to end on a real `$HOME` (100,479 entries): the first run walks and
 builds a 65 MB database; later runs serve from it immediately.
@@ -62,7 +62,7 @@ the contents are dropped and the caller rebuilds.
 
 ## Design decisions
 
-1. **One writer.** The daemon owns the database and applies kernel events;
+1. **One writer.** The engine owns the database and applies kernel events;
    readers only `SELECT`. WAL mode means readers never block the writer.
 2. **Batched writes.** Events are committed in transactions
    (`SqliteIndex::apply`), never one `fsync` per event — per-event commits would
@@ -117,9 +117,9 @@ the contents are dropped and the caller rebuilds.
 1. **Default backend: SQLite**, with `storage = "mmap"` in `config.json` as the
    escape hatch back to the memory-mapped file. RAM-only mode
    (`persist_index = false`) deliberately does not open a disk database.
-2. **GUI access path: through the daemon.** One writer, no lock contention, and
-   the GUI already speaks HTTP to it. A read-only connection from the GUI
-   remains possible later if the daemon ever needs to be optional.
+2. **GUI access path: through the engine child.** The app talks to its engine
+   child over pipes — the GUI and the engine are two processes of one app — so
+   there is one writer and no lock contention.
 3. **Refresh trigger: the delta backlog** — `REFRESH_AFTER_DIRTY` (20 000)
    applied changes since the last rebuild triggers a full rebuild on the
    background thread. No time-based rule, because idle time does not make an

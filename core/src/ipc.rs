@@ -1,4 +1,4 @@
-//! Control socket — driving the *running GUI window* from the command line.
+//! Control socket — driving the *running app window* from the command line.
 //!
 //! Wayland deliberately has no global-hotkey API, and every desktop invents its
 //! own (KGlobalAccel, GNOME custom keybindings, the GlobalShortcuts portal). The
@@ -9,17 +9,14 @@
 //! easysearch --toggle      # show/hide the window
 //! easysearch --show        # bring it to the front
 //! easysearch --search TODO # run a search from a shortcut
-//! easysearch --quit        # close the window (the service keeps running)
+//! easysearch --quit        # stop the app (window and its engine child)
 //! ```
 //!
-//! The GUI listens on `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`, so only
+//! The app listens on `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`, so only
 //! the same user can talk to it) and each invocation is one line of text. The
-//! daemon also sends on it: the tray icon lives there now, and its *Open* /
-//! *Toggle* hand a command to the window when one is up, starting a fresh GUI
-//! when none is listening. See `docs/ui.md`.
-//!
-//! The socket is only about the window. Stopping the background service is
-//! `POST /v1/shutdown` (`easysearch --stop`), because the window may not exist.
+//! command reaches the window, which owns both the UI and the engine child it
+//! spawned, so there is nothing else to signal: `Quit` stops the whole app. See
+//! `docs/ui.md`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -32,7 +29,7 @@ pub enum Command {
     Toggle,
     Show,
     Hide,
-    /// Close the window. The background service keeps running.
+    /// Stop the app (window and its engine child).
     Quit,
     /// Show the window and run this query.
     Search(String),

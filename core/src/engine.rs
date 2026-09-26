@@ -107,7 +107,7 @@ const CONTENT_FANOUT_CAP: usize = 50_000;
 pub struct Engine {
     config: Config,
     base: Arc<RwLock<Option<Arc<DiskIndex>>>>,
-    /// The SQLite index, when `config.storage == Storage::Sqlite`. The daemon
+    /// The SQLite index, when `config.storage == Storage::Sqlite`. The engine
     /// owns it: it is the only writer, and every query is answered from here.
     sqlite: Option<Arc<Mutex<SqliteIndex>>>,
     overlay: Arc<RwLock<Overlay>>,

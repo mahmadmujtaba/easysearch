@@ -3,7 +3,7 @@ name = "easysearch-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "EasySearch as one file: the GUI and the search engine daemon in a single binary"
+description = "EasySearch as one file: the app (window + tray) and the search engine in a single binary"
 
 [lib]
 name = "easysearch_app"

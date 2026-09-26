@@ -29,7 +29,7 @@
       <li>Content search powered by the embedded ripgrep engine, always current</li>
       <li>Live preview pane, tabs, search history and quick location filters</li>
       <li>Follows your desktop's light/dark theme and fonts</li>
-      <li>Optional tray icon, plus a scriptable HTTP/JSON API and CLI</li>
+      <li>Optional tray icon, plus a scriptable CLI</li>
     </ul>
   </description>
 

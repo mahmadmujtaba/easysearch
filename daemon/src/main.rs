@@ -1,13 +1,14 @@
-//! `easysearch-daemon` — runs the search engine as its own process and serves
-//! it over a localhost HTTP/JSON API (`docs/api.md`).
+//! `easysearch-daemon` — the search engine, driven over stdin/stdout by the
+//! process that spawned it (see [`easysearch_core::proto`]).
 //!
-//! Keeping the engine out of the GUI means the index keeps running (and other
-//! clients keep working: CLI, scripts, curl, any language) even if no GUI is
-//! running at all.
+//! It is a **child process**: it owns the index, answers JSON frames on its
+//! stdin/stdout, and exits when its parent closes the pipe or asks it to stop.
+//! There is no socket, no port and no HTTP, so nothing about the index is
+//! reachable from outside the process pair.
 //!
-//! End users normally don't need this binary: the combined `easysearch`
-//! app starts a daemon by re-executing itself. This standalone binary is for
-//! running the engine on its own (servers, scripts, headless setups).
+//! End users normally don't need this binary: the combined `easysearch` app
+//! spawns the same engine itself. This standalone binary is for tests, scripts
+//! and headless setups that want to drive the protocol directly.
 
 use clap::Parser;
 use easysearch_core::{Config, Engine};
@@ -18,12 +19,9 @@ use std::time::Duration;
 #[command(
     name = "easysearch-daemon",
     version,
-    about = "Realtime file and content search daemon (localhost HTTP/JSON API)"
+    about = "EasySearch engine (JSON frames on stdin/stdout; normally a child of the app)"
 )]
 struct Cli {
-    /// Address to bind. Localhost only — the API has no authentication.
-    #[arg(long, default_value = easysearch_core::api::DEFAULT_ADDR)]
-    addr: String,
     /// Don't print a line when the initial index becomes live.
     #[arg(long)]
     quiet: bool,
@@ -46,7 +44,8 @@ fn main() {
     let engine = Arc::new(engine);
 
     if !cli.quiet {
-        // Announce readiness once the index is live (useful for scripts).
+        // Announce readiness once the index is live (on stderr, so it cannot be
+        // mistaken for a protocol frame).
         let watcher = Arc::clone(&engine);
         std::thread::Builder::new()
             .name("ready".into())
@@ -59,7 +58,7 @@ fn main() {
             .ok();
     }
 
-    if let Err(e) = easysearch_daemon::run_forever(engine, &cli.addr) {
+    if let Err(e) = easysearch_daemon::serve(engine) {
         eprintln!("easysearch-daemon: {e}");
         std::process::exit(1);
     }

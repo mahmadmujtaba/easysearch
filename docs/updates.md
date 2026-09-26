@@ -167,8 +167,8 @@ the binaries, to the release host. Point clients at the manifest with:
 - At launch, a quiet check runs **at most once a day** (disable it with
   **Settings ▸ Updates**, or with `EASYSEARCH_NO_UPDATE=1`). When a newer release
   is found, the status-bar version is joined by a `⬆ v… available` badge.
-- **Install update** downloads, verifies, and installs; **Restart now** stops the
-  search daemon and relaunches the app detached, so the new binary takes over.
+- **Install update** downloads, verifies, and installs; **Restart now** quits the
+  running app and relaunches it detached, so the new binary takes over.
 
 ### CLI
 
@@ -176,7 +176,7 @@ the binaries, to the release host. Point clients at the manifest with:
 easysearch-cli self-update --check          # report only
 easysearch-cli self-update                  # ask, then install
 easysearch-cli self-update --yes            # install without asking
-easysearch-cli self-update --restart-daemon # also stop the old daemon
+easysearch-cli self-update --restart-app   # also quit the running app
 easysearch-cli self-update --dir ~/.local/bin
 ```
 
@@ -194,10 +194,9 @@ controls the automatic launch-time check.
 
 ## Security notes
 
-- **The daemon API is localhost-only and unauthenticated.** `POST /v1/shutdown`
-  therefore lets *any* local process stop the daemon. That is not a privilege
-  gain — a local process could already `kill` it — but it is why the endpoint is
-  documented rather than hidden.
+- **No local API to attack.** The engine is a child process reached over private
+  pipes, not a listening socket, so there is no localhost endpoint (and no
+  `POST /v1/shutdown`) for another process to reach.
 - **Staging directory.** Downloads land in
   `~/.cache/easysearch/update/*.staged` and are removed after install.
 - **Writable install directory required.** If the binaries live somewhere the

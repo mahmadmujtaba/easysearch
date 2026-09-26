@@ -1,28 +1,21 @@
-//! Wire types for the local daemon HTTP API (see `docs/api.md`).
+//! Wire types for the engine protocol (see `docs/api.md`).
 //!
 //! `Query` and `Status` are serialized directly (both derive serde). The search
 //! *response* needs a DTO because `ResultRow::path` is an `OsString` that cannot
 //! round-trip through JSON: it is sent as a (lossy) UTF-8 string.
 
 use crate::engine::{ResultRow, SearchResponse, Status};
-use crate::matcher::Category;
 use serde::{Deserialize, Serialize};
 
-/// API version reported by [`Health`]; bump on breaking wire changes.
+/// Protocol version reported by [`Health`]; bump on breaking wire changes.
 pub const API_VERSION: u32 = 1;
-
-/// Default daemon address (localhost only).
-pub const DEFAULT_ADDR: &str = "127.0.0.1:5858";
-
-/// Default port used when none is given.
-pub const DEFAULT_PORT: u16 = 5858;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Health {
     pub ok: bool,
     pub version: String,
     pub api: u32,
-    /// Seconds since the daemon started.
+    /// Seconds since the engine started.
     pub uptime_secs: u64,
 }
 
@@ -93,7 +86,7 @@ pub struct ErrorDto {
     pub error: String,
 }
 
-/// Response of `POST /v1/count`: how many entries match, without shipping them.
+/// Response of the `count` op: how many entries match, without shipping them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountDto {
     pub count: u64,
@@ -103,24 +96,4 @@ impl ErrorDto {
     pub fn new(msg: impl Into<String>) -> Self {
         ErrorDto { error: msg.into() }
     }
-}
-
-/// Parse a category name used by the `?category=` query parameter.
-pub fn category_from_str(s: &str) -> Option<Category> {
-    Some(match s.to_ascii_lowercase().as_str() {
-        "" | "all" => Category::All,
-        "recent" => Category::Recent {
-            max_age_secs: 7 * 24 * 3600,
-        },
-        "images" => Category::Images,
-        "docs" | "documents" => Category::Docs,
-        "code" => Category::Code,
-        "archives" => Category::Archives,
-        "audio" => Category::Audio,
-        "video" => Category::Video,
-        "large" => Category::Large {
-            min_bytes: 1024 * 1024 * 1024,
-        },
-        _ => return None,
-    })
 }

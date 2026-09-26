@@ -17,9 +17,9 @@ After a UI change:
    `XDG_RUNTIME_DIR`, which is where the Wayland socket lives.
 2. Select the theme through the config file rather than the menu, so the shot is
    reproducible: `$XDG_CONFIG_HOME/easysearch/gui.json` with `{"dark": true}` or
-   `{"dark": false}`. Launch with a spare `--addr`, wait for
-   `GET /v1/status` to report `"state":"Live"`, then drive the search over the
-   control socket: `easysearch --addr 127.0.0.1:5959 --search 2026`.
+   `{"dark": false}`. Wait for the engine to report its index live (its stderr
+   log says so, or `easysearch-cli status` against the same config), then drive
+   the search over the control socket: `easysearch --search 2026`.
 3. Maximise and focus the window. On KDE a short script loaded through
    `qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript …` can do
    both; `spectacle -a` then grabs exactly that window:
