@@ -14,8 +14,9 @@ keys are optional individually — a partial file keeps the default for anything
 you leave out.
 
 Restart the process after changing it. The GUI's own window state lives in a
-separate file, `gui.json` (theme, zoom, tabs, saved searches, history), which the
-app manages itself.
+separate file, `gui.json` (theme, zoom, tabs, saved searches, history), and the
+per-path tags you add in the tag editor live in `tags.json`; the app manages both
+itself.
 
 ## Defaults
 
@@ -24,6 +25,7 @@ app manages itself.
   "roots": [],
   "exclude_removable": true,
   "exclude_network": true,
+  "exclude_dirs": [],
   "respect_ignore_files": true,
   "follow_symlinks": false,
   "persist_index": true,
@@ -48,6 +50,7 @@ app manages itself.
 | `roots` | `[]` | Directories to index. **Empty means `$HOME` of the user running the program** — the documented default scope. Add paths to index more, e.g. `["/home/me", "/srv/data"]`. Whole-filesystem indexing is an opt-in change, not a default. |
 | `exclude_removable` | `true` | Skip removable media (USB sticks, card readers), detected via `/sys/block/*/removable`. |
 | `exclude_network` | `true` | Skip network mounts (`nfs`, `cifs`/`smb`, `sshfs`, `gvfsd-fuse`, `9p`, …). |
+| `exclude_dirs` | `[]` | Directory trees to leave out of the index, one path per entry (`~` means `$HOME`, a relative path is taken from `$HOME`). Exact folders — the whole subtree is skipped — and live-editable in **Tools ▸ Excluded folders…**, which saves this key and rebuilds. |
 | `exclude_fstypes` | `[]` | *Extra* filesystem types to skip, on top of the built-in list (pseudo filesystems, container overlays, network FS). Union, not replacement. |
 | `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files inside the searched tree, plus the global ignore file at `~/.config/easysearch/ignore`. This is what keeps `node_modules/`, `target/` and the like out of the index. |
 | `follow_symlinks` | `false` | Follow symbolic links into their targets while walking, so the contents of a symlinked folder are indexed too. Off by default (it can duplicate subtrees); cycles are detected and skipped. Both this and `respect_ignore_files` can be toggled live from **Settings ▸ Indexing** (the app pushes the change to the engine). |
@@ -104,6 +107,7 @@ effect without restarting anything.
 |---|---|
 | `~/.config/easysearch/config.json` | this file |
 | `~/.config/easysearch/gui.json` | GUI state: theme, zoom, open tabs, saved searches, search history (managed by the app) |
+| `~/.config/easysearch/tags.json` | per-path tags added in the GUI (managed by the app) |
 | `~/.config/easysearch/ignore` | global ignore patterns |
 | `~/.cache/easysearch/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
 | `~/.cache/easysearch/index-v1.bin` | the mmap index, when `storage = "mmap"` |

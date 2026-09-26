@@ -17,6 +17,12 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
 - **Previews** in the right-hand pane: image thumbnails, audio/video metadata and
   a video first-frame, the text layer of PDF and office documents, rendered
   Markdown, and **syntax-highlighted source code** for the major languages.
+- **Tags**: label files and folders with your own `#tags`, stored locally in
+  `~/.config/easysearch/tags.json`; filter the results by a tag, tag a whole
+  selection at once, and tag anything straight from the preview pane.
+- **Lives in the tray**: closing the window keeps EasySearch running in the
+  background — the engine keeps indexing — and clicking the tray icon shows or
+  hides the window again. Only **Quit** stops the app.
 - **Fully offline**: the app makes **no network connections at all** — no
   updater, no telemetry, no remote API. Everything stays local; install and
   upgrade with your package manager (`.deb`/`.rpm`).
@@ -195,6 +201,7 @@ code inside a Markdown preview.
   "roots": [],
   "exclude_removable": true,
   "exclude_network": true,
+  "exclude_dirs": [],
   "respect_ignore_files": true,
   "persist_index": true,
   "storage": "sqlite",
@@ -213,6 +220,12 @@ code inside a Markdown preview.
 
 - **roots**: empty = `$HOME` of the user running the program. Add paths to
   index more (e.g. `["/home/me", "/srv/data"]`).
+- **exclude_dirs**: directory trees to leave out of the index, wherever they sit
+  under a root (e.g. `["~/VirtualBox VMs", "/srv/scratch"]`; `~` means `$HOME`).
+  Unlike the ignore patterns these are exact folders, and the whole subtree is
+  skipped. Edit them live in **Tools ▸ Excluded folders…** (or right-click a
+  folder result ▸ *Exclude folder from the index*); the change is saved here and
+  the index is rebuilt at once.
 - **storage**: `"sqlite"` (default) keeps the index in a SQLite database;
   `"mmap"` uses the original memory-mapped file. See [`docs/sqlite.md`](docs/sqlite.md).
 - **db_dir**: where the SQLite database lives (default

@@ -288,6 +288,15 @@ impl ChildEngine {
         })
     }
 
+    /// Replace the engine's excluded-directory list (rebuilding its index).
+    pub fn set_exclude_dirs(&self, dirs: Vec<String>) -> Result<(), String> {
+        self.patch(ConfigPatch {
+            exclude_dirs: Some(dirs),
+            rebuild: true,
+            ..Default::default()
+        })
+    }
+
     /// Turn the engine's background content cache on/off (no rebuild needed).
     pub fn set_content_index(&self, on: bool) -> Result<(), String> {
         self.patch(ConfigPatch {

@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.39.0** (2026-09-27), in rough priority order. Everything
+Outstanding items at **v0.40.0** (2026-09-27), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -110,7 +110,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | --- | --- |
 | `Duplicate Finder` toolbar button | **Built in v0.14.0** — right-click a selection ▸ *Find duplicates in results* (also *in selection*) |
 | `Fuzzy` toolbar button | **Built in v0.17.0** — fzf-style subsequence matching, with a matching Relevance score |
-| `Tags` tab, tag chips, bulk `Tag` action | Not built (needs a tag store) |
+| `Tags` tab, tag chips, bulk `Tag` action | **Built in v0.40.0** — a local tag store (`~/.config/easysearch/tags.json`), right-click ▸ **Tags…** (with bulk tagging of the selection), `#chip`s in result rows and the preview, a sidebar **TAGS** section with per-tag counts, filtering by tag, and a **Tag** quick action |
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
 | `Created` **column** in the table | **Built in v0.27.0** — a sortable *Created* column, read live via `stat` birth time (`—` where the filesystem has none), so no on-disk format change was needed |
 | `Full Text (content + name)` scope | **Built in v0.25.0** — the *Full text (name or contents)* scope, `--any`, or `content_or_name` on the API |

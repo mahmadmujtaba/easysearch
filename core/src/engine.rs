@@ -80,6 +80,11 @@ pub struct Status {
     /// via [`Engine::set_follow_symlinks`].
     #[serde(default)]
     pub follow_symlinks: bool,
+    /// Directory subtrees excluded from the index (as configured; `~` and
+    /// relative paths are shown unresolved). Live-editable via
+    /// [`Engine::set_exclude_dirs`].
+    #[serde(default)]
+    pub exclude_dirs: Vec<String>,
 }
 
 impl Default for Status {
@@ -96,6 +101,7 @@ impl Default for Status {
             base_dirs: 0,
             respect_ignore_files: true,
             follow_symlinks: false,
+            exclude_dirs: Vec::new(),
         }
     }
 }
@@ -158,6 +164,7 @@ impl Engine {
             base_dirs: 0,
             respect_ignore_files: config.respect_ignore_files,
             follow_symlinks: config.follow_symlinks,
+            exclude_dirs: config.exclude_dirs.clone(),
         }));
         let cache = Arc::new(ContentIndex::new(
             Arc::clone(&content_enabled),
@@ -303,6 +310,26 @@ impl Engine {
     /// Current value of the follow-symlinks setting.
     pub fn follow_symlinks(&self) -> bool {
         self.follow_symlinks.load(Ordering::Relaxed)
+    }
+
+    /// Replace the excluded-directory list (resolved) and, when `rebuild`, fold
+    /// the change into the index at once so the tree is re-walked without the
+    /// excluded subtrees.
+    pub fn set_exclude_dirs(&self, dirs: Vec<String>, rebuild: bool) {
+        let mut config = self.config.clone();
+        config.exclude_dirs = dirs;
+        self.roots.set_exclude_dirs(config.effective_exclude_dirs());
+        if let Ok(mut s) = self.status.write() {
+            s.exclude_dirs = config.exclude_dirs;
+        }
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// The excluded-directory list in force (resolved absolute paths).
+    pub fn exclude_dirs(&self) -> Vec<PathBuf> {
+        self.roots.exclude_dirs()
     }
 
     /// Turn the optional background content cache on or off.

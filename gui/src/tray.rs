@@ -68,6 +68,13 @@ impl Tray for AppTray {
                 }),
                 ..Default::default()
             }),
+            MenuItem::Standard(StandardItem {
+                label: "Show / Hide window".into(),
+                activate: Box::new(|t: &mut Self| {
+                    let _ = t.tx.send(TrayMsg::Toggle);
+                }),
+                ..Default::default()
+            }),
             MenuItem::Separator,
         ];
 
@@ -114,6 +121,12 @@ impl Tray for AppTray {
 
     /// Left-click on the icon toggles the main window.
     fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.tx.send(TrayMsg::Toggle);
+    }
+
+    /// Middle/right-click toggles too: hosts differ on which click they deliver
+    /// as `Activate`, and this makes the flip work either way.
+    fn secondary_activate(&mut self, _x: i32, _y: i32) {
         let _ = self.tx.send(TrayMsg::Toggle);
     }
 }

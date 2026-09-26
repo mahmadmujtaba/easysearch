@@ -107,6 +107,10 @@ pub struct ConfigPatch {
     /// Follow symbolic links while walking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
+    /// Replace the excluded-directory list (resolved by the engine; `~` expands
+    /// to the engine's `$HOME`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_dirs: Option<Vec<String>>,
     /// Background content cache on/off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_index: Option<bool>,

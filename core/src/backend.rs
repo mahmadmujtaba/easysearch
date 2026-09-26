@@ -128,6 +128,17 @@ impl Backend {
         }
     }
 
+    /// Replace the excluded-directory list (in-process engine, or the child).
+    /// The engine resolves `~`/relative entries and rebuilds its index.
+    pub fn set_exclude_dirs(&self, dirs: Vec<String>) {
+        match self {
+            Backend::Local(e) => e.set_exclude_dirs(dirs, true),
+            Backend::Child(c) => {
+                let _ = c.set_exclude_dirs(dirs);
+            }
+        }
+    }
+
     /// Turn the optional background content cache on/off. Switching it on is
     /// lazy, so no rebuild follows.
     pub fn set_content_index(&self, on: bool) {

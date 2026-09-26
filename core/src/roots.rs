@@ -6,6 +6,7 @@
 
 use crate::config::Config;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct Mount {
@@ -21,6 +22,10 @@ pub struct RootSet {
     pub roots: Vec<PathBuf>,
     /// Mount points (within or overlapping the roots) that are excluded.
     excluded: Vec<Mount>,
+    /// Directory subtrees to skip (from `config.exclude_dirs`, resolved). Shared
+    /// and mutable so the GUI can change the list without an engine restart —
+    /// the next walk picks it up.
+    exclude_dirs: Arc<RwLock<Vec<PathBuf>>>,
 }
 
 impl RootSet {
@@ -52,14 +57,41 @@ impl RootSet {
             }
         }
 
-        RootSet { roots, excluded }
+        RootSet {
+            roots,
+            excluded,
+            exclude_dirs: Arc::new(RwLock::new(config.effective_exclude_dirs())),
+        }
     }
 
-    /// True if `path` is inside any excluded mount point.
+    /// True if `path` is inside any excluded mount point or excluded directory.
     pub fn is_excluded(&self, path: &Path) -> bool {
         // Excluded mounts are usually top-level (/proc, /sys, /media/...), but
         // a removable mount inside a root (e.g. ~/usb) must also be skipped.
-        self.excluded.iter().any(|m| path.starts_with(&m.point))
+        if self.excluded.iter().any(|m| path.starts_with(&m.point)) {
+            return true;
+        }
+        if let Ok(dirs) = self.exclude_dirs.read()
+            && dirs.iter().any(|d| path.starts_with(d))
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Replace the directory-exclusion list (takes effect on the next walk).
+    pub fn set_exclude_dirs(&self, dirs: Vec<PathBuf>) {
+        if let Ok(mut guard) = self.exclude_dirs.write() {
+            *guard = dirs;
+        }
+    }
+
+    /// The current directory-exclusion list.
+    pub fn exclude_dirs(&self) -> Vec<PathBuf> {
+        self.exclude_dirs
+            .read()
+            .map(|d| d.clone())
+            .unwrap_or_default()
     }
 
     /// True if `path` is inside one of the search roots.
@@ -189,11 +221,26 @@ mod tests {
                     fstype: "vfat".into(),
                 },
             ],
+            exclude_dirs: Arc::new(RwLock::new(vec![PathBuf::from("/home/ahmad/scratch")])),
         };
         assert!(set.is_excluded(Path::new("/proc/123/fd")));
         assert!(set.is_excluded(Path::new("/home/ahmad/usb/photos")));
+        assert!(set.is_excluded(Path::new("/home/ahmad/scratch/tmp.bin")));
         assert!(!set.is_excluded(Path::new("/home/ahmad/Documents")));
         assert!(set.is_in_roots(Path::new("/home/ahmad/x.txt")));
         assert!(!set.is_in_roots(Path::new("/opt/x.txt")));
+    }
+
+    #[test]
+    fn excluded_dirs_can_be_replaced_live() {
+        let set = RootSet {
+            roots: vec![PathBuf::from("/home/ahmad")],
+            ..RootSet::default()
+        };
+        let scratch = Path::new("/home/ahmad/scratch/x");
+        assert!(!set.is_excluded(scratch));
+        set.set_exclude_dirs(vec![PathBuf::from("/home/ahmad/scratch")]);
+        assert!(set.is_excluded(scratch));
+        assert_eq!(set.exclude_dirs().len(), 1);
     }
 }

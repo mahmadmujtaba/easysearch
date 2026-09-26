@@ -100,6 +100,14 @@ syntax; `**/node_modules/` matches at any depth) with **Save & rebuild**,
 Both switches are **live**: they are pushed to the running engine and followed by
 a rebuild, so they take effect immediately rather than at the next restart.
 
+**Excluded folders** are a *path* exclusion, separate from the ignore patterns:
+**Tools ▸ Excluded folders…** edits a list of exact directory trees to leave out
+of the index (one absolute path per line; `~` means your home folder), and
+right-clicking a folder result ▸ **Exclude folder from the index** adds one on the
+spot. Saving writes `exclude_dirs` in `config.json` and rebuilds without those
+subtrees; the sidebar's **Excluded folders (N)…** row in *Advanced Search* opens
+the same dialog and shows the count.
+
 **Background content index** (`Settings ▸ Indexing`) caches the text it extracts
 from `.docx`/`.odt`/`.pdf` files so repeated content searches are nearly free.
 It is off by default, and it only ever holds *extracted document text* (plain
@@ -202,6 +210,26 @@ Progress is cancellable-by-replacement: starting a new scan discards the old
 one's result. Nothing is ever deleted for you — the window only selects, copies
 and reveals.
 
+## Tags
+
+Tags are your own labels on files and folders — “work”, “2026”, “archive” —
+stored locally in `~/.config/easysearch/tags.json` and shown as small `#chips`.
+They are a view over the results, not part of the index: the engine never sees
+them, and nothing is written to the tagged files themselves.
+
+- **Add or remove them** from a result's right-click menu (**Tags…**). The editor
+  acts on the whole checked selection when you opened it from a selected row, so
+  one action can tag many files at once; the **Tag** quick action at the bottom
+  of the preview pane opens it for the file you are looking at.
+- **Filter** by a tag by clicking its chip (in a result row, in the preview, or
+  in the status of the results header) or its row in the sidebar's **TAGS**
+  section. The active tag is shown in the results header with a ✕ to clear it.
+- The sidebar lists every tag in use with **how many paths carry it**; a tag on
+  some-but-not-all of a multi-file selection is shown as `#tag (2/5)`.
+- Tags follow **paths**, so renaming or moving a file outside EasySearch leaves
+  the tag pointing at the old path (it simply stops matching). A store that
+  cannot be read is ignored rather than blocking startup.
+
 ## Right-hand panel
 
 - **Preview** — by file kind: image thumbnails for pictures; **audio/video**
@@ -253,6 +281,22 @@ its full path.
 its keyboard focus, so `↑`/`↓`/`PgUp`/`PgDn`/`Enter` act on the results; the
 first printable key you type then re-grabs the field and starts a new query, so
 you never have to click back into it.
+
+## Tray and closing
+
+EasySearch keeps running when you close its window. The **X** button hides the
+window — the engine child keeps indexing and the search stays warm — and the app
+is only stopped by **File ▸ Quit EasySearch**, the tray's *Quit*, or
+`easysearch --quit`.
+
+- **Clicking the tray icon** shows the window if it is hidden and hides it if it
+  is visible (the tray menu's *Show / Hide window* does the same).
+- With **no tray** (a desktop without a StatusNotifier host) the window still
+  hides to the background; bring it back with `easysearch --show`, bindable as a
+  desktop shortcut (see *Global hotkey* below).
+- One caveat: on a **Wayland** session a window cannot be unmapped, so “hidden”
+  means the window is parked out of the way rather than truly gone. On X11 it is
+  a normal hide.
 
 ## Global hotkey
 

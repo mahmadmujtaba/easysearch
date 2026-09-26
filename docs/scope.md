@@ -258,6 +258,11 @@ One query box, three effective combinations:
   file at `~/.config/easysearch/ignore`. The shipped `.gitignore` excludes
   `node_modules`, `target`, build dirs, caches, editor settings, and VCS internals
   (copy it to `~/.gitignore` to apply to the default root).
+- **Excluded folders:** `config.exclude_dirs` lists whole directory trees to skip,
+  wherever they sit under a root (`~` expanded, relative paths taken from `$HOME`).
+  Where the ignore patterns are glob rules, these are exact folders, and they are
+  live-editable in the GUI (**Tools ▸ Excluded folders…**, or right-click a folder
+  result) which saves the config and rebuilds the index without them.
 - **Never indexed (pseudo-FS / noise):** `/proc`, `/sys`, `/dev`, `/run`, `/tmp`.
 - **USB and external/removable mounts: excluded by default** (user decision 2026-08-20) —
   detection via `/proc/self/mounts` (mount type + source) plus the backing device's

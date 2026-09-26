@@ -74,8 +74,13 @@ impl Daemon {
                     if let Some(on) = patch.content_index {
                         self.engine.set_content_index(on);
                     }
-                    if (patch.respect.is_some() || patch.follow_symlinks.is_some()) && patch.rebuild
-                    {
+                    let walk_changed = patch.respect.is_some()
+                        || patch.follow_symlinks.is_some()
+                        || patch.exclude_dirs.is_some();
+                    if let Some(dirs) = patch.exclude_dirs {
+                        self.engine.set_exclude_dirs(dirs, false);
+                    }
+                    if walk_changed && patch.rebuild {
                         self.engine.rebuild();
                     }
                     Response::done(id)

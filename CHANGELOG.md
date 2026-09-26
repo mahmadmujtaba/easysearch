@@ -4,6 +4,49 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] - 2026-09-27
+
+### Added
+
+- **Tags.** Files and folders can carry your own labels — “work”, “2026”,
+  “archive” — shown as small `#chips`. They are stored locally in
+  `~/.config/easysearch/tags.json` (atomic writes; a missing or corrupt file
+  loads as empty) and never touch the indexed files themselves.
+  - **Right-click ▸ Tags…** opens an editor that adds a tag to, or removes one
+    from, a single row or the whole checked selection at once, with the union of
+    the selection's tags shown as `#tag (2/5)` where they apply to only some.
+  - **Filter by tag** from a chip (in a result row, the preview, or the results
+    header) or from the sidebar's new **TAGS** section, which lists every tag in
+    use with how many paths carry it; the active filter shows in the results
+    header with a ✕ to clear it.
+  - Tag chips appear in the **Name** cell (first two), the preview header, and
+    the **Tags** row of the Details panel, and a **Tag** quick action sits with
+    the other preview actions.
+- **A `Tag` icon** in the painted icon set (a luggage-tag glyph).
+- **Excluded folders.** `config.exclude_dirs` lists whole directory trees to
+  leave out of the index wherever they sit under a root (`~` expands to `$HOME`).
+  **Tools ▸ Excluded folders…** edits the list (one path per line), right-clicking
+  a folder result ▸ **Exclude folder from the index** adds one in place, and the
+  sidebar's *Advanced Search* shows the count. Saving writes `config.json` and
+  the running engine rebuilds without those subtrees, live — no restart.
+- The tag store is `easysearch_core::TagStore` (`core/src/tags.rs`) with unit
+  tests for add/remove, set, empty-name rejection, corrupt-file recovery,
+  atomic save/load and pruning.
+
+### Fixed
+
+- **Closing the window keeps EasySearch running in the background.** The X
+  button now always hides the window (previously it only did so when a tray
+  handle was present, and otherwise quit the app), so the engine child keeps
+  indexing and the tray — where the desktop has one — stays. Only **Quit**
+  (`File ▸ Quit`, the tray's *Quit*, `--quit`) stops the app.
+- **The tray icon reliably toggles the window.** Left- and middle/right-click
+  both flip it, there is a *Show / Hide window* menu item for hosts that only
+  show the menu, and hiding no longer depends on the window being unmap-able: on
+  Wayland — where `winit` implements `set_visible` as a no-op — the window is
+  parked (undecorated, 1×1, behind everything) and restored on show, so the flip
+  works on both Wayland and X11.
+
 ## [0.39.0] - 2026-09-27
 
 ### Added

@@ -25,6 +25,7 @@ pub mod process;
 pub mod proto;
 pub mod roots;
 pub mod sqlite_index;
+pub mod tags;
 pub mod walker;
 pub mod watcher;
 
@@ -33,3 +34,4 @@ pub use child::ChildEngine;
 pub use config::Config;
 pub use engine::{ContentIndexStatus, Engine, ResultRow, SearchResponse, State, Status};
 pub use matcher::{Category, CompiledQuery, Query};
+pub use tags::TagStore;

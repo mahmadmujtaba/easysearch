@@ -81,6 +81,12 @@ pub struct Config {
     pub exclude_removable: bool,
     /// Exclude network mounts (nfs, smb/cifs, sshfs, ...).
     pub exclude_network: bool,
+    /// Directory subtrees to leave out of the index, wherever they sit under a
+    /// root (e.g. `~/VirtualBox VMs`, `/srv/scratch`). `~` expands to `$HOME`
+    /// and a relative path is taken from `$HOME`. This is a *path* exclusion,
+    /// independent of the fstype exclusions above; it is editable live in the
+    /// GUI (**Tools ▸ Excluded folders…**), which saves it back here.
+    pub exclude_dirs: Vec<String>,
     /// Honor `.ignore`/`.gitignore` files (and the global ignore file at
     /// `~/.config/easysearch/ignore`) while walking, so non-essential
     /// folders listed there are never indexed.
@@ -136,6 +142,7 @@ impl Default for Config {
             roots: Vec::new(),
             exclude_removable: true,
             exclude_network: true,
+            exclude_dirs: Vec::new(),
             respect_ignore_files: true,
             follow_symlinks: false,
             persist_index: true,
@@ -255,6 +262,59 @@ impl Config {
         roots.dedup();
         roots
     }
+
+    /// Resolved directory exclusions: `~` expanded, relative paths taken from
+    /// `$HOME`, made absolute and deduplicated. A path that does not exist yet
+    /// is kept as-is, so it starts excluding as soon as it appears.
+    pub fn effective_exclude_dirs(&self) -> Vec<PathBuf> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for raw in &self.exclude_dirs {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let expanded = if let Some(rest) = trimmed.strip_prefix("~/") {
+                home.as_ref().map(|h| h.join(rest)).unwrap_or_default()
+            } else if trimmed == "~" {
+                home.clone().unwrap_or_default()
+            } else {
+                PathBuf::from(trimmed)
+            };
+            let expanded = if expanded.as_os_str().is_empty() {
+                PathBuf::from(trimmed)
+            } else {
+                expanded
+            };
+            let absolute = if expanded.is_absolute() {
+                expanded
+            } else {
+                home.as_ref().map(|h| h.join(&expanded)).unwrap_or(expanded)
+            };
+            let path = absolute.canonicalize().unwrap_or(absolute);
+            if !dirs.contains(&path) {
+                dirs.push(path);
+            }
+        }
+        dirs
+    }
+
+    /// Write this config to the default path (pretty JSON, atomically).
+    pub fn save(&self) -> Result<(), String> {
+        self.save_to(&Self::default_path())
+    }
+
+    /// Write this config to `path` (pretty JSON, atomically).
+    pub fn save_to(&self, path: &std::path::Path) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 /// Parse the `EASYSEARCH_CONTENT_MEMORY` boot override.
@@ -283,6 +343,47 @@ mod tests {
         }
         assert_eq!(content_memory_from_env(None), None);
         assert_eq!(content_memory_from_env(Some("maybe")), None);
+    }
+
+    #[test]
+    fn exclude_dirs_are_canonicalised_and_deduplicated() {
+        let dir = std::env::temp_dir().join(format!("easysearch-exclude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            exclude_dirs: vec![
+                dir.display().to_string(),
+                dir.display().to_string(), // duplicate
+                "   ".into(),              // blank
+            ],
+            ..Config::default()
+        };
+        let dirs = config.effective_exclude_dirs();
+        assert_eq!(
+            dirs.len(),
+            1,
+            "blank and duplicate entries collapse: {dirs:?}"
+        );
+        assert_eq!(dirs[0], dir.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exclude_dirs_expand_a_leading_tilde() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return; // no HOME in this environment: nothing to assert
+        };
+        let config = Config {
+            exclude_dirs: vec!["~/work/scratch".into()],
+            ..Config::default()
+        };
+        let dirs = config.effective_exclude_dirs();
+        assert_eq!(dirs.len(), 1);
+        assert!(
+            dirs[0].starts_with(PathBuf::from(home).canonicalize().unwrap_or_default()),
+            "{dirs:?}"
+        );
+        assert!(dirs[0].ends_with("work/scratch"), "{dirs:?}");
     }
 
     #[test]

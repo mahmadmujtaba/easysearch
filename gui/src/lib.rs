@@ -12,12 +12,13 @@
 
 use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
+    TagStore,
 };
 use easysearch_core::{ipc, logo};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -1058,12 +1059,32 @@ struct App {
     ignore_text: String,
     /// Transient status line shown inside the ignore window.
     ignore_msg: Option<String>,
+    // --- excluded folders -------------------------------------------------
+    /// The “Excluded folders” window is open.
+    show_excludes: bool,
+    /// Edit buffer: one directory per line (mirrors `config.exclude_dirs`).
+    exclude_text: String,
+    /// Transient status line shown inside the excluded-folders window.
+    exclude_msg: Option<String>,
     /// Commands from the control socket (`--toggle`, `--search …`).
     ipc_rx: mpsc::Receiver<ipc::Command>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
     /// Human label for the search backend ("in-process" or "engine pid N").
     backend_label: String,
+    // --- tags -------------------------------------------------------------
+    /// Per-path tags, loaded from `~/.config/easysearch/tags.json`.
+    tags: TagStore,
+    /// The raw engine results; `results` is this after the active tag filter.
+    all_results: Vec<ResultRow>,
+    /// When set, only results carrying this tag are shown.
+    tag_filter: Option<String>,
+    /// The tag editor window is open.
+    show_tags: bool,
+    /// New-tag text in the editor.
+    tag_input: String,
+    /// Paths the tag editor acts on (the selection, or a single row).
+    tag_targets: Vec<PathBuf>,
 }
 
 impl App {
@@ -1204,6 +1225,8 @@ impl App {
                 .expect("failed to spawn duplicates thread");
         }
 
+        let tags = TagStore::load(TagStore::default_path());
+
         let mut app = App {
             engine: backend,
             prefs,
@@ -1286,8 +1309,17 @@ impl App {
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
+            show_excludes: false,
+            exclude_text: String::new(),
+            exclude_msg: None,
             ipc_rx,
             pending_cmds: Vec::new(),
+            tags,
+            all_results: Vec::new(),
+            tag_filter: None,
+            show_tags: false,
+            tag_input: String::new(),
+            tag_targets: Vec::new(),
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
@@ -1436,7 +1468,7 @@ impl App {
             size: self.size,
             modified: self.modified,
             extensions: self.extensions.clone(),
-            results: self.results.clone(),
+            results: self.all_results.clone(),
             truncated: self.truncated,
             error: self.error.clone(),
             elapsed_ms: self.elapsed_ms,
@@ -1462,7 +1494,7 @@ impl App {
         self.size = t.size;
         self.modified = t.modified;
         self.extensions = t.extensions;
-        self.results = t.results;
+        self.all_results = t.results;
         self.truncated = t.truncated;
         self.error = t.error;
         self.elapsed_ms = t.elapsed_ms;
@@ -1475,6 +1507,7 @@ impl App {
         self.scroll_to = None;
         self.history_idx = None;
         self.last_edit = Instant::now();
+        self.apply_tag_filter();
         self.prune_selection();
     }
 
@@ -1600,7 +1633,8 @@ impl App {
         self.sort = cycle_sort(self.sort, prefer);
         if let Some(s) = self.sort {
             let needle = self.last_sent.clone();
-            sort_results(&mut self.results, s, &needle, self.prefs.fuzzy);
+            sort_results(&mut self.all_results, s, &needle, self.prefs.fuzzy);
+            self.apply_tag_filter();
         }
     }
 
@@ -1768,8 +1802,46 @@ fn search_id() -> egui::Id {
     egui::Id::new("search_input")
 }
 
-/// Bring the window to the front (show it and give it focus).
+/// The window's normal size, restored when it is un-parked.
+const WINDOW_SIZE: egui::Vec2 = egui::vec2(1240.0, 760.0);
+
+/// Whether this backend lets us truly unmap the window. `winit`'s Wayland
+/// backend implements `set_visible` as a no-op ("Not possible on Wayland"), so
+/// on a Wayland session we cannot hide a window — we park it instead.
+/// `WAYLAND_DISPLAY` set means the window is a Wayland window (winit prefers it
+/// over XWayland).
+fn can_unmap_window() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+/// Hide the window without closing it.
+///
+/// On X11 this unmaps the window. On Wayland the unmap is ignored, so the
+/// window is *parked*: undecorated, 1×1 and kept behind everything. That is
+/// the only way to get the window out of the way there without closing it — and
+/// closing it would end the event loop (and with it the tray and the engine).
+/// [`show_window`] reverses it exactly.
+fn hide_window(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    if !can_unmap_window() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::WindowLevel::AlwaysOnBottom,
+        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
+    }
+}
+
+/// Bring the window to the front (show it and give it focus), undoing
+/// [`hide_window`].
 fn show_window(ctx: &egui::Context) {
+    if !can_unmap_window() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::WindowLevel::Normal,
+        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(WINDOW_SIZE));
+    }
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 }
@@ -1800,6 +1872,8 @@ enum Icon {
     CatAudio,
     CatVideo,
     CatLarge,
+    /// A result tag (the sidebar's TAGS section and tag chips).
+    Tag,
 }
 
 fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui::Color32) {
@@ -1963,6 +2037,16 @@ fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui
             painter.line_segment([p(0.15, -0.5), p(0.7, 0.0)], stroke);
             painter.line_segment([p(0.7, 0.0), p(0.15, 0.5)], stroke);
             painter.line_segment([p(0.35, -0.75), p(-0.35, 0.75)], stroke);
+        }
+        Icon::Tag => {
+            // A luggage-tag outline with its punch hole.
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(-0.85, -0.55), p(0.85, 0.55)),
+                egui::CornerRadius::same(3),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_filled(p(-0.45, 0.0), s * 0.18, color);
         }
         Icon::CatArchive => {
             painter.rect_stroke(
@@ -2232,6 +2316,27 @@ fn section_title(t: &Theme, title: &str) -> egui::RichText {
         .size(10.5)
         .strong()
         .color(t.faint)
+}
+
+/// A small pill for a tag. Clicking it is left to the caller (to filter by the
+/// tag); `active` draws the filled, selected style. A leading `#` is added when
+/// the label does not already carry one.
+fn tag_chip(ui: &mut egui::Ui, t: &Theme, tag: &str, active: bool) -> egui::Response {
+    let color = t.accent;
+    let label = if tag.starts_with('#') {
+        tag.to_string()
+    } else {
+        format!("#{tag}")
+    };
+    let fill = if active { color } else { t.chip_fill(color) };
+    let fg = if active { t.bg } else { color };
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).size(10.0).color(fg))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(0.6)))
+            .corner_radius(egui::CornerRadius::same(6))
+            .min_size(egui::vec2(0.0, 15.0)),
+    )
 }
 
 /// Format a KiB amount the way the status bar wants it (`6.2 GB`).
@@ -2672,6 +2777,16 @@ enum RowCmd {
     Details(PathBuf),
     FilterTo(PathBuf),
     SearchName(PathBuf),
+    /// Open the tag editor for a row (or the whole checked selection).
+    EditTags {
+        path: PathBuf,
+        selection: bool,
+    },
+    /// Show only results carrying this tag.
+    FilterTag(String),
+    ClearTagFilter,
+    /// Add a directory to `config.exclude_dirs` and reindex without it.
+    ExcludeFromIndex(PathBuf),
     AddToSelection(PathBuf),
     RemoveFromSelection(PathBuf),
     SelectAll,
@@ -3009,16 +3124,17 @@ impl eframe::App for App {
                 }
                 match result {
                     Ok(r) => {
-                        self.results = r.results;
+                        self.all_results = r.results;
                         self.truncated = r.truncated;
                         self.elapsed_ms = r.elapsed_ms;
                         self.error = None;
                         self.pending = false;
-                        self.prune_selection();
                         if let Some(sort) = self.sort {
                             let needle = self.last_sent.clone();
-                            sort_results(&mut self.results, sort, &needle, self.prefs.fuzzy);
+                            sort_results(&mut self.all_results, sort, &needle, self.prefs.fuzzy);
                         }
+                        self.apply_tag_filter();
+                        self.prune_selection();
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -3170,6 +3286,8 @@ impl eframe::App for App {
             || self.show_save
             || self.show_saved
             || self.show_dups
+            || self.show_tags
+            || self.show_excludes
             || self.show_ignore;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
@@ -3302,7 +3420,7 @@ impl eframe::App for App {
             match cmd {
                 ipc::Command::Toggle => {
                     if self.window_visible {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        hide_window(ctx);
                         self.window_visible = false;
                     } else {
                         show_window(ctx);
@@ -3314,7 +3432,7 @@ impl eframe::App for App {
                     self.window_visible = true;
                 }
                 ipc::Command::Hide => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    hide_window(ctx);
                     self.window_visible = false;
                 }
                 ipc::Command::Search(query) => {
@@ -3350,7 +3468,7 @@ impl eframe::App for App {
                 }
                 tray::TrayMsg::Toggle => {
                     if self.window_visible {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        hide_window(ctx);
                         self.window_visible = false;
                     } else {
                         show_window(ctx);
@@ -3370,15 +3488,14 @@ impl eframe::App for App {
             }
         }
 
-        // The X button hides to the tray, so the engine child keeps indexing and
-        // the app comes back with one click. Only an explicit Quit (menu, tray,
-        // `--quit`) exits, and without a tray the window simply closes.
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.tray_quit
-            && self.tray_handle.is_some()
-        {
+        // The X button hides the window (to the tray, where the desktop has one)
+        // so the engine child keeps indexing and the app comes back with one
+        // click. Only an explicit Quit (menu, tray, `--quit`) exits the app —
+        // including when there is no tray, where `easysearch --show` (the
+        // control socket) brings it back.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.tray_quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            hide_window(ctx);
             self.window_visible = false;
         }
 
@@ -3419,6 +3536,8 @@ impl eframe::App for App {
         }
         self.save_search_dialog(ctx);
         self.duplicates_window(ctx);
+        self.tags_dialog(ctx);
+        self.excludes_dialog(ctx);
         self.ignore_dialog(ctx);
     }
 
@@ -3426,6 +3545,7 @@ impl eframe::App for App {
     /// on every `auto_save_interval` tick).
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.save_prefs();
+        let _ = self.tags.save();
     }
 }
 
@@ -3761,7 +3881,7 @@ impl App {
                             )
                             .clicked()
                         {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            hide_window(ctx);
                             self.window_visible = false;
                             ui.close_menu();
                         }
@@ -3844,6 +3964,10 @@ impl App {
                         }
                         if ui.button("Ignore files…").clicked() {
                             self.open_ignore_dialog();
+                            ui.close_menu();
+                        }
+                        if ui.button("Excluded folders…").clicked() {
+                            self.open_excludes_dialog();
                             ui.close_menu();
                         }
                         if ui.button("Save current search…").clicked() {
@@ -4473,6 +4597,15 @@ impl App {
                                 .color(t.warn),
                         );
                     }
+                    if let Some(tag) = self.tag_filter.clone() {
+                        ui.label(egui::RichText::new("•").size(11.5).color(t.faint));
+                        if tag_chip(ui, &t, &format!("#{tag}"), true)
+                            .on_hover_text("Clear the tag filter")
+                            .clicked()
+                        {
+                            self.set_tag_filter(None);
+                        }
+                    }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Density.
@@ -4616,7 +4749,8 @@ impl App {
     fn set_sort(&mut self, prefer: Sort) {
         self.sort = Some(prefer);
         let needle = self.last_sent.clone();
-        sort_results(&mut self.results, prefer, &needle, self.prefs.fuzzy);
+        sort_results(&mut self.all_results, prefer, &needle, self.prefs.fuzzy);
+        self.apply_tag_filter();
     }
 
     fn clear_filters(&mut self) {
@@ -4707,6 +4841,8 @@ impl App {
                         self.sidebar_categories(ui, &t);
                         ui.add_space(12.0);
                         self.sidebar_saved(ui, &t);
+                        ui.add_space(12.0);
+                        self.sidebar_tags(ui, &t);
                         ui.add_space(12.0);
                         self.sidebar_locations(ui, &t);
                         ui.add_space(12.0);
@@ -4816,6 +4952,46 @@ impl App {
         }
     }
 
+    /// User tags, each with how many tagged paths carry it; clicking one filters
+    /// the results to that tag.
+    fn sidebar_tags(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        ui.label(section_title(t, "TAGS"));
+        ui.add_space(5.0);
+        let all = self.tags.all();
+        if all.is_empty() {
+            ui.label(
+                egui::RichText::new("Right-click a result ▸ Tags…")
+                    .size(10.5)
+                    .color(t.faint),
+            );
+            return;
+        }
+        let mut pick: Option<Option<String>> = None;
+        for (tag, count) in &all {
+            if !self.sidebar_matches(tag) {
+                continue;
+            }
+            let active = self.tag_filter.as_deref() == Some(tag.as_str());
+            let n = count.to_string();
+            if nav_item(
+                ui,
+                t,
+                Icon::Tag,
+                t.kind_arch,
+                &format!("#{tag}"),
+                Some(&n),
+                active,
+            )
+            .clicked()
+            {
+                pick = Some(if active { None } else { Some(tag.clone()) });
+            }
+        }
+        if let Some(p) = pick {
+            self.set_tag_filter(p);
+        }
+    }
+
     /// Quick “search only here” locations.
     fn sidebar_locations(&mut self, ui: &mut egui::Ui, t: &Theme) {
         ui.label(section_title(t, "INDEXED LOCATIONS"));
@@ -4872,6 +5048,22 @@ impl App {
         if opt_check(ui, t, &mut self.prefs.include_dirs, "Include folders") {
             self.prefs.save();
             self.send_query();
+        }
+        ui.add_space(4.0);
+        let n_excluded = self.status.exclude_dirs.len();
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(format!("Excluded folders ({n_excluded})…"))
+                        .size(11.0)
+                        .color(t.dim),
+                )
+                .frame(false),
+            )
+            .on_hover_text("Folders left out of the index (Tools ▸ Excluded folders…)")
+            .clicked()
+        {
+            self.open_excludes_dialog();
         }
         let cache = match &self.status.content_index {
             ContentIndexStatus::Enabled { entries, bytes, .. } => {
@@ -5114,6 +5306,11 @@ impl App {
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| r.path.display().to_string());
                     let mut toggle: Option<PathBuf> = None;
+                    let row_tags: Vec<String> = self
+                        .tags
+                        .tags_of(&r.path)
+                        .map(|s| s.iter().cloned().collect())
+                        .unwrap_or_default();
 
                     // Bulk selection.
                     row.col(|ui| {
@@ -5154,6 +5351,15 @@ impl App {
                                 });
                             } else {
                                 ui.label(egui::RichText::new(name).strong().color(t.text));
+                            }
+                            for tag in row_tags.iter().take(2) {
+                                ui.add_space(2.0);
+                                if tag_chip(ui, &t, tag, false)
+                                    .on_hover_text(format!("#{tag} — click to filter"))
+                                    .clicked()
+                                {
+                                    self.pending_cmds.push(RowCmd::FilterTag(tag.clone()));
+                                }
                             }
                         });
                     });
@@ -5311,6 +5517,38 @@ impl App {
                         if ui.button("Search for this name").clicked() {
                             self.pending_cmds.push(RowCmd::SearchName(r.path.clone()));
                             ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Tags…").clicked() {
+                            self.pending_cmds.push(RowCmd::EditTags {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
+                        }
+                        for tag in &row_tags {
+                            if ui.button(format!("Filter by #{tag}")).clicked() {
+                                self.pending_cmds.push(RowCmd::FilterTag(tag.clone()));
+                                ui.close_menu();
+                            }
+                        }
+                        if self.tag_filter.is_some() && ui.button("Clear tag filter").clicked() {
+                            self.pending_cmds.push(RowCmd::ClearTagFilter);
+                            ui.close_menu();
+                        }
+                        if r.is_dir {
+                            ui.separator();
+                            if ui
+                                .button("Exclude folder from the index")
+                                .on_hover_text(
+                                    "Leave this folder (and everything under it) out of the index.",
+                                )
+                                .clicked()
+                            {
+                                self.pending_cmds
+                                    .push(RowCmd::ExcludeFromIndex(r.path.clone()));
+                                ui.close_menu();
+                            }
                         }
                         ui.separator();
                         if in_sel {
@@ -5482,12 +5720,21 @@ impl App {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
+        let tags: Vec<String> = self
+            .tags
+            .tags_of(&path)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             type_chip(ui, &t, &path, is_dir);
             ui.add_space(4.0);
             ui.label(egui::RichText::new(&name).strong().size(14.0).color(t.text));
+            for tag in tags.iter().take(3) {
+                ui.add_space(2.0);
+                tag_chip(ui, &t, tag, false);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(egui::Button::new(egui::RichText::new("✕").size(12.0)).frame(false))
@@ -5668,6 +5915,19 @@ impl App {
                         detail_row(ui, &t, "Created", &created);
                         detail_row(ui, &t, "MIME type", &mime);
                         detail_row(ui, &t, "Permissions", &perms);
+                        detail_row(
+                            ui,
+                            &t,
+                            "Tags",
+                            &if tags.is_empty() {
+                                "—".to_string()
+                            } else {
+                                tags.iter()
+                                    .map(|t| format!("#{t}"))
+                                    .collect::<Vec<_>>()
+                                    .join("  ")
+                            },
+                        );
                         detail_row(ui, &t, "SHA-256", &hash);
                     });
             }
@@ -5691,6 +5951,9 @@ impl App {
             }
             if quick_action(ui, &t, "Terminal", Icon::Terminal) {
                 App::open_terminal(&path);
+            }
+            if quick_action(ui, &t, "Tag", Icon::Tag) {
+                self.open_tag_editor(vec![path.clone()]);
             }
         });
     }
@@ -5851,6 +6114,131 @@ impl App {
                 Err(e) => {
                     self.ignore_msg = Some(format!("Cannot write {}: {e}", path.display()));
                 }
+            }
+        }
+    }
+
+    // --- excluded folders -------------------------------------------------
+
+    fn open_excludes_dialog(&mut self) {
+        let cfg = easysearch_core::Config::load();
+        self.exclude_text = cfg.exclude_dirs.join("\n");
+        self.exclude_msg = None;
+        self.show_excludes = true;
+    }
+
+    /// Add `path` to `config.exclude_dirs`, save it and reindex without it.
+    /// Used by the result-row context menu.
+    fn exclude_dir_now(&mut self, path: &Path) {
+        let mut cfg = easysearch_core::Config::load();
+        let entry = path.to_string_lossy().into_owned();
+        if !cfg.exclude_dirs.iter().any(|d| d.trim() == entry.trim()) {
+            cfg.exclude_dirs.push(entry);
+        }
+        self.exclude_text = cfg.exclude_dirs.join("\n");
+        self.show_excludes = true;
+        match cfg.save() {
+            Ok(()) => {
+                self.engine.set_exclude_dirs(cfg.exclude_dirs.clone());
+                self.exclude_msg = Some(format!("Excluded {} — reindexing…", path.display()));
+            }
+            Err(e) => self.exclude_msg = Some(format!("Cannot save config: {e}")),
+        }
+    }
+
+    /// The “Excluded folders” window: edit `config.exclude_dirs` (Tools ▸
+    /// Excluded folders…). Unlike ignore patterns these are exact folders — the
+    /// folder and everything under it is left out of the index.
+    fn excludes_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_excludes {
+            return;
+        }
+        let t = self.theme();
+        let config_path = easysearch_core::Config::default_path();
+        let mut open = true;
+        let mut close = false;
+        let mut save = false;
+        let mut reload = false;
+        egui::Window::new("Excluded folders")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(560.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Whole directory trees to leave out of the index, one absolute path per \
+                         line (`~` means your home folder). Unlike the ignore patterns, these \
+                         are exact folders: the folder and everything under it is skipped.",
+                    )
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("config.json ▸ exclude_dirs").strong());
+                ui.label(
+                    egui::RichText::new(config_path.display().to_string())
+                        .monospace()
+                        .size(11.0)
+                        .color(t.faint),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .max_height(230.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.exclude_text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(10)
+                                .hint_text("~/VirtualBox VMs\n/srv/scratch"),
+                        );
+                    });
+                if let Some(msg) = &self.exclude_msg {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(msg).size(11.5).color(t.dim));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Save & rebuild")
+                        .on_hover_text("Write config.json and reindex without these folders.")
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui.button("Reload").clicked() {
+                        reload = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        self.show_excludes = open && !close;
+        if reload {
+            let cfg = easysearch_core::Config::load();
+            self.exclude_text = cfg.exclude_dirs.join("\n");
+            self.exclude_msg = Some("Reloaded from config.json.".to_string());
+        }
+        if save {
+            let mut cfg = easysearch_core::Config::load();
+            cfg.exclude_dirs = self
+                .exclude_text
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            self.exclude_text = cfg.exclude_dirs.join("\n");
+            match cfg.save() {
+                Ok(()) => {
+                    self.engine.set_exclude_dirs(cfg.exclude_dirs.clone());
+                    self.exclude_msg = Some(format!(
+                        "Saved {} folder(s) — reindexing…",
+                        cfg.exclude_dirs.len()
+                    ));
+                }
+                Err(e) => self.exclude_msg = Some(format!("Cannot save config: {e}")),
             }
         }
     }
@@ -6055,6 +6443,162 @@ impl App {
         }
     }
 
+    // --- tags -------------------------------------------------------------
+
+    /// Rebuild the displayed results from the raw set, applying the tag filter.
+    fn apply_tag_filter(&mut self) {
+        self.results = match &self.tag_filter {
+            Some(tag) => self
+                .all_results
+                .iter()
+                .filter(|r| self.tags.has(&r.path, tag))
+                .cloned()
+                .collect(),
+            None => self.all_results.clone(),
+        };
+        if self.selected >= self.results.len() {
+            self.selected = self.results.len().saturating_sub(1);
+        }
+    }
+
+    /// Set (or, with `None`, clear) the tag filter and refresh the visible rows.
+    fn set_tag_filter(&mut self, tag: Option<String>) {
+        self.tag_filter = tag
+            .map(|t| t.trim().trim_start_matches('#').trim().to_string())
+            .filter(|t| !t.is_empty());
+        self.apply_tag_filter();
+        self.prune_selection();
+        self.preview = None;
+    }
+
+    /// Open the tag editor for `paths` (a single row or the checked selection).
+    fn open_tag_editor(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        self.tag_targets = paths;
+        self.tag_input.clear();
+        self.show_tags = true;
+    }
+
+    /// The tag editor: add a tag to, or remove one from, every target at once.
+    fn tags_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_tags {
+            return;
+        }
+        let t = self.theme();
+        let targets = self.tag_targets.clone();
+        let mut open = true;
+        egui::Window::new("Tags")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                let who = match targets.as_slice() {
+                    [one] => one
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| one.display().to_string()),
+                    many => format!("{} files", many.len()),
+                };
+                ui.label(egui::RichText::new(who).strong().size(13.0).color(t.text));
+                if let Some(first) = targets.first() {
+                    ui.label(
+                        egui::RichText::new(short_dir(first))
+                            .size(10.5)
+                            .color(t.faint),
+                    );
+                }
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.tag_input)
+                            .hint_text("Add a tag…")
+                            .desired_width(ui.available_width() - 66.0),
+                    );
+                    let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Add").clicked() || submit {
+                        let tag = self.tag_input.clone();
+                        if !tag.trim().is_empty() {
+                            let mut changed = false;
+                            for p in &targets {
+                                changed |= self.tags.add(p, &tag);
+                            }
+                            if changed {
+                                let _ = self.tags.save();
+                                self.apply_tag_filter();
+                            }
+                        }
+                        self.tag_input.clear();
+                    }
+                });
+                ui.add_space(10.0);
+
+                // The union of the targets' tags, with how many carry each.
+                let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                for p in &targets {
+                    if let Some(tags) = self.tags.tags_of(p) {
+                        for tag in tags {
+                            *counts.entry(tag.clone()).or_insert(0) += 1;
+                        }
+                    }
+                }
+                if counts.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No tags yet — type one above.")
+                            .size(11.5)
+                            .color(t.faint),
+                    );
+                } else {
+                    ui.label(section_title(&t, "CURRENT TAGS"));
+                    ui.add_space(5.0);
+                    let mut remove: Option<String> = None;
+                    for (tag, n) in &counts {
+                        ui.horizontal(|ui| {
+                            let label = if *n == targets.len() {
+                                tag.clone()
+                            } else {
+                                format!("{tag}  ({n}/{})", targets.len())
+                            };
+                            tag_chip(ui, &t, &label, false);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕").size(11.0).color(t.faint),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Remove from all targets")
+                                .clicked()
+                            {
+                                remove = Some(tag.clone());
+                            }
+                        });
+                    }
+                    if let Some(tag) = remove {
+                        for p in &targets {
+                            self.tags.remove(p, &tag);
+                        }
+                        let _ = self.tags.save();
+                        self.apply_tag_filter();
+                    }
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close").clicked() {
+                        self.show_tags = false;
+                    }
+                });
+            });
+        if !open {
+            self.show_tags = false;
+        }
+    }
+
     /// Apply a result-row context-menu choice. Deferred out of the table so it
     /// can take `&mut self` (and the window context, for the clipboard).
     fn apply_row_cmd(&mut self, cmd: RowCmd, ctx: &egui::Context) {
@@ -6111,6 +6655,19 @@ impl App {
                     .map(|(s, _)| s.to_string())
                     .unwrap_or(name);
                 self.run_query(&format!("*{stem}*"));
+            }
+            RowCmd::EditTags { path, selection } => {
+                let targets: Vec<PathBuf> = if selection {
+                    self.checked.iter().cloned().collect()
+                } else {
+                    vec![path]
+                };
+                self.open_tag_editor(targets);
+            }
+            RowCmd::FilterTag(tag) => self.set_tag_filter(Some(tag)),
+            RowCmd::ClearTagFilter => self.set_tag_filter(None),
+            RowCmd::ExcludeFromIndex(p) => {
+                self.exclude_dir_now(&p);
             }
             RowCmd::AddToSelection(p) => {
                 self.checked.insert(p);
