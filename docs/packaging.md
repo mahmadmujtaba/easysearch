@@ -25,7 +25,9 @@ All three formats install the same payload:
 /usr/share/applications/io.github.easysearch.EasySearch.desktop
 /usr/share/metainfo/io.github.easysearch.EasySearch.metainfo.xml
 /usr/share/icons/hicolor/{scalable,64x64,128x128,256x256,512x512}/apps/io.github.easysearch.EasySearch.{svg,png}
-/usr/share/doc/easysearch/{copyright,README.md}      (deb/rpm only)
+/usr/share/doc/easysearch/README.md          both formats
+/usr/share/doc/easysearch/copyright          the deb's licence
+/usr/share/doc/easysearch/LICENSE            the rpm's licence
 ```
 
 `easysearch-gui` is a development convenience that duplicates `easysearch`
@@ -50,6 +52,26 @@ scripts/
   package-flatpak.sh  cargo sources → flatpak-builder → build-bundle
   gen-cargo-sources.py  Cargo.lock → cargo-sources.json (offline, checksummed)
 ```
+
+## Continuous integration
+
+`.github/workflows/packages.yml` builds both formats on every push to `master`
+— which is what a merged pull request produces — and uploads them to the run as
+the artifact `easysearch-master-packages`: the `.deb`, the `.rpm` and a
+`SHA256SUMS`, kept for 90 days. *Run workflow* rebuilds by hand, and a newer push
+cancels a build already in flight.
+
+The job installs `rpm` (which provides `rpmbuild` on Ubuntu) and then runs the
+same `scripts/package-deb.sh` and `scripts/package-rpm.sh` you would run locally,
+so CI is a second check on `make deb` / `make rpm` rather than a parallel
+implementation. It needs no secrets and no root. Artifacts are **not** published
+anywhere — there is no release job yet, so nothing is signed or uploaded to a
+release host.
+
+The checkout is a plain clone: `.cargo/config.toml` is deliberately not tracked
+(it is generated per machine by `scripts/install-deps.sh` and embeds absolute
+paths), so a clone and CI link with the system C compiler. Run that script if
+your machine has no compiler.
 
 ## Before you publish
 
@@ -127,9 +149,11 @@ Verified on this machine (KDE/Plasma, Wayland, Debian-family, no root):
 
 **Not verified here**, because the tools are not installed on this machine:
 
-- `make rpm` — no `rpmbuild`. The spec is complete and conventional
-  (`%autosetup`, `%build` with cargo, `%install`, `%files`, soname `Requires`),
-  but it has not been executed.
+- `make rpm` — no `rpmbuild` here, so the spec is exercised only by CI
+  (`.github/workflows/packages.yml`), which builds it on Ubuntu with the
+  distribution's `rpm` package. The spec is conventional (`%autosetup`, `%build`
+  with cargo, `%install`, `%files`, soname `Requires`, doc files listed by real
+  path).
 - `make flatpak` — no `flatpak-builder`. The manifest, the offline vendored
   source config and the generated sources are in place, but a build has not been
   run. Expect the usual first-run iteration (runtime version, SDK extension).

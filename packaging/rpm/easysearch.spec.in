@@ -87,8 +87,11 @@ if command -v appstream-util >/dev/null 2>&1; then
 fi
 
 %files
-%license LICENSE
-%doc README.md
+# The doc files are listed by their real paths rather than with %doc/%license:
+# %install puts them in %{_docdir}, and an explicit path is portable across the
+# rpm implementations (Fedora, Debian/Ubuntu) this may be built with.
+%{_docdir}/%{name}/LICENSE
+%{_docdir}/%{name}/README.md
 %{_bindir}/easysearch
 %{_bindir}/easysearch-cli
 %{_bindir}/easysearch-daemon

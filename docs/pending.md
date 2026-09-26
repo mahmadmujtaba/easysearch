@@ -180,9 +180,11 @@ deliverable; these are gated on request:
 
 ## 8. Repo & tooling gaps
 
-- **No CI.** There is no `.github/`, `.gitlab-ci.yml` or similar. Nothing runs
-  the test suite or the packaging scripts automatically; `cargo test
-  --workspace` and `make validate-packaging` are manual.
+- **CI builds the packages.** `.github/workflows/packages.yml` builds the `.deb`
+  and the `.rpm` on every push to `master` (i.e. every merged PR) and uploads
+  them as the run artifact `easysearch-master-packages`. It does **not** run the
+  test suite, and it does not publish or sign anything — `scripts/release-sign.sh`
+  is still wired to nothing.
 - **`dist/` is gitignored**, so the `.deb`, the shareable single binary and any
   future `.rpm`/`.flatpak` are never committed — they are build outputs only.
 - **`packaging/flatpak/cargo-sources.json` *is* committed** (491 crates,

@@ -58,6 +58,11 @@ None of them need root. See [`docs/packaging.md`](docs/packaging.md) for what
 they install, the dependency-derivation details, the Flatpak sandbox notes, and
 which identifiers to change before publishing.
 
+CI builds the `.deb` and the `.rpm` on every push to `master` (so, on every
+merged pull request) and uploads them as the run artifact
+`easysearch-master-packages` — see
+[`.github/workflows/packages.yml`](.github/workflows/packages.yml).
+
 > What is still outstanding — unverified package builds, placeholder
 > identifiers, known rough edges, measured footprint — is tracked in
 > [`docs/pending.md`](docs/pending.md).

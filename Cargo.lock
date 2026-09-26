@@ -1202,7 +1202,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "easysearch-app"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "easysearch-core",
  "easysearch-daemon",
@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "easysearch-cli"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "clap",
  "easysearch-core",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "easysearch-core"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "ed25519-dalek",
  "globset",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "easysearch-daemon"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "clap",
  "easysearch-core",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "easysearch-gui"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "dark-light",
  "easysearch-core",

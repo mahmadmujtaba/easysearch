@@ -4,6 +4,37 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-09-26
+
+### Added
+
+- **A packaging pipeline.** `.github/workflows/packages.yml` builds the `.deb` and
+  the `.rpm` on every push to `master` — which is what a merged pull request
+  produces — and uploads them to the run as `easysearch-master-packages` (both
+  packages plus a `SHA256SUMS`, kept 90 days). *Run workflow* rebuilds by hand,
+  and a newer push cancels a build already in flight. The job installs `rpm`
+  (which provides `rpmbuild` on Ubuntu) and calls the same
+  `scripts/package-deb.sh` / `scripts/package-rpm.sh` used locally, so CI doubles
+  as a second check on `make deb` / `make rpm`. No secrets, no root.
+
+### Fixed
+
+- **The RPM spec no longer relies on `%doc`/`%license` for files it installs by
+  hand.** `%license LICENSE` puts the licence in `%{_licensedir}`, so the copy the
+  spec also installed into `%{_docdir}` was left unpackaged — `rpmbuild` fails
+  such a build with "Installed (but unpackaged) file(s) found". Both doc files are
+  now listed by their real `%{_docdir}` paths, which is portable across the rpm
+  implementations (Fedora, Debian/Ubuntu) this may be built with. The bug was
+  latent because the spec had never been executed.
+
+### Changed
+
+- **`.cargo/config.toml` is no longer tracked.** It is generated per machine by
+  `scripts/install-deps.sh` and embeds absolute paths (the `rust-lld` linker
+  wrapper and a `~/.local/lib` search path), so a fresh clone — and CI — could not
+  build with it. It is now gitignored; a clone links with the system C compiler,
+  and the file stays on disk, untouched, where it was generated.
+
 ## [0.27.0] - 2026-09-26
 
 ### Added
