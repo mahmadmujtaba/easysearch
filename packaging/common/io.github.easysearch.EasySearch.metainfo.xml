@@ -8,6 +8,10 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 
+  <url type="homepage">https://github.com/mahmadmujtaba/easysearch</url>
+  <url type="bugtracker">https://github.com/mahmadmujtaba/easysearch/issues</url>
+  <url type="vcs-browser">https://github.com/mahmadmujtaba/easysearch</url>
+
   <developer id="io.github.easysearch">
     <name>EasySearch</name>
   </developer>
@@ -50,6 +54,17 @@
   </keywords>
 
   <content_rating type="oars-1.1"/>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Realtime filename and content search, in the dark theme</caption>
+      <image type="source">https://raw.githubusercontent.com/mahmadmujtaba/easysearch/master/docs/screenshots/dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The same window in the light theme</caption>
+      <image type="source">https://raw.githubusercontent.com/mahmadmujtaba/easysearch/master/docs/screenshots/light.png</image>
+    </screenshot>
+  </screenshots>
 
   <releases>
     <release version="0.11.0" date="2026-09-24">

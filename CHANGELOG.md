@@ -4,6 +4,33 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-09-26
+
+### Added
+
+- **The packaging pipeline also validates pull requests and cuts releases.**
+  `.github/workflows/packages.yml` builds the `.deb` and the `.rpm` on every pull
+  request too, so packaging breakage is caught *before* it is merged, and pushing
+  a `v*` tag attaches both packages (plus `SHA256SUMS`) to the GitHub release for
+  that tag. The release job downloads the artifact the build job produced — no
+  second build — and uses the automatic `GITHUB_TOKEN`, so still no secrets. Tag
+  builds are never cancelled by the concurrency group; branch builds still are.
+- **README screenshots in both themes** — `docs/screenshots/dark.png` and
+  `docs/screenshots/light.png`, shown in `README.md` and referenced from the
+  AppStream metainfo so software centres show them too. They come from an
+  isolated instance whose `$HOME` is a throwaway demo tree, so no personal
+  filenames are published.
+
+### Changed
+
+- **The placeholder repository URLs are real.** `DEFAULT_MANIFEST_URL`
+  (`core/src/update.rs`), the RPM spec's `URL`, the `CHANGELOG`'s release links
+  and the docs all point at `github.com/mahmadmujtaba/easysearch`. The metainfo
+  gained `<url type="homepage">`, `bugtracker` and `vcs-browser`, and the deb a
+  matching `Homepage:` field. That clears the `url-homepage-missing` warning: `make
+  validate-packaging` now reports no errors and no warnings (one pedantic note
+  remains, about the uppercase in the app id).
+
 ## [0.28.1] - 2026-09-26
 
 ### Fixed
@@ -895,13 +922,13 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
-[0.9.0]: https://github.com/easysearch/easysearch/releases/tag/v0.9.0
-[0.8.0]: https://github.com/easysearch/easysearch/releases/tag/v0.8.0
-[0.7.0]: https://github.com/easysearch/easysearch/releases/tag/v0.7.0
-[0.6.0]: https://github.com/easysearch/easysearch/releases/tag/v0.6.0
-[0.5.0]: https://github.com/easysearch/easysearch/releases/tag/v0.5.0
-[0.4.1]: https://github.com/easysearch/easysearch/releases/tag/v0.4.1
-[0.4.0]: https://github.com/easysearch/easysearch/releases/tag/v0.4.0
-[0.3.0]: https://github.com/easysearch/easysearch/releases/tag/v0.3.0
-[0.2.0]: https://github.com/easysearch/easysearch/releases/tag/v0.2.0
-[0.1.0]: https://github.com/easysearch/easysearch/releases/tag/v0.1.0
+[0.9.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.9.0
+[0.8.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.8.0
+[0.7.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.7.0
+[0.6.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.6.0
+[0.5.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.5.0
+[0.4.1]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.4.1
+[0.4.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.4.0
+[0.3.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.3.0
+[0.2.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.2.0
+[0.1.0]: https://github.com/mahmadmujtaba/easysearch/releases/tag/v0.1.0

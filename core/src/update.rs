@@ -36,7 +36,7 @@ use std::process::{Command, Stdio};
 /// Convention: this is a *stable* URL that always points at the newest release's
 /// manifest (a GitHub `releases/latest/download/…` asset, or any HTTPS host).
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/easysearch/easysearch/releases/latest/download/manifest.json";
+    "https://github.com/mahmadmujtaba/easysearch/releases/latest/download/manifest.json";
 
 /// Ed25519 release public key (32 bytes, hex). Signatures produced by the
 /// matching private key are the only ones accepted.

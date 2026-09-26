@@ -57,20 +57,18 @@ Both scripts fail fast with install instructions when their tool is missing, so
    Note the id is also the Wayland `app_id`, so a KDE window rule or shortcut
    that matched the previous class needs re-doing.
 
-2. **Repository URL.** `packaging/rpm/easysearch.spec.in` and
-   `core/src/update.rs` still point at placeholder GitHub paths
-   (`github.com/easysearch/easysearch`). Replace them with the real host once the
-   repository exists — the updater's `DEFAULT_MANIFEST_URL` is the same URL.
+2. **Repository URL.** Done: `packaging/rpm/easysearch.spec.in`,
+   `core/src/update.rs` (`DEFAULT_MANIFEST_URL`) and the `CHANGELOG` release links
+   all point at the real repository, `github.com/mahmadmujtaba/easysearch`.
 
 3. **Deb maintainer** — defaults to
    `EasySearch <easysearch@localhost>`. Override per build:
    `MAINTAINER='You <you@example.com>' make deb`, or change the default in
    `scripts/package-deb.sh`.
 
-4. **Homepage URL** — there is deliberately no `<url type="homepage">` in the
-   metainfo. `appstreamcli` caught that a placeholder URL 404s, and a dead link
-   in a launcher is worse than a warning. Add your real URL and the
-   `url-homepage-missing` warning disappears.
+4. **Homepage URL** — Done: the metainfo has `<url type="homepage">` (with
+   `bugtracker` and `vcs-browser`) and the deb a matching `Homepage:` field, so
+   `appstreamcli` no longer warns.
 
 5. **`LICENSE` copyright holder** — currently the neutral
    "2026 EasySearch contributors". Put your name in it.
@@ -181,21 +179,22 @@ deliverable; these are gated on request:
 ## 8. Repo & tooling gaps
 
 - **CI builds the packages.** `.github/workflows/packages.yml` builds the `.deb`
-  and the `.rpm` on every push to `master` (i.e. every merged PR) and uploads
-  them as the run artifact `easysearch-master-packages`. It does **not** run the
-  test suite, and it does not publish or sign anything — `scripts/release-sign.sh`
-  is still wired to nothing.
+  and the `.rpm` on every push to `master` (i.e. every merged PR) and on every
+  pull request, uploading them as the run artifact `easysearch-packages`; pushing
+  a `v*` tag additionally attaches them to the GitHub release for that tag. It
+  does **not** run the test suite, and it does not *sign* anything —
+  `scripts/release-sign.sh` is still wired to nothing, so the self-update manifest
+  is not produced.
 - **`dist/` is gitignored**, so the `.deb`, the shareable single binary and any
   future `.rpm`/`.flatpak` are never committed — they are build outputs only.
 - **`packaging/flatpak/cargo-sources.json` *is* committed** (491 crates,
   generated from `Cargo.lock`). It must be regenerated — `make cargo-sources` —
   whenever dependencies change, or the Flatpak build will fail offline.
-- **Screenshots could not be captured** while the 0.12.0 UI was being built:
-  KWin's screenshot DBus service stopped replying
-  (`KWin screenshot request failed: Did not receive a reply`), for `spectacle`
-  and with the app closed too. The redesign was therefore verified by building,
-  running and reading the layout code, not visually — it is worth a look on
-  first launch.
+- **Screenshots are committed now.** The 0.12.0 redesign could not be captured at
+  the time (KWin's screenshot DBus service stopped replying). `docs/screenshots/`
+  now holds real captures of the app in the dark and light themes, used by the
+  README and the metainfo; they were taken from an isolated instance indexing a
+  throwaway demo tree, so no personal filenames are published.
 
 ---
 
@@ -206,14 +205,18 @@ manual run against real `openssl`-signed artifacts); see
 [`updates.md`](updates.md). These pieces are intentionally outside the repo or
 not yet built:
 
-- **No release host is configured.** `DEFAULT_MANIFEST_URL` is a placeholder
-  GitHub path. Point it (or `EASYSEARCH_UPDATE_URL`) at the real host.
+- **A release host exists, but no signed update is published.** The
+  repository's GitHub releases now carry the `.deb` and `.rpm` (see §8), and
+  `DEFAULT_MANIFEST_URL` points at them, but nothing uploads a `manifest.json`
+  or its signature, so a live update check still fails cleanly with a download
+  error.
 - **No public release has been signed yet.** The keypair exists and its public
   half is compiled into the binary; the private half lives at
   `~/.config/easysearch/release-signing-key.pem` (never committed). Back it
   up — losing it means future updates are refused by existing installs.
-- **Manual release step.** Nothing runs `scripts/release-sign.sh`
-  automatically; wire it into CI when there is one.
+- **Manual release step.** CI publishes the packages on a `v*` tag, but nothing
+  runs `scripts/release-sign.sh`; wire that into the tag build to also publish the
+  signed `manifest.json` the updater needs.
 - **No key rotation / revocation.** Changing the key needs a rebuild with the new
   public key embedded; a follow-up could accept a signed *key-change* manifest.
 - **Only Linux ELF binaries.** The manifest is per-target, but no Windows/macOS

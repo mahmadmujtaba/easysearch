@@ -114,9 +114,9 @@ cargo-sources:
 
 ## Check the desktop entry and the AppStream metainfo file.
 ##
-## AppStream warnings are reported but do not fail the build: the project has no
-## public homepage URL yet, and appstreamcli warns about a missing one. Real
-## errors (lines starting with "E:") do fail.
+## appstreamcli is run with --no-net, so remote screenshot URLs are not fetched.
+## Real errors (lines starting with "E:") fail the build; warnings and pedantic
+## notes are reported and ignored.
 validate-packaging:
 	desktop-file-validate packaging/common/$(APP_ID).desktop
 	@out=$$(appstreamcli validate --no-net packaging/common/$(APP_ID).metainfo.xml 2>&1 || true); \

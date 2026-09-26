@@ -15,7 +15,7 @@ Release:        1%{?dist}
 Summary:        Instant file and content search for Linux
 
 License:        MIT
-URL:            https://github.com/easysearch/easysearch
+URL:            https://github.com/mahmadmujtaba/easysearch
 Source0:        easysearch-%{version}.tar.gz
 
 BuildRequires:  cargo

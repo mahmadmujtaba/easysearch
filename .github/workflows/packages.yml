@@ -1,27 +1,36 @@
-# Build the Debian and RPM packages whenever master changes.
+# Build the Debian and RPM packages, and turn a version tag into a release.
 #
-# A merged pull request *is* a push to `master`, so that is the trigger that
-# means "every PR that lands". A direct push builds too — deliberately, so the
-# artifacts always match the branch — and *Run workflow* rebuilds on demand.
+#   push to master     build .deb + .rpm and upload them as a run artifact
+#   pull request       the same build, so packaging breakage is caught before
+#                      the change is merged
+#   push of a v* tag   the same build, then attach the packages to the GitHub
+#                      release for that tag
+#   manual dispatch    build on demand
 #
-# No secrets and no root: `dpkg-deb` builds the .deb from the release binaries,
-# and `rpmbuild` builds the .rpm from source, so the workspace is compiled twice
-# (once here, once inside rpmbuild). Both artifacts are uploaded to the run.
+# A merged pull request *is* a push to `master`, so that trigger is what "every
+# PR that lands" means here; a direct push builds too, on purpose, so the
+# artifacts always match the branch.
+#
+# No secrets are needed — the release job uses the automatic `GITHUB_TOKEN`.
 name: packages
 
 on:
   push:
     branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
-# The job only reads the repository and uploads workflow artifacts.
+# Build jobs only read the repository; the release job overrides this.
 permissions:
   contents: read
 
-# A newer push supersedes an in-flight build.
+# A newer push supersedes an in-flight build. Tag builds are never cancelled,
+# so a release is always produced for a tag that was pushed.
 concurrency:
   group: packages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -92,10 +101,52 @@ jobs:
       - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
-          name: easysearch-${{ github.ref_name }}-packages
+          name: easysearch-packages
           path: |
             dist/*.deb
             dist/*.rpm
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 90
+
+  release:
+    name: attach to the release
+    needs: packages
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Needed to create the release and upload its assets.
+      contents: write
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v7
+        with:
+          name: easysearch-packages
+          path: dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          ls -l dist
+          # Idempotent: a re-run of the same tag updates that release instead of
+          # failing.
+          gh release view "$tag" >/dev/null 2>&1 ||
+              gh release create "$tag" \
+                  --title "EasySearch $tag" \
+                  --generate-notes
+          gh release upload "$tag" dist/*.deb dist/*.rpm dist/SHA256SUMS --clobber
+
+      - name: Summarise
+        run: |
+          set -euo pipefail
+          {
+              echo "## EasySearch ${{ github.ref_name }}"
+              echo
+              echo '```'
+              cat dist/SHA256SUMS
+              echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

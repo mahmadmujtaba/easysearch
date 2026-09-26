@@ -4,6 +4,7 @@ Section: utils
 Priority: optional
 Architecture: @ARCH@
 Maintainer: @MAINTAINER@
+Homepage: https://github.com/mahmadmujtaba/easysearch
 Depends: @DEPENDS@
 Installed-Size: @SIZE@
 Description: Instant file and content search for Linux

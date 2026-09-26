@@ -87,15 +87,16 @@ These are placeholders and should be changed to your own identifiers:
 
 1. **Application id.** `io.github.easysearch.EasySearch` is used in
    the desktop entry file name, the metainfo `<id>` and `<launchable>`, the
-   Flatpak `app-id`, and in `APP_ID` in the `Makefile`.
+   Flatpak `app-id`, and in `APP_ID` in the `Makefile`. It is also the one
+   `appstreamcli --pedantic` note left (`cid-contains-uppercase-letter`, because
+   of the `EasySearch` segment); that is not an error and validation passes.
 2. **Maintainer.** `scripts/package-deb.sh` defaults the deb maintainer to
    `EasySearch <easysearch@localhost>`; override it with
    `MAINTAINER='Your Name <you@example.com>' make deb`, or edit the default.
-3. **Homepage.** There is no `<url type="homepage">` in the metainfo yet, so
-   `appstreamcli` prints a `url-homepage-missing` warning (the validator had
-   confirmed that a placeholder URL did not exist, and shipping a dead link is
-   worse than the warning). Add your real repository URL there and the warning
-   goes away; `make validate-packaging` fails only on real errors.
+3. **Homepage.** Done: the metainfo carries `<url type="homepage">` (plus
+   `bugtracker` and `vcs-browser`) pointing at
+   <https://github.com/mahmadmujtaba/easysearch>, and the deb's `Homepage:`
+   field matches, so the old `url-homepage-missing` warning is gone.
 4. **Version.** Bump `VERSION`; `Cargo.toml`, the deb, the spec and the Flatpak
    build all read from it.
 

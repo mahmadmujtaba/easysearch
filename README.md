@@ -17,6 +17,23 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
 - **Lightweight**: no GC, no runtime, no bundled web engine. See the footprint
   budget in [`docs/scope.md`](docs/scope.md).
 
+## Screenshots
+
+The same window in both themes — everything follows the desktop: search box,
+filter bar, results table (`#`, Name, Path, Type, Size, Modified, **Created**,
+Match, Relevance), sidebar and preview pane.
+
+**Dark**
+
+![EasySearch in the dark theme](docs/screenshots/dark.png)
+
+**Light**
+
+![EasySearch in the light theme](docs/screenshots/light.png)
+
+The images are shot against a small throwaway demo tree, so no personal
+filenames appear in them.
+
 ## Components
 
 | Binary | Purpose |

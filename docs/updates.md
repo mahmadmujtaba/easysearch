@@ -2,9 +2,10 @@
 
 > **Status.** The mechanism, the signing tool and the client are complete and
 > tested (unit tests plus a manual end-to-end run against real `openssl`-signed
-> artifacts). **No public release host exists yet** — `DEFAULT_MANIFEST_URL` is a
-> placeholder, so a live check fails cleanly with a download error. Set the URL
-> (or `EASYSEARCH_UPDATE_URL`) once you host it.
+> artifacts). **No signed update is published yet**: the GitHub releases now carry
+> the `.deb` and the `.rpm`, and `DEFAULT_MANIFEST_URL` points at them, but no
+> `manifest.json` is uploaded, so a live check fails cleanly with a download
+> error.
 
 EasySearch can update *itself* — over the internet, without a package
 manager, and without downloading or installing a `.deb`, `.rpm` or Flatpak. The
