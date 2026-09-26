@@ -4,6 +4,25 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-09-26
+
+### Added
+
+- **Real previews, by kind.** The preview pane now shows:
+  - **Text of all forms** — any text-like file (source, config, log, csv, …) is
+    read up to 256 KiB and shown monospace, with a note when it was cut;
+  - **Markdown**, rendered with light styling (headings, bullets, quotes, fenced
+    code, emphasis markers stripped);
+  - **PDF and office** — the document's text layer, extracted in-process by the
+    same reader content search uses (no external tool); `xls`/`xlsx`/`ppt`/`pptx`
+    say so rather than guessing;
+  - **Audio and video** — duration, format, codecs, resolution and common tags
+    through `ffprobe`, plus a first-frame thumbnail through `ffmpeg`, both best
+    effort (the pane explains itself when neither is installed).
+- **First-class OpenDocument (LibreOffice) support.** `.odt`, `.ods`, `.odp` and
+  `.odg` are read through the in-process ODF `content.xml` reader — text
+  extraction, content search and previews all handle them like `.docx`.
+
 ## [0.36.0] - 2026-09-26
 
 ### Added

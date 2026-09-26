@@ -16,7 +16,10 @@ use std::sync::{Arc, Mutex, RwLock, mpsc, mpsc::Receiver};
 use std::thread::JoinHandle;
 
 /// Extensions whose text is read from a document package rather than as bytes.
-pub const EXTRACT_EXTENSIONS: &[&str] = &["docx", "odt", "pdf"];
+///
+/// The OpenDocument family (`.odt`, `.ods`, `.odp`, `.odg`) is handled like the
+/// OOXML one: the visible text is read out of `content.xml` in-process.
+pub const EXTRACT_EXTENSIONS: &[&str] = &["docx", "odt", "ods", "odp", "odg", "pdf"];
 
 /// True if `path` is a document whose text lives inside an OOXML/ODF package
 /// (a ZIP of XML) instead of being the file's own bytes.
@@ -399,7 +402,8 @@ pub fn extract_text(path: &Path, max_bytes: u64) -> Option<String> {
         .to_ascii_lowercase();
     match ext.as_str() {
         "pdf" => extract_pdf_text(path, max_bytes),
-        "docx" | "odt" => extract_package_text(path, max_bytes),
+        "docx" => extract_package_text(path, max_bytes),
+        "odt" | "ods" | "odp" | "odg" => extract_package_text(path, max_bytes),
         _ => extract_plain_text(path, max_bytes),
     }
 }
@@ -509,7 +513,7 @@ fn extract_package_text(path: &Path, max_bytes: u64) -> Option<String> {
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let rules = if ext == "odt" {
+    let rules = if ext == "odt" || ext == "ods" || ext == "odp" || ext == "odg" {
         &ODF_RULES
     } else {
         &WORD_RULES

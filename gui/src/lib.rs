@@ -200,6 +200,10 @@ const LARGE_MIN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 /// stall the UI thread).
 const MAX_HASH_BYTES: u64 = 512 * 1024 * 1024;
 
+/// How much of a text file the preview reads. Larger files show this head, with
+/// a note, rather than being read whole.
+const TEXT_PREVIEW_BYTES: usize = 256 * 1024;
+
 const CATEGORIES: &[(&str, Category)] = &[
     ("All files", Category::All),
     (
@@ -886,6 +890,14 @@ struct Preview {
     /// The bytes were read but are not text (so "binary file", not "empty").
     binary: bool,
     image: Option<egui::TextureHandle>,
+    /// Render `text` with light Markdown styling.
+    markdown: bool,
+    /// The text is the head of a larger file.
+    truncated: bool,
+    /// Metadata rows for audio/video (key, value).
+    media: Vec<(String, String)>,
+    /// A short note shown instead of a body (why there is no preview).
+    note: Option<String>,
 }
 
 /// Which part of a file the query is matched against (the search-row scope).
@@ -1655,40 +1667,76 @@ impl App {
         if self.preview.as_ref().is_some_and(|p| p.path == row.path) {
             return;
         }
-        let mut text = String::new();
-        let mut image = None;
-        let mut binary = false;
-        if !row.is_dir
-            && row.size < 4 * 1024 * 1024
-            && let Ok(bytes) = std::fs::read(&row.path)
-        {
-            if is_image_file(&row.path) {
-                if let Ok(decoded) = image::load_from_memory(&bytes) {
-                    let thumb = decoded.thumbnail(280, 280);
-                    let rgba = thumb.to_rgba8();
-                    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-                    let color = egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
-                    image = Some(ctx.load_texture(
-                        "preview-thumb",
-                        color,
-                        egui::TextureOptions::LINEAR,
-                    ));
-                }
-            } else {
-                let slice = &bytes[..bytes.len().min(64 * 1024)];
-                binary = !is_probably_text(slice);
-                text = String::from_utf8_lossy(slice).into_owned();
-            }
-        }
-        self.preview = Some(Preview {
-            path: row.path.clone(),
+        let path = row.path.clone();
+        let mut preview = Preview {
+            path: path.clone(),
             is_dir: row.is_dir,
             size: row.size,
             mtime: row.mtime,
-            text,
-            binary,
-            image,
-        });
+            text: String::new(),
+            binary: false,
+            image: None,
+            markdown: false,
+            truncated: false,
+            media: Vec::new(),
+            note: None,
+        };
+
+        if !row.is_dir {
+            if is_image_file(&path) {
+                preview.image = load_image_texture(ctx, &path);
+                if preview.image.is_none() {
+                    preview.note = Some("This image could not be decoded.".to_string());
+                }
+            } else if is_av_file(&path) {
+                // Audio and video: what the file is, best effort (ffprobe may not
+                // be installed), plus a frame of video if ffmpeg can grab one.
+                preview.media = media_metadata(&path);
+                if is_video_file(&path) {
+                    preview.image = video_thumbnail(ctx, &path);
+                }
+                if preview.media.is_empty() {
+                    preview.note = Some(
+                        "No metadata — install ffmpeg (ffprobe) for media details.".to_string(),
+                    );
+                }
+            } else if is_document_file(&path) {
+                // PDF / docx / odt: the text layer, extracted in-process (the same
+                // reader content search uses — no external tool).
+                match easysearch_core::content_index::extract_text(&path, 8 * 1024 * 1024) {
+                    Some(text) if !text.trim().is_empty() => {
+                        let (head, truncated) = head_of(&text, TEXT_PREVIEW_BYTES);
+                        preview.text = head.to_string();
+                        preview.truncated = truncated;
+                    }
+                    _ => {
+                        preview.note = Some(
+                            "No extractable text (a scanned page or an empty document)."
+                                .to_string(),
+                        );
+                    }
+                }
+            } else if is_spreadsheet_or_slides(&path) {
+                preview.note = Some(
+                    "Spreadsheets and slides have no in-app preview yet — open it with ⧉."
+                        .to_string(),
+                );
+            } else {
+                match read_text_head(&path, TEXT_PREVIEW_BYTES) {
+                    TextHead::Text { text, truncated } => {
+                        preview.text = text;
+                        preview.truncated = truncated;
+                        preview.markdown = is_markdown_file(&path);
+                    }
+                    TextHead::Binary => preview.binary = true,
+                    TextHead::Empty => {}
+                    TextHead::Unreadable => {
+                        preview.note = Some("This file could not be read.".to_string());
+                    }
+                }
+            }
+        }
+        self.preview = Some(preview);
     }
 
     fn select(&mut self, idx: usize, ctx: &egui::Context) {
@@ -5549,11 +5597,29 @@ impl App {
         match self.panel_tab {
             PanelTab::Preview => {
                 let image = self.preview.as_ref().and_then(|p| p.image.clone());
+                let has_media = self.preview.as_ref().is_some_and(|p| !p.media.is_empty());
                 if is_dir {
                     ui.vertical_centered(|ui| {
                         ui.add_space(12.0);
                         ui.label(egui::RichText::new("Folder").size(14.0).color(t.dim));
                     });
+                } else if has_media {
+                    // Audio/video: a frame (video) plus what ffprobe knows.
+                    if let Some(tex) = image {
+                        ui.vertical_centered(|ui| {
+                            ui.add(
+                                egui::Image::new(&tex)
+                                    .max_size(egui::vec2(ui.available_width().min(420.0), 300.0))
+                                    .corner_radius(10),
+                            );
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if let Some(pv) = self.preview.as_ref() {
+                        for (key, value) in &pv.media {
+                            detail_row(ui, &t, key, value);
+                        }
+                    }
                 } else if let Some(tex) = image {
                     ui.vertical_centered(|ui| {
                         ui.add(
@@ -5568,13 +5634,27 @@ impl App {
                             .auto_shrink([false, false])
                             .max_height(ui.available_height() - 120.0)
                             .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(&pv.text)
-                                        .monospace()
-                                        .size(11.5)
-                                        .color(t.dim),
-                                );
+                                if pv.markdown {
+                                    markdown_preview(ui, &t, &pv.text);
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(&pv.text)
+                                            .monospace()
+                                            .size(11.5)
+                                            .color(t.dim),
+                                    );
+                                }
+                                if pv.truncated {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new("… preview truncated")
+                                            .size(11.0)
+                                            .color(t.faint),
+                                    );
+                                }
                             });
+                    } else if let Some(note) = &pv.note {
+                        ui.label(egui::RichText::new(note).size(12.0).color(t.faint));
                     } else if pv.binary {
                         ui.label(
                             egui::RichText::new("No text preview for this binary file.")
@@ -6967,6 +7047,329 @@ fn is_probably_text(bytes: &[u8]) -> bool {
         .filter(|&&b| b == 0 || (b < 0x09) || (0x0e..0x20).contains(&b))
         .count();
     control * 100 / bytes.len() < 2
+}
+
+// --- previews -------------------------------------------------------------
+
+/// The head of a file, decoded as text when it looks like text.
+#[derive(Debug)]
+enum TextHead {
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    /// Read as bytes and looks binary.
+    Binary,
+    Empty,
+    Unreadable,
+}
+
+/// Read up to `cap` bytes of a file and decide whether it is text.
+fn read_text_head(path: &Path, cap: usize) -> TextHead {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return TextHead::Unreadable;
+    };
+    let Ok(meta) = file.metadata() else {
+        return TextHead::Unreadable;
+    };
+    if meta.len() == 0 {
+        return TextHead::Empty;
+    }
+    let mut buf = vec![0u8; cap];
+    let mut filled = 0;
+    while filled < cap {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return TextHead::Unreadable,
+        }
+    }
+    buf.truncate(filled);
+    if !is_probably_text(&buf) {
+        return TextHead::Binary;
+    }
+    let truncated = meta.len() > filled as u64;
+    // A multi-byte character may straddle the cut; `lossy` replaces the tail.
+    TextHead::Text {
+        text: String::from_utf8_lossy(&buf).into_owned(),
+        truncated,
+    }
+}
+
+/// The first `cap` bytes of `text`, cut on a character boundary.
+fn head_of(text: &str, cap: usize) -> (&str, bool) {
+    if text.len() <= cap {
+        return (text, false);
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+fn ext_lower(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("md" | "markdown" | "mdown")
+    )
+}
+
+/// Documents whose text layer is extracted in-process (see `core::content_index`).
+///
+/// The OpenDocument (LibreOffice) formats are first-class here: `.odt`, `.ods`
+/// and `.odp` are all read through the same in-process ODF reader.
+fn is_document_file(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("pdf" | "docx" | "odt" | "ods" | "odp" | "odg")
+    )
+}
+
+/// Formats with no in-app preview yet, so the panel says so instead of guessing.
+fn is_spreadsheet_or_slides(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("xls" | "xlsx" | "ppt" | "pptx")
+    )
+}
+
+fn is_video_file(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "mpg" | "mpeg" | "wmv" | "m4v")
+    )
+}
+
+fn is_av_file(path: &Path) -> bool {
+    is_video_file(path)
+        || matches!(
+            ext_lower(path).as_deref(),
+            Some("mp3" | "wav" | "flac" | "ogg" | "oga" | "m4a" | "aac" | "opus" | "wma")
+        )
+}
+
+/// Decode an image file to a texture, scaled down for the panel.
+fn load_image_texture(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+    let bytes = std::fs::read(path).ok()?;
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    texture_from_image(ctx, decoded, &format!("preview:{}", path.display()))
+}
+
+fn texture_from_image(
+    ctx: &egui::Context,
+    decoded: image::DynamicImage,
+    name: &str,
+) -> Option<egui::TextureHandle> {
+    let thumb = decoded.thumbnail(1024, 1024);
+    let rgba = thumb.to_rgba8();
+    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+    Some(ctx.load_texture(
+        name,
+        egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw()),
+        egui::TextureOptions::LINEAR,
+    ))
+}
+
+/// A frame from a video, via `ffmpeg` when it is installed. Best effort.
+fn video_thumbnail(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+    // Seek a little in, so the frame is not a black title card.
+    let out = Command::new("ffmpeg")
+        .args(["-v", "quiet", "-ss", "1", "-i"])
+        .arg(path)
+        .args(["-frames:v", "1", "-f", "image2", "-vcodec", "png", "pipe:1"])
+        .output()
+        .ok()?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return None;
+    }
+    let decoded = image::load_from_memory(&out.stdout).ok()?;
+    texture_from_image(ctx, decoded, &format!("vthumb:{}", path.display()))
+}
+
+/// Audio/video metadata via `ffprobe` (JSON), when it is installed. Best effort.
+fn media_metadata(path: &Path) -> Vec<(String, String)> {
+    let Ok(out) = Command::new("ffprobe")
+        .args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ])
+        .arg(path)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+        return Vec::new();
+    };
+
+    let mut rows: Vec<(String, String)> = Vec::new();
+    if let Some(format) = value.get("format") {
+        if let Some(secs) = format
+            .get("duration")
+            .and_then(|d| d.as_str())
+            .and_then(|d| d.parse::<f64>().ok())
+        {
+            rows.push(("Duration".into(), human_duration(secs)));
+        }
+        if let Some(long) = format.get("format_long_name").and_then(|n| n.as_str()) {
+            rows.push(("Format".into(), long.to_string()));
+        }
+        if let Some(bits) = format
+            .get("bit_rate")
+            .and_then(|b| b.as_str())
+            .and_then(|b| b.parse::<u64>().ok())
+        {
+            rows.push((
+                "Bitrate".into(),
+                format!("{:.0} kbps", bits as f64 / 1000.0),
+            ));
+        }
+        for (key, label) in [("artist", "Artist"), ("title", "Title"), ("album", "Album")] {
+            if let Some(tag) = format
+                .get("tags")
+                .and_then(|tags| tags.get(key))
+                .and_then(|v| v.as_str())
+            {
+                rows.push((label.into(), tag.to_string()));
+            }
+        }
+    }
+    if let Some(streams) = value.get("streams").and_then(|s| s.as_array()) {
+        if let Some(video) = streams
+            .iter()
+            .find(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("video"))
+        {
+            if let Some(codec) = video.get("codec_name").and_then(|c| c.as_str()) {
+                rows.push(("Video codec".into(), codec.to_string()));
+            }
+            if let (Some(w), Some(h)) = (
+                video.get("width").and_then(|x| x.as_u64()),
+                video.get("height").and_then(|x| x.as_u64()),
+            ) {
+                rows.push(("Resolution".into(), format!("{w}×{h}")));
+            }
+        }
+        if let Some(audio) = streams
+            .iter()
+            .find(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("audio"))
+        {
+            if let Some(codec) = audio.get("codec_name").and_then(|c| c.as_str()) {
+                rows.push(("Audio codec".into(), codec.to_string()));
+            }
+            if let Some(rate) = audio.get("sample_rate").and_then(|x| x.as_str()) {
+                rows.push(("Sample rate".into(), format!("{rate} Hz")));
+            }
+            if let Some(channels) = audio.get("channels").and_then(|x| x.as_u64()) {
+                rows.push(("Channels".into(), channels.to_string()));
+            }
+        }
+    }
+    rows
+}
+
+fn human_duration(secs: f64) -> String {
+    let total = secs.round().max(0.0) as u64;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Render Markdown with light styling: headings, bullets, quotes, fenced code,
+/// and the inline emphasis markers stripped. Deliberately small — this is a
+/// preview, not a Markdown engine.
+fn markdown_preview(ui: &mut egui::Ui, t: &Theme, text: &str) {
+    let mut in_code = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            ui.label(egui::RichText::new(raw).monospace().size(11.0).color(t.dim));
+            continue;
+        }
+        if trimmed.is_empty() {
+            ui.add_space(5.0);
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(strip_emphasis(rest))
+                    .strong()
+                    .size(16.5)
+                    .color(t.text),
+            );
+        } else if let Some(rest) = heading(trimmed) {
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new(strip_emphasis(rest))
+                    .strong()
+                    .size(14.0)
+                    .color(t.text),
+            );
+        } else if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            ui.label(
+                egui::RichText::new(format!("• {}", strip_emphasis(rest)))
+                    .size(12.5)
+                    .color(t.text),
+            );
+        } else if let Some(rest) = trimmed.strip_prefix("> ") {
+            ui.label(
+                egui::RichText::new(strip_emphasis(rest))
+                    .italics()
+                    .size(12.5)
+                    .color(t.dim),
+            );
+        } else {
+            ui.label(
+                egui::RichText::new(strip_emphasis(raw))
+                    .size(12.5)
+                    .color(t.text),
+            );
+        }
+    }
+}
+
+/// A `##`..`######` heading's text, or `None` for anything else.
+fn heading(line: &str) -> Option<&str> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if (2..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+        Some(line[hashes..].trim_start())
+    } else {
+        None
+    }
+}
+
+/// Drop the inline emphasis markers without trying to style the runs.
+fn strip_emphasis(text: &str) -> String {
+    text.replace("**", "")
+        .replace("__", "")
+        .replace('`', "")
+        .replace("~~", "")
 }
 
 fn find_in_path(bin: &str) -> Option<PathBuf> {
