@@ -4,6 +4,22 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.1] - 2026-09-26
+
+### Fixed
+
+- **The release step now proves that it published something.** The `v0.29.1` tag
+  ran its "attach to the release" job to completion — every step reported
+  success — yet no release for it exists, while `v0.30.0` and `v0.31.0`, pushed
+  minutes either side, published correctly. Rather than trust the exit code of
+  `gh release create`, the step now reads the release back and fails the run
+  unless it is there with all three assets, so a silent no-op cannot pass as
+  success again. The tag it works on comes from `GITHUB_REF` — the run's own ref
+  — instead of being assumed from `github.ref_name`.
+- `v0.29.1` therefore has no GitHub release. Its `.deb`, `.rpm` and
+  `SHA256SUMS` are still on that run's artifact; re-tagging would be the only way
+  to publish it, since a re-run uses the workflow file from that same commit.
+
 ## [0.31.0] - 2026-09-26
 
 ### Changed

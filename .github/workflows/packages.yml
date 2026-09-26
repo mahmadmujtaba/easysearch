@@ -137,15 +137,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${{ github.ref_name }}"
+          # This run's own ref, rather than `ref_name`, which is only assumed to
+          # name the tag being built.
+          tag="${GITHUB_REF#refs/tags/}"
+          case "$tag" in
+              v*) ;;
+              *) echo "not a version tag build: $GITHUB_REF" >&2; exit 1 ;;
+          esac
           ls -l dist
-          # Idempotent: a re-run of the same tag updates that release instead of
+          # Idempotent: re-running a tag updates that release instead of
           # failing.
           gh release view "$tag" >/dev/null 2>&1 ||
               gh release create "$tag" \
                   --title "EasySearch $tag" \
                   --generate-notes
           gh release upload "$tag" dist/*.deb dist/*.rpm dist/SHA256SUMS --clobber
+          # Prove it landed. A release that was silently not created — or that
+          # lost its assets — has to fail the run, not pass as success.
+          gh release view "$tag" --json tagName,assets \
+              --jq 'if (.assets | length) < 3
+                    then error("release \(.tagName) has \(.assets | length) assets, expected 3")
+                    else "\(.tagName): \(.assets | length) assets published" end'
 
       - name: Summarise
         run: |
