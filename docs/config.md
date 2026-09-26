@@ -89,4 +89,4 @@ pushed to the engine and followed by a rebuild.
 | `~/.config/easysearch/ignore` | global ignore patterns |
 | `~/.cache/easysearch/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
 | `~/.cache/easysearch/index-v1.bin` | the mmap index, when `storage = "mmap"` |
-| `~/.cache/easysearch/engine.log` | the engine child's log |
+| `~/.cache/easysearch/engine.log` | the background host's log |

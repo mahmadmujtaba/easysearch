@@ -4,6 +4,41 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] - 2026-09-27
+
+### Changed
+
+- **The app is now a background host plus a window, instead of one process.**
+  `easysearch` (no arguments) makes sure a detached **host** (`easysearch
+  --daemon`) is running — it owns the tray, the control socket and the live
+  index — and asks it to open a **window** (`easysearch --window`), a
+  short-lived child reached over the same stdin/stdout JSON protocol. Closing the
+  window (its X button, the tray toggle, `--hide`) now really ends the window
+  process instead of parking it out of the way, which is what makes it work on
+  **Wayland**, where a window cannot be unmapped and `winit` refuses to recreate
+  its event loop. The host keeps indexing across open/close, so the index stays
+  warm and reopening is instant; only **Quit** stops it. There is still no
+  network: the host and its windows are a parent and children over pipes, and the
+  only socket is the local `$XDG_RUNTIME_DIR/easysearch.sock` control channel.
+- **The engine protocol gained host→window `event` frames**
+  (`show`/`hide`/`quit`/`search`) alongside request/reply frames — this is how
+  the tray and the control socket drive a window. See [`docs/scope.md`](docs/scope.md).
+
+### Docs
+
+- The **install** section is user-first: download the latest `.deb` or `.rpm`
+  and install it from the command line *or* with a GUI package manager (GDebi,
+  Synaptic, Discover, GNOME Software, YaST). Flatpak remains “coming”.
+- The process model, repository map and engine protocol were brought up to date
+  in `README.md`, `CONTRIBUTING.md`, `docs/scope.md`, `docs/ui.md`,
+  `docs/packaging.md` and `docs/config.md`.
+
+### Notes
+
+- The end-to-end engine suite (`daemon/tests/roundtrip.rs`) is `#[ignore]`d while
+  it is being stabilised; run it on demand with
+  `cargo test -p easysearch-daemon --test roundtrip -- --ignored`.
+
 ## [0.41.1] - 2026-09-27
 
 ### Fixed

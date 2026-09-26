@@ -97,6 +97,26 @@ impl Response {
     }
 }
 
+/// A message the engine host pushes to a window *without being asked*.
+///
+/// When the window is a child of a background host (the tray + engine process),
+/// the host drives the window over the same pipes: `Show`/`Hide`/`Quit` mirror
+/// the tray and `--toggle`/`--quit`, and `Search` carries a query from a
+/// shortcut or the tray's recent-searches menu. It is written as one line, like
+/// a [`Response`], and distinguished by carrying `event` instead of `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Event {
+    /// Bring the window to the front.
+    Show,
+    /// Close the window; the host keeps running in the background.
+    Hide,
+    /// Stop the window *and* the host.
+    Quit,
+    /// Show the window and run this query.
+    Search { query: String },
+}
+
 /// The body of an [`Op::Config`] request; every field is optional, so a caller
 /// changes only what it means to.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -176,5 +196,20 @@ mod tests {
         assert!(json.contains("respect"));
         assert!(!json.contains("follow_symlinks"), "{json}");
         assert!(!json.contains("content_index"), "{json}");
+    }
+
+    #[test]
+    fn an_event_is_tagged_and_has_no_id() {
+        let show = serde_json::to_string(&Event::Show).unwrap();
+        assert_eq!(show, r#"{"event":"show"}"#);
+        let search = serde_json::to_string(&Event::Search {
+            query: "a b".into(),
+        })
+        .unwrap();
+        assert!(search.contains(r#""event":"search""#), "{search}");
+        assert!(!search.contains("\n"), "an event is one line: {search}");
+        assert_eq!(serde_json::from_str::<Event>(&show).unwrap(), Event::Show);
+        // A response is not an event, and vice versa.
+        assert!(serde_json::from_str::<Event>(r#"{"id":1,"data":null}"#).is_err());
     }
 }

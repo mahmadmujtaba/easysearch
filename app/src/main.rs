@@ -1,13 +1,19 @@
 //! `easysearch` — EasySearch in a single file.
 //!
-//! One executable that is both the **app** (window + tray) and the **engine**:
-//! run it and it opens the GUI and spawns the engine as its child
-//! (`easysearch --engine`, the same binary with the pipes attached). The engine
-//! owns the index; the app owns the window and the tray. Closing the window
-//! hides it, so the engine keeps indexing; quitting stops both.
+//! One executable plays every role:
 //!
-//! There is no socket, no port and no HTTP: the app and its engine talk over the
-//! child's stdin/stdout (`docs/scope.md`).
+//! - **host** (`easysearch --daemon`): the engine + the tray + the control
+//!   socket, with no window — started automatically when needed and kept alive
+//!   in the background;
+//! - **window** (`easysearch --window`): a GUI process the host spawns, talking
+//!   to it over the child's pipes; closing it just ends that process;
+//! - **engine** (`easysearch --engine`): the raw engine on stdin/stdout;
+//! - **control** (`--toggle`, `--show`, `--hide`, `--search`, `--quit`): drive a
+//!   running host from a desktop shortcut.
+//!
+//! Running it with no options makes sure the host is up and shows a window. The
+//! window and the host are a parent and its child, so there is no socket, port
+//! or HTTP between them (`docs/scope.md`).
 
 use std::process::ExitCode;
 
@@ -17,37 +23,38 @@ EasySearch — realtime file and content search
 USAGE:
     easysearch [OPTIONS]
 
-Run with no options to open the GUI. The engine (this same binary, re-executed
-with --engine) is started as a child process and owns the index; the app keeps
-its pipes, so nothing is exposed to the network. Closing the window hides it to
-the tray and the engine keeps running; quitting stops both.
+Run with no options to open a window. A background process (the tray and the
+search engine) is started automatically and keeps the index warm; closing the
+window leaves it running, and the next launch opens a window instantly.
 
 OPTIONS:
+    -h, --help           show this help
+    -V, --version        show the version
+
+CONTROL (talk to the running instance — bind these to desktop shortcuts):
+    --toggle             show a window if none is open, close it otherwise
+    --show / --hide      open / close the window
+    --search <QUERY>     open a window and run a search
+    --quit               stop the window, the tray and the engine
+
+INTERNAL (not for humans):
+    --daemon             run only the background process (engine + tray)
+    --window             run only the window (connects to the host on stdio)
     --engine             run only the engine, speaking JSON on stdin/stdout
-                         (this is how the app spawns it; not for humans)
     --quiet              engine: don't log when the index becomes live
     --content-in-memory  keep the content cache in RAM instead of spooling it to
                          disk; faster for repeated content searches, but it holds
                          up to the configured cap (256 MB) resident
-    -h, --help           show this help
-    -V, --version        show the version
 
-CONTROL (talk to a running window — bind these to desktop shortcuts):
-    --toggle             show the window if hidden, hide it if visible
-    --show / --hide      show / hide the window
-    --search <QUERY>     show the window and run a search
-    --quit               stop the app (window and engine)
-
-The first --toggle, --show or --search with nothing running starts the app, so
-one key both launches it and drives it.
+The first --toggle, --show or --search with nothing running starts the host, so
+one key both launches the app and drives its window.
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Before anything can start a thread: bound glibc's malloc arenas, and take
-    // the content-cache mode from the command line so the engine child inherits
-    // it through the environment.
+    // the content-cache mode from the command line so the host inherits it.
     easysearch_core::process::cap_malloc_arenas();
     if args.iter().any(|a| a == "--content-in-memory") {
         easysearch_core::process::use_content_memory();
@@ -62,14 +69,31 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Control commands drive an already-running window (global-hotkey support);
-    // `--toggle`/`--show`/`--search` fall through to a normal start when nothing
-    // is listening.
-    if let Some(code) = easysearch_app::control_command(&args) {
-        return ExitCode::from(code as u8);
+    // The window half of the app: the host spawns this and speaks to it over our
+    // stdin/stdout.
+    if args.iter().any(|a| a == "--window") {
+        let query = easysearch_app::search_from_args(&args);
+        return match easysearch_app::run_window(query) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("easysearch: {e}");
+                ExitCode::FAILURE
+            }
+        };
     }
 
-    // The engine half: the parent has its pipes attached.
+    // The background host: engine + tray + control socket.
+    if args.iter().any(|a| a == "--daemon") {
+        return match easysearch_app::run_daemon() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("easysearch: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    // The raw engine half: the parent has its pipes attached.
     if args.iter().any(|a| a == "--engine") {
         let quiet = args.iter().any(|a| a == "--quiet");
         return match easysearch_app::run_engine(quiet) {
@@ -81,7 +105,13 @@ fn main() -> ExitCode {
         };
     }
 
-    match easysearch_app::run_gui() {
+    // Control commands drive the host, starting it if needed.
+    if let Some(code) = easysearch_app::control_command(&args) {
+        return ExitCode::from(code as u8);
+    }
+
+    // No flags at all: the desktop launcher. Ensure the host and show a window.
+    match easysearch_app::run_app() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("easysearch: {e}");

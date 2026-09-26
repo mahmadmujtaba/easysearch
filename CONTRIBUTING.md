@@ -8,11 +8,11 @@ reporting (or fixing).
 
 ## What the project is
 
-One binary, `easysearch`, is the whole app: a native **egui** window, a
-**system-tray** icon, and a **search engine** that runs as its own child
-process. The engine owns a live index of the filesystem and answers queries
-over the child's stdin/stdout as newline-delimited JSON — so nothing is ever
-exposed on a socket, a port or the network.
+One binary, `easysearch`, is the whole app, run as a **background host** and the
+**windows** it spawns. The host owns the system tray, the control socket and a
+live index of the filesystem; each window is its child and asks the host for
+searches over the child's stdin/stdout as newline-delimited JSON — so nothing is
+ever exposed on a socket, a port or the network.
 
 - **Realtime** — the kernel tells us about file changes (`notify`/inotify) and
   the index reflects them within about a second.
@@ -30,22 +30,24 @@ Read [`docs/scope.md`](docs/scope.md) for the design and
 
 ```mermaid
 flowchart LR
-    App["easysearch (app)\nwindow + tray"] -- "spawns, JSON frames\nover stdin/stdout" --> Engine["easysearch --engine\nindex + watcher"]
-    App -- "control socket\n(Unix domain)" --> CLI["easysearch-cli\nscripts, hotkeys"]
-    Engine --> DB[("SQLite index\n~/.cache/easysearch/db")]
-    Engine -- "notify/inotify" --> FS[["filesystem"]]
-    Engine -- "grep-searcher" --> FS
+    Launcher["easysearch (no args)\nensure host, then show"] --> Host
+    Host["easysearch --daemon (host)\ntray + engine + index"] -- "spawns; JSON frames\nstdin/stdout" --> Win["easysearch --window\nGUI child"]
+    Host -- "control socket\n(Unix domain)" --> CLI["easysearch-cli\nscripts, hotkeys"]
+    Host --> DB[("SQLite index\n~/.cache/easysearch/db")]
+    Host -- "notify/inotify" --> FS[["filesystem"]]
+    Host -- "grep-searcher" --> FS
 ```
 
 - `easysearch-core` — all the logic: walker, watcher, matcher, content search,
   the SQLite/mmap index, the tag store, the freedesktop trash, config, and the
   engine protocol types.
-- `easysearch-daemon` — the engine **server**: a library that serves the
-  protocol (there is no separate daemon process in normal use).
+- `easysearch-daemon` — the engine **server**: a library that serves the protocol
+  (`serve`/`serve_reader`), plus the standalone `easysearch-daemon` binary for
+  tests and headless use.
 - `easysearch-gui` — the eframe/egui frontend (also usable as a standalone dev
   binary).
-- `easysearch-app` + `app/` — the single `easysearch` binary that ties it
-  together (window + tray + child engine).
+- `easysearch-app` + `app/` — the single `easysearch` binary: the launcher, the
+  host (`--daemon`) and the window (`--window`).
 - `easysearch-cli` — the headless CLI.
 
 ### Repository layout
@@ -53,19 +55,19 @@ flowchart LR
 | Path | What lives there |
 | --- | --- |
 | `core/src/` | `engine`, `watcher`, `walker`, `matcher`, `content`, `content_index`, `sqlite_index`, `disk_index`, `overlay`, `roots`, `tags`, `trash`, `config`, `proto`/`api`, `child`, `backend`, `ipc`, `logo` |
-| `daemon/src/` | the engine server (`serve`, the `Op` dispatch) |
+| `daemon/src/` | the engine server (`serve`/`serve_reader`, the `Op` dispatch) and the standalone engine binary |
 | `gui/src/lib.rs` | the whole GUI (large — search it by feature) |
-| `gui/src/tray.rs` | the StatusNotifierItem tray |
-| `app/src/` | process entry points: `run_gui`, `run_engine`, `control_command` |
+| `gui/src/tray.rs` | the StatusNotifierItem tray (served by the host) |
+| `app/src/` | process entry points: `run_app` (launcher), `run_daemon` (host), `run_window` (GUI child), `run_engine`, `control_command` |
 | `cli/src/main.rs` | the CLI |
 | `packaging/` | desktop entry, AppStream metainfo, icons, deb/rpm/flatpak assets |
 | `scripts/` | `install-deps.sh`, `package-*.sh`, `gen-cargo-sources.py` |
 | `docs/` | design, GUI, config, protocol, storage and packaging docs |
 
-Data flow for a query: the GUI sends a `Query` to the engine (in-process
-`Backend::Local`, or the child over a JSON frame); the engine matches against
-the SQLite index and/or the ripgrep engine and returns rows; the GUI renders
-them, applying its own client-side overlays (tags, duplicate selection).
+Data flow for a query: the GUI sends a `Query` over its pipe to the host (or, in
+the standalone dev binary, to an in-process `Backend::Local`); the host matches
+against the SQLite index and/or the ripgrep engine and returns rows; the GUI
+renders them, applying its own client-side overlays (tags, duplicate selection).
 
 ## Set up a dev machine
 
@@ -89,7 +91,7 @@ make check     # type-check the whole workspace
 make test      # unit + integration tests
 make clippy    # must be warning-free
 make fmt       # rustfmt
-make run-dev   # build and launch the app (window + engine child)
+make run-dev   # build and launch the app (host + window)
 ```
 
 `make run-gui` runs only the window; `make daemon` drives the engine by hand

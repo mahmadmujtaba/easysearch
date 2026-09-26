@@ -1,26 +1,38 @@
-//! EasySearch as **one binary, two processes**: the app (window + tray) and the
-//! engine it spawns as its child.
+//! EasySearch as a **host and a window**: one binary that runs a background
+//! process owning the tray and the engine, and spawns the GUI as a short-lived
+//! child.
 //!
-//! The engine is a real separate process, so the index keeps running and stays
-//! responsive while the window is hidden, and a crash in the UI cannot corrupt
-//! the index. It is *not* a network service: the app owns the child's
-//! stdin/stdout and speaks JSON frames over them (`docs/scope.md`), so there is no
-//! socket, no port, and nothing about the index is reachable from outside the
-//! app and its engine.
+//! Why a host at all? A window cannot be unmapped on Wayland, and `winit`
+//! refuses to recreate its event loop, so a window that is *closed* cannot be
+//! reopened inside the same process. Making the tray and the index live in a
+//! host that outlives any window is the only way for "close the window" to mean
+//! the window is really gone while the app keeps indexing:
 //!
-//! Fallback: if the child cannot be spawned, the window runs the engine
-//! in-process instead of failing.
+//! ```text
+//!   easysearch --daemon        host: engine + tray + control socket (no window)
+//!        │
+//!        └── easysearch --window   … a window, over the child's pipes (JSON frames)
+//! ```
+//!
+//! When the window closes (its X button, the tray toggle, `--hide`), that
+//! process ends and the host simply spawns a fresh one on the next
+//! `--show`/`--toggle`. The engine never restarts, so the index stays warm and
+//! the search is instant. There is still no network: the window and the host are
+//! a parent and its child, and the only socket is the local
+//! `$XDG_RUNTIME_DIR/easysearch.sock` control channel.
 
-use easysearch_core::api::API_VERSION;
 use easysearch_core::ipc as gui_ipc;
+use easysearch_core::proto::Event;
 use easysearch_core::{Backend, ChildEngine, Config, Engine};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use easysearch_gui::tray::TrayMsg;
 
 /// Read `--search <QUERY>` / `--search=<QUERY>` out of the arguments, if present.
-///
-/// Used so a `--search` that has to launch the app still runs the search once
-/// the window is up.
 pub fn search_from_args(args: &[String]) -> Option<String> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -34,26 +46,17 @@ pub fn search_from_args(args: &[String]) -> Option<String> {
     None
 }
 
-/// Where the engine child writes its stderr (`$XDG_CACHE_HOME/easysearch`).
+/// Where the host writes its log (`$XDG_CACHE_HOME/easysearch`).
 pub fn engine_log_path() -> Option<PathBuf> {
     let dir = Config::default_disk_index_dir();
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("engine.log"))
 }
 
-/// Spawn this executable in engine mode, keeping its pipes.
-///
-/// The child's stderr goes to the cache log, so it never writes to a terminal
-/// the app does not own.
-pub fn spawn_engine_child() -> std::io::Result<ChildEngine> {
-    let exe = std::env::current_exe()?;
-    let log = engine_log_path().and_then(|p| std::fs::File::create(p).ok());
-    ChildEngine::spawn(&exe, &["--engine", "--quiet"], &[], log)
-}
-
 /// Run the engine in this process, serving the protocol on stdin/stdout.
 ///
-/// This is what `easysearch --engine` does — the mode the app spawns itself in.
+/// This is `easysearch --engine`: the standalone engine, used by the tests and
+/// by anyone driving the protocol by hand.
 pub fn run_engine(quiet: bool) -> Result<(), String> {
     let mut engine = Engine::new(Config::load());
     engine.start();
@@ -74,47 +77,316 @@ pub fn run_engine(quiet: bool) -> Result<(), String> {
     easysearch_daemon::serve(engine)
 }
 
-/// Open the GUI with the engine running as its child (or in-process, as a
-/// fallback).
-///
-/// Returns `Err` only if the window subsystem itself fails (mapped to a string
-/// so this crate needs no direct dependency on the GUI toolkit).
-pub fn run_gui() -> Result<(), String> {
-    let engine = match spawn_engine_child() {
-        Ok(engine) => {
-            if let Ok(health) = engine.health()
-                && health.api != API_VERSION
-            {
-                eprintln!(
-                    "easysearch: warning: engine protocol {} differs from expected {API_VERSION}",
-                    health.api
-                );
-            }
-            eprintln!("easysearch: engine started (pid {:?})", engine.pid());
-            Backend::child(engine)
+/// One action requested of the host, from the tray or the control socket.
+#[derive(Clone, Debug)]
+enum DaemonMsg {
+    Show,
+    Hide,
+    Toggle,
+    Search(String),
+    Quit,
+}
+
+impl DaemonMsg {
+    fn from_ipc(c: gui_ipc::Command) -> DaemonMsg {
+        match c {
+            gui_ipc::Command::Toggle => DaemonMsg::Toggle,
+            gui_ipc::Command::Show => DaemonMsg::Show,
+            gui_ipc::Command::Hide => DaemonMsg::Hide,
+            gui_ipc::Command::Quit => DaemonMsg::Quit,
+            gui_ipc::Command::Search(q) => DaemonMsg::Search(q),
+        }
+    }
+
+    fn from_tray(m: TrayMsg) -> DaemonMsg {
+        match m {
+            TrayMsg::Open => DaemonMsg::Show,
+            TrayMsg::Toggle => DaemonMsg::Toggle,
+            TrayMsg::Search(q) => DaemonMsg::Search(q),
+            TrayMsg::Quit => DaemonMsg::Quit,
+        }
+    }
+}
+
+/// Run the background host: the engine, the tray and the control socket, plus
+/// the window process it opens on demand. Returns when the user quits.
+pub fn run_daemon() -> Result<(), String> {
+    // The engine runs here, so it survives every window open/close.
+    let mut engine = Engine::new(Config::load());
+    engine.start();
+    let daemon = easysearch_daemon::Daemon::new(Arc::new(engine));
+
+    let (tx, rx) = mpsc::channel::<DaemonMsg>();
+
+    // System tray (best effort: some desktops have no StatusNotifier host).
+    let history = Arc::new(Mutex::new(easysearch_gui::recent_searches()));
+    let _tray = match easysearch_gui::tray::spawn_tray("EasySearch", Arc::clone(&history)) {
+        Ok((tray_rx, handle)) => {
+            forward_tray(tray_rx, tx.clone());
+            Some(handle)
         }
         Err(e) => {
-            eprintln!("easysearch: cannot start the engine ({e}) — running it in this process");
-            Backend::local(Config::load())
+            eprintln!("easysearch: system tray unavailable: {e}");
+            None
         }
     };
 
-    let initial = search_from_args(&std::env::args().skip(1).collect::<Vec<_>>());
-    easysearch_gui::run_with_query(std::sync::Arc::new(engine), initial).map_err(|e| e.to_string())
+    // Control socket: `easysearch --toggle|--show|--hide|--search|--quit`.
+    {
+        let (ipc_tx, ipc_rx) = mpsc::channel::<gui_ipc::Command>();
+        gui_ipc::spawn_listener(ipc_tx);
+        let tx = tx.clone();
+        std::thread::Builder::new()
+            .name("ipc-forward".into())
+            .spawn(move || {
+                for cmd in ipc_rx {
+                    if tx.send(DaemonMsg::from_ipc(cmd)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
+
+    // Keep the tray's recent-searches menu in step with the window's history.
+    {
+        let history = Arc::clone(&history);
+        std::thread::Builder::new()
+            .name("history".into())
+            .spawn(move || {
+                loop {
+                    let recent = easysearch_gui::recent_searches();
+                    if let Ok(mut h) = history.lock()
+                        && *h != recent
+                    {
+                        *h = recent;
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            })
+            .ok();
+    }
+
+    let mut window: Option<Window> = None;
+    loop {
+        // Reap a window whose process has ended.
+        if window.as_mut().is_some_and(|w| w.finished()) {
+            window = None;
+        }
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(msg) => match msg {
+                DaemonMsg::Show => match &window {
+                    Some(w) => w.send(Event::Show),
+                    None => window = Some(Window::spawn(Arc::clone(&daemon), None)),
+                },
+                DaemonMsg::Search(q) => match &window {
+                    Some(w) => w.send(Event::Search { query: q }),
+                    None => window = Some(Window::spawn(Arc::clone(&daemon), Some(q))),
+                },
+                DaemonMsg::Toggle => match &window {
+                    Some(w) => w.send(Event::Hide),
+                    None => window = Some(Window::spawn(Arc::clone(&daemon), None)),
+                },
+                DaemonMsg::Hide => {
+                    if let Some(w) = &window {
+                        w.send(Event::Hide);
+                    }
+                }
+                DaemonMsg::Quit => {
+                    if let Some(w) = &window {
+                        w.send(Event::Quit);
+                        // Give the window a moment to save and exit before we go.
+                        let deadline = Instant::now() + Duration::from_millis(800);
+                        while Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    break;
+                }
+            },
+            Err(RecvTimeoutError::Timeout) => {}
+            // Every sender is gone (no tray, no socket): nothing left to serve.
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
 }
 
-/// Handle the control commands that talk to a *running* window.
+fn forward_tray(rx: Receiver<TrayMsg>, tx: Sender<DaemonMsg>) {
+    std::thread::Builder::new()
+        .name("tray-forward".into())
+        .spawn(move || {
+            for msg in rx {
+                if tx.send(DaemonMsg::from_tray(msg)).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok();
+}
+
+/// A running window process, reached over its stdin/stdout.
+struct Window {
+    /// The window's stdin: replies and events are written here.
+    out: easysearch_daemon::Out,
+    child: std::process::Child,
+}
+
+impl Window {
+    /// Spawn `easysearch --window` and serve its requests from `daemon`.
+    fn spawn(daemon: Arc<easysearch_daemon::Daemon>, query: Option<String>) -> Window {
+        let exe = std::env::current_exe().expect("cannot find our own executable");
+        let mut cmd = Command::new(exe);
+        cmd.arg("--window");
+        if let Some(q) = query {
+            cmd.arg("--search").arg(q);
+        }
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+        match engine_log_path().and_then(|p| std::fs::File::create(p).ok()) {
+            Some(log) => {
+                cmd.stderr(log);
+            }
+            None => {
+                cmd.stderr(Stdio::null());
+            }
+        }
+
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                eprintln!("easysearch: cannot open a window: {e}");
+                // A window that never opened would leave the host with nothing to
+                // do; exit so the next launcher starts cleanly.
+                std::process::exit(1);
+            }
+        };
+        let stdin = child.stdin.take().expect("window stdin");
+        let stdout = child.stdout.take().expect("window stdout");
+        let out: easysearch_daemon::Out = Arc::new(Mutex::new(Box::new(stdin)));
+
+        // Serve the window's requests; the thread ends when the window exits.
+        let _ = easysearch_daemon::serve_reader(daemon, stdout, Arc::clone(&out));
+
+        Window { out, child }
+    }
+
+    fn send(&self, event: Event) {
+        easysearch_daemon::write_event(&self.out, &event);
+    }
+
+    fn finished(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+    }
+}
+
+/// Run one window, talking to the host over this process's stdin/stdout.
 ///
-/// Returns `Some(exit_code)` when the command was handled, or `None` when a
-/// window-opening command (`--toggle`, `--show`, `--search`) found nothing
-/// listening — in that case the caller should start the app, so one shortcut
-/// both launches it and drives its window. A fresh `--search QUERY` start carries
-/// the query through [`search_from_args`].
+/// This is `easysearch --window`: the GUI process the host spawns. It exits when
+/// its window closes, leaving the host and the index running.
+pub fn run_window(query: Option<String>) -> Result<(), String> {
+    // Our stdin/stdout are the host's pipes: frames in, frames out.
+    let client = ChildEngine::from_stdio();
+    let events = client.take_events().unwrap_or_else(|| mpsc::channel().1);
+    let quit = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let backend = Arc::new(Backend::child(client));
+    easysearch_gui::run_with(backend, query, events, quit).map_err(|e| e.to_string())
+}
+
+/// The no-argument entry point (the desktop launcher): make sure the host is
+/// running and ask it to show a window.
+pub fn run_app() -> Result<(), String> {
+    if gui_ipc::send(&gui_ipc::Command::Show).unwrap_or(false) {
+        return Ok(());
+    }
+    ensure_host()?;
+    match gui_ipc::send(&gui_ipc::Command::Show) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("the background process is not listening".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Start the background host detached from this process, and wait until its
+/// control socket is up.
+fn ensure_host() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("--daemon")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
+    match engine_log_path().and_then(|p| std::fs::File::create(p).ok()) {
+        Some(log) => {
+            cmd.stderr(log);
+        }
+        None => {
+            cmd.stderr(Stdio::null());
+        }
+    }
+    // Detach into a new session, so the host outlives this launcher and the
+    // terminal it was started from (no controlling terminal, no SIGHUP).
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
+        .map_err(|e| format!("cannot start the background process: {e}"))?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if gui_ipc::socket_path().exists() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err("the background process did not start".into())
+}
+
+/// Handle the control commands that talk to a *running* host.
 ///
-/// This is how a global hotkey is bound on Wayland (which has no global-hotkey
-/// API): the desktop runs `easysearch --toggle` and it reaches the instance that
-/// is already up. See `docs/ui.md`.
+/// A window-opening command (`--toggle`, `--show`, `--search`) starts the host
+/// first if nothing is listening, so one desktop shortcut both launches the app
+/// and drives it. `--hide` and `--quit` are quiet no-ops when nothing runs.
 pub fn control_command(args: &[String]) -> Option<i32> {
+    let (command, opens_window) = parse_control(args)?;
+    match gui_ipc::send(&command) {
+        Ok(true) => Some(0),
+        Ok(false) if opens_window => match ensure_host() {
+            Ok(()) => match gui_ipc::send(&command) {
+                Ok(true) => Some(0),
+                _ => {
+                    eprintln!(
+                        "easysearch: the background process did not accept {}",
+                        command.encode()
+                    );
+                    Some(1)
+                }
+            },
+            Err(e) => {
+                eprintln!("easysearch: {e}");
+                Some(1)
+            }
+        },
+        Ok(false) => {
+            eprintln!(
+                "easysearch: nothing is running to {}. (Start the app first.)",
+                command.encode()
+            );
+            Some(0)
+        }
+        Err(e) => {
+            eprintln!("easysearch: cannot reach the running instance: {e}");
+            Some(1)
+        }
+    }
+}
+
+/// Parse the control flags. `Some((command, opens_window))` when one is present.
+fn parse_control(args: &[String]) -> Option<(gui_ipc::Command, bool)> {
     let mut command: Option<gui_ipc::Command> = None;
     let mut opens_window = false;
     let mut i = 0;
@@ -147,24 +419,5 @@ pub fn control_command(args: &[String]) -> Option<i32> {
         }
         i += 1;
     }
-
-    let command = command?;
-    match gui_ipc::send(&command) {
-        Ok(true) => Some(0),
-        // Nothing is listening. A command that opens the window falls through so
-        // the caller starts the app (launcher semantics); the rest are quiet
-        // no-ops because there is nothing to control.
-        Ok(false) if opens_window => None,
-        Ok(false) => {
-            eprintln!(
-                "easysearch: nothing is running to {}. (Start the app first.)",
-                command.encode()
-            );
-            Some(0)
-        }
-        Err(e) => {
-            eprintln!("easysearch: cannot reach the running instance: {e}");
-            Some(1)
-        }
-    }
+    command.map(|c| (c, opens_window))
 }

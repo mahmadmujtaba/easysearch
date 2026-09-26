@@ -1,9 +1,10 @@
 # Using the GUI
 
-EasySearch is one binary, `easysearch`, that is both the **app** (window + tray) and the **engine**
-it spawns as a child (`easysearch --engine`), talking over the child's stdin/stdout as JSON frames
-([`scope.md`](scope.md)) — no socket, port or network code. `easysearch-cli` is the engine headless and
-`easysearch-gui` opens the window alone (dev only); screenshots: [`dark`](screenshots/dark.png), [`light`](screenshots/light.png).
+EasySearch is one binary, `easysearch`, that runs as a **background host** (the tray and the
+engine, `easysearch --daemon`) plus the **windows** it spawns as children (`easysearch --window`),
+talking over the child's stdin/stdout as JSON frames ([`scope.md`](scope.md)) — no socket, port or
+network code. `easysearch-cli` is the engine headless and `easysearch-gui` opens the window alone
+(dev only); screenshots: [`dark`](screenshots/dark.png), [`light`](screenshots/light.png).
 
 ## Window layout
 
@@ -172,12 +173,19 @@ fallbacks. Sidebar and result icons are painted in the theme's colours.
 
 ## Tray, closing and the global hotkey
 
-The **X** hides the window and keeps EasySearch running — the engine child keeps indexing and
-the search stays warm. Only **Quit** stops the app and its engine: *File ▸ Quit EasySearch*, the
-tray's *Quit EasySearch*, or `easysearch --quit`. The **tray icon** toggles the window (as does
-the menu's *Show / Hide window*), and the menu also offers *Open*, *Recent searches* and *Quit*.
-With no tray host the window still hides; `easysearch --show` brings it back. On **Wayland** a
-window cannot be unmapped, so “hidden” parks it out of the way; on **X11** it is a normal hide.
+The **X** closes the window and leaves EasySearch running: the window process
+exits, while the background host keeps the tray icon and the engine indexing, so
+the search stays warm and the next open is instant. Only **Quit** stops the app
+and its engine: *File ▸ Quit EasySearch*, the tray's *Quit EasySearch*, or
+`easysearch --quit`. The **tray icon** toggles the window (as does the menu's
+*Show / Hide window*), and the menu also offers *Open*, *Recent searches* and
+*Quit*. Reopening from the tray or `easysearch --show` starts a fresh window
+process against the same, still-warm index.
+
+Why it works this way: on **Wayland** a window cannot be unmapped and `winit`
+cannot recreate its event loop, so a closed window could not be reopened inside
+one process. The host/window split sidesteps both — the window really exits and a
+new one is spawned on demand. See [`scope.md`](scope.md).
 
 Wayland has no global-hotkey API, so the app ships a control socket
 (`$XDG_RUNTIME_DIR/easysearch.sock`, mode `0600`) driven from the command line — bind one of

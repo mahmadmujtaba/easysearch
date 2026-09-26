@@ -1,28 +1,33 @@
-//! `easysearch-daemon` — the search engine running as a **child process**.
+//! `easysearch-daemon` — the engine **server**.
 //!
-//! It owns the index and answers requests as JSON frames on its stdin/stdout
-//! ([`easysearch_core::proto`]). There is deliberately **no socket and no HTTP**:
-//! the only way to reach it is the pipe its parent holds, so the index is not
-//! exposed to anything else on the machine. The parent (the app, the CLI, a test)
-//! spawns it, sends requests and kills it on exit.
+//! It owns the index and answers requests as JSON frames ([`easysearch_core::proto`]).
+//! There is deliberately **no socket and no HTTP**: the only way to reach it is
+//! the pipe its peer holds, so the index is not exposed to anything else on the
+//! machine.
 //!
-//! End users normally never see this: the combined `easysearch` app spawns it as
-//! its own child. The standalone `easysearch-daemon` binary is the same engine,
-//! for tests and for anyone driving the protocol themselves.
+//! Two callers use it:
+//! - the standalone `easysearch-daemon` binary and `easysearch --engine`, on
+//!   stdin/stdout ([`serve`]); and
+//! - the combined app's background host, which serves the window child's pipes
+//!   ([`serve_reader`]) and pushes [`Event`]s to it.
 
 use easysearch_core::api::{API_VERSION, CountDto, Health, SearchResponseDto, StatusReport};
-use easysearch_core::proto::{ConfigPatch, Op, Request, Response};
+use easysearch_core::proto::{ConfigPatch, Event, Op, Request, Response};
 use easysearch_core::{Engine, Query};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Cap on concurrently served requests (each request holds one thread). A slow
 /// content search must not block the status poller or the next query.
 const MAX_CONCURRENCY: usize = 32;
+
+/// A writer shared by the reply path and the host's event path.
+pub type Out = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub struct Daemon {
     engine: Arc<Engine>,
@@ -37,8 +42,13 @@ impl Daemon {
         })
     }
 
+    /// The engine this daemon serves (the host uses it, e.g. to shut it down).
+    pub fn engine(&self) -> &Arc<Engine> {
+        &self.engine
+    }
+
     /// Answer one request. Never fails: an error becomes an `error` reply.
-    fn dispatch(&self, request: Request) -> Response {
+    pub fn dispatch(&self, request: Request) -> Response {
         let id = request.id;
         match request.op {
             Op::Health => as_reply(id, &self.health()),
@@ -126,86 +136,111 @@ fn payload<T: DeserializeOwned>(value: Option<serde_json::Value>) -> Result<T, S
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
-/// Serve requests on stdin until stdin closes or a `shutdown` arrives.
-///
-/// Each request is answered on its own thread, so one long search does not
-/// serialize the others; replies are written whole, one JSON object per line.
-pub fn serve(engine: Arc<Engine>) -> Result<(), String> {
-    let daemon = Daemon::new(engine);
-    let out = Arc::new(Mutex::new(std::io::stdout()));
-    let inflight = Arc::new(AtomicUsize::new(0));
-    let stop = Arc::new(AtomicBool::new(false));
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
-
-    let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(_) => break, // the parent went away
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let request = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => request,
-            Err(e) => {
-                // No id to answer: report against 0 so the parent can log it.
-                write_frame(&out, &Response::failed(0, format!("bad request: {e}")));
-                continue;
-            }
-        };
-
-        while inflight.load(Ordering::Relaxed) >= MAX_CONCURRENCY {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        inflight.fetch_add(1, Ordering::Relaxed);
-
-        let daemon = Arc::clone(&daemon);
-        let out = Arc::clone(&out);
-        // Clones for the task, so the originals stay usable below.
-        let task_inflight = Arc::clone(&inflight);
-        let task_stop = Arc::clone(&stop);
-        match std::thread::Builder::new()
-            .name("engine-req".into())
-            .spawn(move || {
-                let shutdown = request.op == Op::Shutdown;
-                let response = daemon.dispatch(request);
-                write_frame(&out, &response);
-                task_inflight.fetch_sub(1, Ordering::Relaxed);
-                if shutdown {
-                    task_stop.store(true, Ordering::Relaxed);
-                }
-            }) {
-            Ok(handle) => handles.push(handle),
-            Err(_) => {
-                inflight.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-        handles.retain(|h| !h.is_finished());
-
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
+/// Write one framed value as a line, whole (never interleaved with another
+/// thread's): a reply, or an [`Event`].
+pub fn write_value(out: &Out, value: &impl Serialize) {
+    if let Ok(mut out) = out.lock() {
+        write_line(&mut *out, value);
     }
-
-    // Let any in-flight reply reach the parent before the process ends.
-    for handle in handles {
-        let _ = handle.join();
-    }
-    Ok(())
 }
 
-/// Write one reply as a line, whole (never interleaved with another thread's).
-fn write_frame(out: &Mutex<std::io::Stdout>, response: &Response) {
-    let Ok(line) = serde_json::to_string(response) else {
+/// Write one line into any writer (the seam `write_value` and the tests use).
+fn write_line(into: &mut impl Write, value: &impl Serialize) {
+    let Ok(line) = serde_json::to_string(value) else {
         return;
     };
-    if let Ok(mut out) = out.lock() {
-        let _ = out
-            .write_all(line.as_bytes())
-            .and_then(|_| out.write_all(b"\n"))
-            .and_then(|_| out.flush());
-    }
+    let _ = into
+        .write_all(line.as_bytes())
+        .and_then(|_| into.write_all(b"\n"))
+        .and_then(|_| into.flush());
+}
+
+/// Push an unsolicited event to the window on the other end of `out`.
+pub fn write_event(out: &Out, event: &Event) {
+    write_value(out, event);
+}
+
+/// Read request frames from `reader` and answer on `out` until it ends.
+///
+/// Each request is answered on its own thread, so one long search does not
+/// serialize the others. `out` is shared with the caller so it can interleave
+/// events between replies (each frame is a whole, mutex-guarded line).
+pub fn serve_reader(
+    daemon: Arc<Daemon>,
+    reader: impl Read + Send + 'static,
+    out: Out,
+) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("engine-serve".into())
+        .spawn(move || {
+            let inflight = Arc::new(AtomicUsize::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+            for line in BufReader::new(reader).lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(_) => break, // the other end went away
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let request = match serde_json::from_str::<Request>(&line) {
+                    Ok(request) => request,
+                    Err(e) => {
+                        // No id to answer: report against 0 so the peer can log it.
+                        write_value(&out, &Response::failed(0, format!("bad request: {e}")));
+                        continue;
+                    }
+                };
+
+                while inflight.load(Ordering::Relaxed) >= MAX_CONCURRENCY {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                inflight.fetch_add(1, Ordering::Relaxed);
+
+                let daemon = Arc::clone(&daemon);
+                let out = Arc::clone(&out);
+                let task_inflight = Arc::clone(&inflight);
+                let task_stop = Arc::clone(&stop);
+                match std::thread::Builder::new()
+                    .name("engine-req".into())
+                    .spawn(move || {
+                        let shutdown = request.op == Op::Shutdown;
+                        let response = daemon.dispatch(request);
+                        write_value(&out, &response);
+                        task_inflight.fetch_sub(1, Ordering::Relaxed);
+                        if shutdown {
+                            task_stop.store(true, Ordering::Relaxed);
+                        }
+                    }) {
+                    Ok(handle) => handles.push(handle),
+                    Err(_) => {
+                        inflight.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+                handles.retain(|h| !h.is_finished());
+
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+
+            // Let any in-flight reply reach the peer before the thread ends.
+            for handle in handles {
+                let _ = handle.join();
+            }
+        })
+        .expect("spawn engine-serve thread")
+}
+
+/// Serve the engine on this process's stdin/stdout (the `--engine` mode).
+pub fn serve(engine: Arc<Engine>) -> Result<(), String> {
+    let daemon = Daemon::new(engine);
+    let out: Out = Arc::new(Mutex::new(Box::new(std::io::stdout())));
+    let handle = serve_reader(daemon, std::io::stdin(), out);
+    let _ = handle.join();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -269,5 +304,39 @@ mod tests {
         });
         assert!(reply.error.is_none());
         assert!(reply.data.is_none());
+    }
+
+    #[test]
+    fn a_reader_serves_frames_and_events_share_the_writer() {
+        let d = daemon();
+        let mut buf: Vec<u8> = Vec::new();
+        write_line(&mut buf, &Event::Show);
+        write_line(&mut buf, &Response::done(3));
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], r#"{"event":"show"}"#);
+        assert_eq!(lines[1], r#"{"id":3}"#);
+
+        // And a real frame round-trips through the reader into a sink.
+        let input: &'static [u8] = b"{\"id\":1,\"op\":\"health\"}\n";
+        let lines = Arc::new(Mutex::new(0usize));
+        let sink: Out = Arc::new(Mutex::new(Box::new(Sink(Arc::clone(&lines)))));
+        serve_reader(Arc::clone(&d), input, Arc::clone(&sink))
+            .join()
+            .unwrap();
+        assert!(*lines.lock().unwrap() >= 1);
+    }
+
+    /// A `Write` sink that only counts the newlines written to it.
+    struct Sink(Arc<Mutex<usize>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            *self.0.lock().unwrap() += buf.iter().filter(|b| **b == b'\n').count();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 }

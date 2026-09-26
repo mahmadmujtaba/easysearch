@@ -26,8 +26,8 @@ missing, so `make packages` degrades cleanly. Details:
    `scripts/package-deb.sh`.
 2. **`LICENSE` copyright holder** — currently the neutral "2026 EasySearch
    contributors". Put a real name in it.
-3. The AppStream metainfo carries a stale `<release>` entry; refresh it (or wire
-   it into the tag build) before a release.
+3. The AppStream metainfo carries a `<release>` entry that is edited by hand each
+   release; keep it in step with `VERSION` (or wire it into the tag build).
 
 ## Known rough edges
 
@@ -36,9 +36,10 @@ missing, so `make packages` degrades cleanly. Details:
   items are the least dependable part of Flatpak. Everything else works.
 - **Flatpak: only `$HOME` is visible.** Grant `--filesystem=host:ro` to search
   the rest of the disk.
-- **Wayland: a window cannot be unmapped** (`winit` ignores `set_visible`), so
-  "close to background" parks the window (undecorated, 1×1, behind everything)
-  rather than truly hiding it. On X11 it is a normal hide. See [`ui.md`](ui.md).
+- **Closing the window with no tray host leaves the host headless.** The window
+  process exits (the host keeps indexing, as designed), but with no tray icon
+  there is nothing to reopen it — use `easysearch --show` or the launcher. With
+  a StatusNotifier host (most desktops) this does not arise.
 - **`easysearch-gui`** is still built but no longer packaged. If you add a
   binary or a `dlopen`ed library, update three places in step: `GUI_DEPENDS` in
   `scripts/package-deb.sh`, the RPM `Requires:` sonames, and the Flatpak
@@ -60,6 +61,10 @@ missing, so `make packages` degrades cleanly. Details:
   builds the `.deb` and `.rpm` on every push to `master` and every PR (uploaded
   as a run artifact), and a `v*` tag attaches them to the GitHub release. The
   test suite is run by the contributor, not CI.
+- **The end-to-end engine suite is `#[ignore]`d.** Every test in
+  `daemon/tests/roundtrip.rs` spawns a real engine and waits for it to index, so
+  the suite is slow. Run it on demand with
+  `cargo test -p easysearch-daemon --test roundtrip -- --ignored`.
 - **`packaging/flatpak/cargo-sources.json` is committed** (522 crates, generated
   from `Cargo.lock`). Regenerate it with `make cargo-sources` whenever
   dependencies change, or the offline Flatpak build fails.

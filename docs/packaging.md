@@ -24,9 +24,9 @@ Fedora the equivalent is `dnf builddep`).
 All three formats install the same payload:
 
 ```
-/usr/bin/easysearch            the app: GUI + engine in one file
+/usr/bin/easysearch            the app: host, window and engine in one file
 /usr/bin/easysearch-cli        scriptable CLI
-/usr/bin/easysearch-daemon     headless engine (stdio protocol; normally a child of the app)
+/usr/bin/easysearch-daemon     standalone engine (stdio protocol; tests, scripts, headless)
 /usr/share/applications/io.github.easysearch.EasySearch.desktop
 /usr/share/metainfo/io.github.easysearch.EasySearch.metainfo.xml
 /usr/share/icons/hicolor/…/apps/io.github.easysearch.EasySearch.{svg,png}
@@ -36,8 +36,8 @@ All three formats install the same payload:
 ```
 
 `easysearch-gui` is a development convenience that duplicates `easysearch`
-(which already runs the GUI *and* the engine) and would add ~17 MB, so it is not
-packaged; `make install` still installs it locally.
+(which already provides the GUI *and* the engine) and would add ~17 MB, so it is
+not packaged; `make install` still installs it locally.
 
 `make install` is the user-local counterpart: binaries into `~/.local/bin`, and
 the desktop entry, AppStream metadata and hicolor icon into `~/.local/share/…`.
@@ -87,9 +87,10 @@ network). `make flatpak` refreshes it on every build; the file is committed so
 
 The sandbox only sees what `finish-args` grants: `--filesystem=home` (the app's
 default search root; add `--filesystem=host:ro` to search more), no network (the
-engine talks to the app over private pipes, so nothing listens), and
-`--talk-name=org.kde.StatusNotifierWatcher` for the tray. Everything else the app
-touches is under `$HOME` / `$XDG_CACHE_HOME`.
+host and its windows talk over private pipes and a local Unix socket, so nothing
+is reachable over the network), and `--talk-name=org.kde.StatusNotifierWatcher`
+for the tray. Everything else the app touches is under `$HOME` /
+`$XDG_CACHE_HOME`.
 
 ## Dependencies are listed by hand
 

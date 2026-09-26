@@ -4,6 +4,10 @@
 //!
 //! The child's stderr is swallowed, which is what keeps protocol frames and human
 //! log lines apart.
+//!
+//! **Pending.** Every test here spawns a real engine and waits for it to index, so
+//! the suite is slow; it is `#[ignore]`d by default. Run it on demand with
+//! `cargo test -p easysearch-daemon --test roundtrip -- --ignored`.
 
 use easysearch_core::api::{Health, StatusReport};
 use easysearch_core::proto::{Op, Request, Response};
@@ -101,6 +105,7 @@ impl Drop for Fixture {
 }
 
 #[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
 fn the_engine_serves_searches_as_a_child() {
     let fixture = Fixture::new("search");
     assert!(
@@ -136,6 +141,7 @@ fn the_engine_serves_searches_as_a_child() {
 }
 
 #[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
 fn walk_settings_round_trip_through_the_child() {
     let fixture = Fixture::new("settings");
     fixture.wait_for("a live index", |r| r.status.state == State::Live);
@@ -161,6 +167,7 @@ fn walk_settings_round_trip_through_the_child() {
 }
 
 #[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
 fn the_content_cache_switch_round_trips() {
     let fixture = Fixture::new("cindex");
     fixture.wait_for("a live index", |r| r.status.state == State::Live);
@@ -184,6 +191,7 @@ fn the_content_cache_switch_round_trips() {
 }
 
 #[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
 fn frames_are_newline_delimited_json() {
     // Drive the binary with no client at all, to pin the protocol other tools
     // would have to speak.

@@ -1,23 +1,27 @@
-//! The app-side half of the engine protocol: a **child process** speaking JSON
-//! frames over its stdin/stdout ([`crate::proto`]).
+//! The window-side half of the engine protocol: JSON frames over a pair of
+//! pipes ([`crate::proto`]).
 //!
-//! There is no socket and no HTTP. The engine is spawned by its owner (the app,
-//! the CLI, or a test), the owner keeps the pipes, and dropping this value kills
-//! the child — so the engine's lifetime is exactly its owner's. Pipes are private
-//! to the process pair: nothing else on the machine can reach the index.
+//! There is no socket and no HTTP. The frames travel over pipes that are private
+//! to the two processes:
 //!
-//! Requests are multiplexed by id, so a slow content search never blocks the
-//! status poller (or a second query): the engine answers each request on its own
-//! thread and replies as soon as it is done.
+//! - [`ChildEngine::spawn`] spawns the engine as this process's child and keeps
+//!   its stdin/stdout (the CLI, the tests, and the standalone `easysearch-gui`).
+//! - [`ChildEngine::from_pipes`] adopts this process's **own** stdin/stdout, so
+//!   the window can be a child of a background host that owns the engine and the
+//!   tray (the combined `easysearch` app).
+//!
+//! Either way requests are multiplexed by id, so a slow content search never
+//! blocks the status poller, and the host may push unsolicited [`Event`]s down
+//! the same pipe (show/hide/quit/search).
 
 use crate::api::{CountDto, Health, SearchResponseDto, StatusReport};
 use crate::engine::{SearchResponse, State, Status};
 use crate::matcher::Query;
-use crate::proto::{ConfigPatch, Op, Request, Response};
+use crate::proto::{ConfigPatch, Event, Op, Request, Response};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
@@ -31,20 +35,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Shared plumbing between the client, the reader thread and the poller.
 struct Inner {
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<Box<dyn Write + Send>>,
     /// Replies waiting for their caller, keyed by request id.
     pending: Mutex<HashMap<u64, mpsc::Sender<Response>>>,
     next_id: AtomicU64,
     /// Cleared on drop so the poller thread can stop.
     alive: AtomicBool,
+    /// Unsolicited events pushed by the host (see [`Event`]).
+    events: mpsc::Sender<Event>,
 }
 
-/// A running engine child.
+/// A running engine, reached over pipes.
 pub struct ChildEngine {
     inner: Arc<Inner>,
-    child: Mutex<Child>,
+    /// The child process, when this client spawned it.
+    child: Option<Mutex<Child>>,
     report: Arc<RwLock<Option<StatusReport>>>,
     connected: Arc<AtomicBool>,
+    events: Mutex<Option<mpsc::Receiver<Event>>>,
 }
 
 impl ChildEngine {
@@ -89,32 +97,59 @@ impl ChildEngine {
             std::io::Error::new(std::io::ErrorKind::BrokenPipe, "no engine stdout")
         })?;
 
+        Ok(Self::build(stdout, Box::new(stdin), Some(child)))
+    }
+
+    /// Adopt this process's own stdin/stdout as the channel to a host that owns
+    /// the engine — the window-as-a-child case. The caller keeps its stderr for
+    /// logging; stdin/stdout become protocol-only.
+    pub fn from_stdio() -> ChildEngine {
+        Self::build(std::io::stdin(), Box::new(std::io::stdout()), None)
+    }
+
+    /// Build the client around an already-open reader/writer pair.
+    fn build(
+        reader: impl Read + Send + 'static,
+        writer: Box<dyn Write + Send>,
+        child: Option<Child>,
+    ) -> ChildEngine {
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
         let inner = Arc::new(Inner {
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(writer),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             alive: AtomicBool::new(true),
+            events: event_tx,
         });
         let report = Arc::new(RwLock::new(None));
         let connected = Arc::new(AtomicBool::new(false));
 
-        // Replies: one line, one Response.
+        // Incoming frames: a reply goes to its waiter, an event to the UI.
         {
             let inner = Arc::clone(&inner);
             std::thread::Builder::new()
-                .name("engine-out".into())
+                .name("engine-in".into())
                 .spawn(move || {
-                    for line in BufReader::new(stdout).lines() {
+                    for line in BufReader::new(reader).lines() {
                         let Ok(line) = line else { break };
                         if line.trim().is_empty() {
                             continue;
                         }
-                        let Ok(response) = serde_json::from_str::<Response>(&line) else {
+                        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                             continue;
                         };
-                        let waiter = inner.pending.lock().unwrap().remove(&response.id);
-                        if let Some(waiter) = waiter {
-                            let _ = waiter.send(response);
+                        if value.get("id").is_some() {
+                            let Ok(response) = serde_json::from_value::<Response>(value) else {
+                                continue;
+                            };
+                            let waiter = inner.pending.lock().unwrap().remove(&response.id);
+                            if let Some(waiter) = waiter {
+                                let _ = waiter.send(response);
+                            }
+                        } else if value.get("event").is_some()
+                            && let Ok(event) = serde_json::from_value::<Event>(value)
+                        {
+                            let _ = inner.events.send(event);
                         }
                     }
                 })
@@ -123,9 +158,10 @@ impl ChildEngine {
 
         let engine = ChildEngine {
             inner,
-            child: Mutex::new(child),
+            child: child.map(Mutex::new),
             report: Arc::clone(&report),
             connected: Arc::clone(&connected),
+            events: Mutex::new(Some(event_rx)),
         };
 
         // Status is polled, so the UI can read it every frame for free.
@@ -176,12 +212,19 @@ impl ChildEngine {
                 .ok();
         }
 
-        Ok(engine)
+        engine
     }
 
-    /// The child's process id, when it is still known.
+    /// Take the receiver for host-pushed events. Only the first call returns one.
+    pub fn take_events(&self) -> Option<mpsc::Receiver<Event>> {
+        self.events.lock().ok().and_then(|mut e| e.take())
+    }
+
+    /// The child's process id, when this client spawned one.
     pub fn pid(&self) -> Option<u32> {
-        self.child.lock().ok().map(|c| c.id())
+        self.child
+            .as_ref()
+            .and_then(|c| c.lock().ok().map(|c| c.id()))
     }
 
     /// True if the last status poll succeeded.
@@ -328,11 +371,14 @@ impl ChildEngine {
 }
 
 impl Drop for ChildEngine {
-    /// The engine belongs to its owner: leaving kills it, so a crashed or closed
-    /// app never leaves an orphaned indexer behind.
+    /// When this client spawned the engine, leaving kills it, so a crashed or
+    /// closed app never leaves an orphaned indexer behind. A client that adopted
+    /// its own stdio has no child to kill.
     fn drop(&mut self) {
         self.inner.alive.store(false, Ordering::Relaxed);
-        if let Ok(mut child) = self.child.lock() {
+        if let Some(child) = &self.child
+            && let Ok(mut child) = child.lock()
+        {
             let _ = child.kill();
             let _ = child.wait();
         }

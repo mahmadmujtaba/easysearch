@@ -10,22 +10,26 @@
 //! preview/details panel — over a view tab strip, recent searches and a live
 //! status bar. Tokyo Night palette; Wayland-first windowing.
 
+use easysearch_core::logo;
+use easysearch_core::proto::Event;
 use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
     TagStore,
 };
-use easysearch_core::{ipc, logo};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-mod tray;
+/// System tray (StatusNotifierItem). Lives in the **background host** process,
+/// not the window, so the icon outlives any single window.
+pub mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 const HISTORY_CAP: usize = 20;
@@ -526,15 +530,21 @@ fn location_label(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Run the GUI against an already-chosen search backend (blocks until exit).
-pub fn run(backend: Arc<Backend>) -> eframe::Result {
-    run_with_query(backend, None)
-}
-
-/// Like [`run`], but runs `initial_query` as soon as the window opens.
+/// Run one window against `backend`, returning when it closes.
 ///
-/// Used by `easysearch --search QUERY` when it has to launch the app itself.
-pub fn run_with_query(backend: Arc<Backend>, initial_query: Option<String>) -> eframe::Result {
+/// `events` carries commands pushed by the host (show / hide / quit / search);
+/// `quit` is set when the host asked for a full quit rather than a hide. The
+/// window owns no engine of its own: closing it just ends this process, and the
+/// host (with the tray and the index) keeps running.
+///
+/// `initial_query` runs as soon as the window opens (a relaunch driven by
+/// `--search`, or the tray's recent-searches menu).
+pub fn run_with(
+    backend: Arc<Backend>,
+    initial_query: Option<String>,
+    events: mpsc::Receiver<Event>,
+    quit: Arc<AtomicBool>,
+) -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("EasySearch")
         // Must match the installed desktop entry / icon name so Wayland
@@ -553,8 +563,20 @@ pub fn run_with_query(backend: Arc<Backend>, initial_query: Option<String>) -> e
     eframe::run_native(
         "EasySearch",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, backend, initial_query)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, backend, initial_query, events, quit)))),
     )
+}
+
+/// The standalone `easysearch-gui` development binary: one window, no host.
+/// Closing it exits (there is no tray or background process behind it).
+pub fn run(backend: Arc<Backend>) -> eframe::Result {
+    let (_tx, events) = mpsc::channel();
+    run_with(backend, None, events, Arc::new(AtomicBool::new(false)))
+}
+
+/// The persisted recent searches (`gui.json`), for the host's tray menu.
+pub fn recent_searches() -> Vec<String> {
+    GuiPrefs::load().history
 }
 
 /// The logo rendered for the window icon.
@@ -1011,17 +1033,11 @@ struct App {
     search_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
-    tray_rx: Option<mpsc::Receiver<tray::TrayMsg>>,
-    // Held for its lifetime: dropping the handle unregisters the tray item.
-    #[allow(dead_code)]
-    tray_handle: Option<ksni::blocking::Handle<tray::AppTray>>,
-    /// Set by a real Quit (menu, tray, `--quit`), so the close handler lets the
-    /// window close instead of hiding it to the tray.
-    tray_quit: bool,
-    /// Our own view of window visibility (egui 0.31 exposes no readback).
-    window_visible: bool,
-    /// Recent searches shared with the tray menu.
-    history_shared: Arc<Mutex<Vec<String>>>,
+    /// Events pushed by the host process (tray, `--toggle`, `--quit`, `--search`).
+    events: mpsc::Receiver<Event>,
+    /// Set when a real Quit arrives: the window closes the whole app, not just
+    /// itself. A plain hide leaves it false, and the host keeps running.
+    quit: Arc<AtomicBool>,
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
@@ -1073,8 +1089,6 @@ struct App {
     exclude_text: String,
     /// Transient status line shown inside the excluded-folders window.
     exclude_msg: Option<String>,
-    /// Commands from the control socket (`--toggle`, `--search …`).
-    ipc_rx: mpsc::Receiver<ipc::Command>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
     /// Human label for the search backend ("in-process" or "engine pid N").
@@ -1099,6 +1113,8 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         backend: Arc<Backend>,
         initial_query: Option<String>,
+        events: mpsc::Receiver<Event>,
+        quit: Arc<AtomicBool>,
     ) -> App {
         let (query_tx, query_rx) = mpsc::channel::<UiMsg>();
         let (result_tx, result_rx) = mpsc::channel::<OutMsg>();
@@ -1124,25 +1140,10 @@ impl App {
             .expect("failed to spawn search thread");
 
         let prefs = GuiPrefs::load();
-        // Control socket: lets `easysearch --toggle` drive this window
-        // (the portable way to bind a global hotkey — see gui/src/ipc.rs).
-        let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Command>();
-        ipc::spawn_listener(ipc_tx);
         let theme = prefs.theme;
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
         let backend_label = backend.label();
-        // The tray lives here, in the app process, next to the engine child it
-        // spawned: the icon represents this app, and its Quit stops it.
-        let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
-        let (tray_rx, tray_handle) =
-            match tray::spawn_tray("EasySearch", Arc::clone(&history_shared)) {
-                Ok((rx, handle)) => (Some(rx), Some(handle)),
-                Err(e) => {
-                    eprintln!("system tray unavailable: {e}");
-                    (None, None)
-                }
-            };
 
         // Restore the tabs that were open when the app last closed (at least one).
         let tab_prefs = if prefs.tabs.is_empty() {
@@ -1287,11 +1288,8 @@ impl App {
             search_rect: None,
             ui_font,
             mono_font,
-            tray_rx,
-            tray_handle,
-            tray_quit: false,
-            window_visible: true,
-            history_shared,
+            events,
+            quit,
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
@@ -1322,7 +1320,6 @@ impl App {
             show_excludes: false,
             exclude_text: String::new(),
             exclude_msg: None,
-            ipc_rx,
             pending_cmds: Vec::new(),
             tags,
             all_results: Vec::new(),
@@ -1648,13 +1645,6 @@ impl App {
         }
     }
 
-    /// Mirror the persisted history into the shared tray snapshot.
-    fn sync_history(&mut self) {
-        if let Ok(mut h) = self.history_shared.lock() {
-            h.clone_from(&self.prefs.history);
-        }
-    }
-
     /// Run a query (from the command line, a saved search or the tray).
     fn run_query(&mut self, q: &str) {
         let q = q.trim().to_string();
@@ -1812,46 +1802,9 @@ fn search_id() -> egui::Id {
     egui::Id::new("search_input")
 }
 
-/// The window's normal size, and its minimum, restored when it is un-parked.
-const WINDOW_SIZE: egui::Vec2 = egui::vec2(1240.0, 760.0);
-const MIN_WINDOW_SIZE: egui::Vec2 = egui::vec2(640.0, 400.0);
-
-/// Whether this backend lets us truly unmap the window. `winit`'s Wayland
-/// backend implements `set_visible` as a no-op ("Not possible on Wayland"), so
-/// on a Wayland session we cannot unmap the window — we park it instead.
-/// `WAYLAND_DISPLAY` set means the window is a Wayland window (winit prefers it
-/// over XWayland).
-fn can_unmap_window() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_none()
-}
-
-/// Hide the window without closing it.
-///
-/// On X11 this unmaps the window. On Wayland the unmap is ignored (and the
-/// event loop cannot be recreated, so the window cannot be closed and reopened
-/// either), so the window is *parked*: undecorated, click-through and shrunk to
-/// a single pixel. Lifting the minimum size **first** is essential — the 640×400
-/// minimum from the viewport builder otherwise clamps the shrink back, which is
-/// what left the window visible. [`show_window`] reverses all of it.
-fn hide_window(ctx: &egui::Context) {
-    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-    if !can_unmap_window() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(1.0, 1.0)));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
-    }
-}
-
-/// Bring the window to the front (show it and give it focus), undoing
-/// [`hide_window`].
+/// Bring the window to the front. The window only exists while it is shown (the
+/// host opens one and closes it on hide), so this just asks for focus.
 fn show_window(ctx: &egui::Context) {
-    if !can_unmap_window() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(WINDOW_SIZE));
-        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW_SIZE));
-    }
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 }
@@ -3437,92 +3390,24 @@ impl eframe::App for App {
 
         ctx.request_repaint_after(Duration::from_millis(250));
 
-        // Control-socket commands (a global hotkey bound to `--toggle`, etc.).
-        let mut ipc_msgs = Vec::new();
-        while let Ok(cmd) = self.ipc_rx.try_recv() {
-            ipc_msgs.push(cmd);
-        }
-        for cmd in ipc_msgs {
-            match cmd {
-                ipc::Command::Toggle => {
-                    if self.window_visible {
-                        hide_window(ctx);
-                        self.window_visible = false;
-                    } else {
-                        show_window(ctx);
-                        self.window_visible = true;
-                    }
+        // Events pushed by the host process (the tray, `--toggle`/`--quit`, or a
+        // shortcut's `--search`). The host owns the window: it opens one, and a
+        // hide simply closes it (the host and its engine keep running).
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Event::Show => show_window(ctx),
+                Event::Hide => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                Event::Quit => {
+                    self.quit.store(true, Ordering::SeqCst);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                ipc::Command::Show => {
+                Event::Search { query } => {
                     show_window(ctx);
-                    self.window_visible = true;
-                }
-                ipc::Command::Hide => {
-                    hide_window(ctx);
-                    self.window_visible = false;
-                }
-                ipc::Command::Search(query) => {
-                    show_window(ctx);
-                    self.window_visible = true;
                     self.run_query(&query);
                     self.send_query();
                     ctx.memory_mut(|m| m.request_focus(search_id()));
                 }
-                ipc::Command::Quit => {
-                    // A real quit: window *and* engine child.
-                    self.tray_quit = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
             }
-        }
-
-        // Keep the tray's recent-searches menu in step with the persisted list.
-        self.sync_history();
-
-        // Tray messages: open/toggle the window, re-run a search, or quit.
-        let mut tray_msgs = Vec::new();
-        if let Some(rx) = &self.tray_rx {
-            while let Ok(msg) = rx.try_recv() {
-                tray_msgs.push(msg);
-            }
-        }
-        for msg in tray_msgs {
-            match msg {
-                tray::TrayMsg::Open => {
-                    show_window(ctx);
-                    self.window_visible = true;
-                }
-                tray::TrayMsg::Toggle => {
-                    if self.window_visible {
-                        hide_window(ctx);
-                        self.window_visible = false;
-                    } else {
-                        show_window(ctx);
-                        self.window_visible = true;
-                    }
-                }
-                tray::TrayMsg::Search(q) => {
-                    show_window(ctx);
-                    self.window_visible = true;
-                    self.run_query(&q);
-                    self.send_query();
-                }
-                tray::TrayMsg::Quit => {
-                    self.tray_quit = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        }
-
-        // The X button hides the window (to the tray, where the desktop has one)
-        // so the engine child keeps indexing and the app comes back with one
-        // click. Only an explicit Quit (menu, tray, `--quit`) exits the app —
-        // including when there is no tray, where `easysearch --show` (the
-        // control socket) brings it back.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.tray_quit {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            hide_window(ctx);
-            self.window_visible = false;
         }
 
         self.menu_bar(ctx);
@@ -3908,8 +3793,7 @@ impl App {
                             )
                             .clicked()
                         {
-                            hide_window(ctx);
-                            self.window_visible = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ui.close_menu();
                         }
                         if ui
@@ -3920,7 +3804,7 @@ impl App {
                             )
                             .clicked()
                         {
-                            self.tray_quit = true;
+                            self.quit.store(true, Ordering::SeqCst);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ui.close_menu();
                         }

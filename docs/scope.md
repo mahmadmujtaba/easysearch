@@ -29,32 +29,38 @@ current, at the fastest speed available.
 
 ## 2. Architecture
 
-One binary, `easysearch`, is the whole app: a native **egui** window, a **tray**
-icon, and an **engine** that runs as its own child process. They talk over the
-child's stdin/stdout as newline-delimited JSON frames — there is no socket, no
-port and nothing reachable from outside the process pair.
+One binary, `easysearch`, is the whole app, and it runs as two kinds of
+process: a **host** that owns the tray and the engine, and the short-lived
+**windows** it spawns. The host starts detached (`easysearch --daemon`); each
+window (`easysearch --window`) is its child, and they exchange newline-delimited
+JSON frames over the child's stdin/stdout — no socket to the network, no port,
+nothing reachable from outside the process pair.
 
 ```mermaid
 flowchart LR
-    App["easysearch (app)\nwindow + tray"] -- "spawns; JSON frames\nstdin/stdout" --> Engine["easysearch --engine\nowner of the index"]
-    App -- "control socket\n(\$XDG_RUNTIME_DIR)" --> Other["easysearch-cli\nhotkeys, scripts"]
-    Engine --> DB[("SQLite index\n~/.cache/easysearch/db")]
-    Engine <-- "notify / inotify" --> FS[["filesystem"]]
-    Engine -- "grep-searcher (live)" --> FS
+    Launcher["easysearch\n(no args)"] -- "ensure, then show" --> Host
+    Host["easysearch --daemon (host)\ntray + engine + control socket"] -- "spawns; JSON frames\nstdin/stdout" --> Win["easysearch --window\nnative GUI child"]
+    Host -- "control socket\n(\$XDG_RUNTIME_DIR)" --> Other["easysearch-cli\nhotkeys, scripts"]
+    Host --> DB[("SQLite index\n~/.cache/easysearch/db")]
+    Host <-- "notify / inotify" --> FS[["filesystem"]]
+    Host -- "grep-searcher (live)" --> FS
 ```
 
 | Crate | Role |
 | --- | --- |
 | `easysearch-core` | all logic: walker, watcher, matcher, content search, SQLite/mmap index, change overlay, roots/exclusions, tags, trash, config, protocol types |
-| `easysearch-daemon` | the engine **server** library (`serve`, `Op` dispatch) — no separate daemon runs in normal use |
+| `easysearch-daemon` | the engine **server** library (`serve`/`serve_reader`, `Op` dispatch); the `easysearch-daemon` binary is the standalone engine for tests and headless use |
 | `easysearch-gui` | the eframe/egui frontend (also a standalone dev binary) |
-| `easysearch-app` + `app/` | the single `easysearch` binary: `run_gui`, `run_engine`, `control_command` |
+| `easysearch-app` + `app/` | the single `easysearch` binary: `run_app` (launcher), `run_daemon` (host), `run_window` (GUI child), `run_engine`, `control_command` |
 | `easysearch-cli` | the headless CLI |
 
-**Why a child process for the engine?** It keeps a slow content search off the UI
-thread, lets the index survive the window closing, and gives one owner of the
-database — with no listening socket to secure. The GUI can also run the engine
-in-process (`Backend::Local`) for the standalone dev binary and the CLI.
+**Why a host process?** A window cannot be unmapped on Wayland and `winit`
+refuses to recreate its event loop, so a window that is *closed* could not be
+reopened inside one process. Putting the tray and the index in a host that
+outlives any window is what makes "close the window" mean the window process
+really exits — the window is gone, not parked — while indexing continues and the
+index stays warm. The GUI can also run the engine in-process (`Backend::Local`)
+for the standalone dev binary and the CLI.
 
 **Control channel.** A Unix domain socket at `$XDG_RUNTIME_DIR/easysearch.sock`
 carries `toggle`/`show`/`hide`/`search`/`quit`, which is how `easysearch --toggle`
@@ -177,23 +183,29 @@ every entry point caps `MALLOC_ARENA_MAX=2` before starting a thread.
 
 ## 7. Engine protocol
 
-The app spawns `easysearch --engine` (the same binary) and keeps its stdin/stdout;
-JSON frames cross those pipes — no socket, no port, no HTTP. The engine's stderr
-goes to `~/.cache/easysearch/engine.log` (stdout is protocol-only). Its lifetime
-is its parent's: closing the window only hides it, quitting stops the engine.
+The **window** speaks the protocol to the **host** over the window's own
+stdin/stdout; the host answers from the engine it owns (`serve_reader`), so a
+search runs in the host and closing a window never interrupts it — no socket, no
+port, no HTTP. The host's stderr goes to `~/.cache/easysearch/engine.log`
+(stdout is protocol-only). `easysearch --engine` runs the same server directly on
+its own stdin/stdout for tests, scripts and headless use.
 
 One JSON object per line, in both directions (a JSON string escapes its own
 newlines, so a frame is exactly one line):
 
 ```text
-→ {"id":1,"op":"search","payload":{…Query…}}
-← {"id":1,"data":{…SearchResponse…}}
-← {"id":2,"error":"bad regex: …"}
+→ {"id":1,"op":"search","payload":{…Query…}}      window → host (request)
+← {"id":1,"data":{…SearchResponse…}}               host → window (reply)
+← {"id":2,"error":"bad regex: …"}                  host → window (reply)
+← {"event":"hide"}                                 host → window (no id)
+← {"event":"search","query":"TODO"}                host → window (no id)
 ```
 
 A reply carries **either** `data` **or** `error` and repeats the request's `id`.
-Requests are multiplexed by id and answered on the engine's own threads, so a slow
-content search never blocks the status poller.
+A frame that carries an `event` and **no** `id` is a host→window command
+(`show` / `hide` / `quit` / `search`) — how the tray and the control socket drive
+a window. Requests are multiplexed by id and answered on the engine's own
+threads, so a slow content search never blocks the status poller.
 
 | `op` | `payload` | `data` |
 | --- | --- | --- |
