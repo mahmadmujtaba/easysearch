@@ -105,7 +105,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 
 | Reference element | Status |
 | --- | --- |
-| `Duplicate Finder` toolbar button | Not built (would be a whole feature) |
+| `Duplicate Finder` toolbar button | **Built in v0.14.0** — right-click a selection ▸ *Find duplicates in results* (also *in selection*) |
 | `Fuzzy` toolbar button | **Built in v0.17.0** — fzf-style subsequence matching, with a matching Relevance score |
 | `Tags` tab, tag chips, bulk `Tag` action | Not built (needs a tag store) |
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
@@ -161,7 +161,7 @@ deliverable; these are gated on request:
 
 **Phase 2 — polish**
 - ~~Bundled docx extractor (drop the `docx2txt` dependency)~~ — **done in v0.18.0** (in-process `zip` + `quick-xml` OOXML reader)
-- Global hotkey
+- ~~Global hotkey~~ — **done in v0.19.0** (control socket: `everything-linux --toggle/--show/--hide/--search/--quit`, bound as a desktop custom shortcut)
 - ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, `?fuzzy=1`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
 - ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)
 

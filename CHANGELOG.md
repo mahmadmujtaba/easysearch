@@ -4,6 +4,32 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-09-26
+
+### Added
+
+- **A global hotkey (Phase 2), in the only way that works on Wayland.** Wayland
+  has no global-hotkey API and every desktop invents its own, so instead of a
+  privileged hook the running window listens on
+  `$XDG_RUNTIME_DIR/everything-linux.sock` (mode `0600`) and a second invocation
+  drives it:
+
+  ```sh
+  everything-linux --toggle        # show if hidden, hide if visible
+  everything-linux --show          # bring to the front
+  everything-linux --hide
+  everything-linux --search TODO   # open and search
+  everything-linux --quit          # exit (the index daemon keeps running)
+  ```
+
+  Bind one as a **custom shortcut** in the desktop's own settings (KDE, GNOME,
+  Sway/i3/Hyprland — see `docs/ui.md`). The first `--toggle` with nothing running
+  *starts* the app, so one key launches it and then hides/shows it. Starting the
+  app is the only fall-through: the other commands are a quiet no-op when nothing
+  is running. A second GUI never steals the socket, and a stale file left by a
+  crash is cleaned up.
+- `--help` documents the control commands.
+
 ## [0.18.0] - 2026-09-26
 
 ### Changed

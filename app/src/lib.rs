@@ -12,6 +12,7 @@
 
 use everything_core::api::{API_VERSION, DEFAULT_ADDR, Health};
 use everything_core::{Backend, Config, Engine, remote};
+use everything_gui::ipc as gui_ipc;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -223,3 +224,61 @@ pub fn run_gui(addr: &str) -> Result<(), String> {
 
 /// Default daemon address (re-exported for the binary's help text).
 pub const DEFAULT: &str = DEFAULT_ADDR;
+
+/// Handle the control commands that talk to a *running* GUI.
+///
+/// Returns `Some(exit_code)` when the command was handled, or `None` when a
+/// `--toggle` found nothing listening — in that case the caller should start the
+/// GUI, so one shortcut both launches the app and toggles its window.
+///
+/// This is how a global hotkey is bound on Wayland (which has no global-hotkey
+/// API): the desktop runs `everything-linux --toggle` and it reaches the
+/// instance that is already up. See `docs/ui.md`.
+pub fn control_command(args: &[String]) -> Option<i32> {
+    let mut command: Option<gui_ipc::Command> = None;
+    let mut toggle = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        match arg {
+            "--toggle" => {
+                toggle = true;
+                command = Some(gui_ipc::Command::Toggle);
+            }
+            "--show" => command = Some(gui_ipc::Command::Show),
+            "--hide" => command = Some(gui_ipc::Command::Hide),
+            "--quit" => command = Some(gui_ipc::Command::Quit),
+            "--search" => {
+                let query = args.get(i + 1).cloned().unwrap_or_default();
+                command = Some(gui_ipc::Command::Search(query));
+                i += 1;
+            }
+            _ if arg.starts_with("--search=") => {
+                command = Some(gui_ipc::Command::Search(
+                    arg["--search=".len()..].to_string(),
+                ));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let command = command?;
+    match gui_ipc::send(&command) {
+        Ok(true) => Some(0),
+        // Nothing is listening: launcher semantics for `--toggle`, otherwise a
+        // quiet no-op (there is nothing to control).
+        Ok(false) if toggle => None,
+        Ok(false) => {
+            eprintln!(
+                "everything-linux: nothing is running to {}. (Start the app first.)",
+                command.encode()
+            );
+            Some(0)
+        }
+        Err(e) => {
+            eprintln!("everything-linux: cannot reach the running instance: {e}");
+            Some(1)
+        }
+    }
+}

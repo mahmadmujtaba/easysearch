@@ -215,6 +215,33 @@ its keyboard focus, so `↑`/`↓`/`PgUp`/`PgDn`/`Enter` act on the results; the
 first printable key you type then re-grabs the field and starts a new query, so
 you never have to click back into it.
 
+## Global hotkey
+
+Wayland deliberately has no global-hotkey API and every desktop invents its own,
+so the app ships a portable mechanism instead of a privileged one: the running
+window listens on a small socket and the command line drives it.
+
+```sh
+everything-linux --toggle        # show the window if hidden, hide it if visible
+everything-linux --show          # bring it to the front
+everything-linux --hide
+everything-linux --search TODO   # open it and run a search
+everything-linux --quit          # ask it to exit (the index daemon keeps running)
+```
+
+Bind one of those as a **custom shortcut** in your desktop:
+
+- **KDE Plasma:** System Settings ▸ Shortcuts ▸ Custom ▸ *Edit* ▸ *New* ▸
+  *Global Shortcut* ▸ *Command or Script* — `everything-linux --toggle`.
+- **GNOME:** Settings ▸ Keyboard ▸ Custom Shortcuts ▸ `+` —
+  `everything-linux --toggle`.
+- **Sway / i3 / Hyprland:** `bindsym $mod+space exec everything-linux --toggle`.
+
+The first `--toggle` with nothing running **starts** the app, so one key launches
+it and then hides/shows it. The socket lives at
+`$XDG_RUNTIME_DIR/everything-linux.sock` with mode `0600`, so only your own user
+can reach it.
+
 ## Theming and fonts
 
 The app follows your desktop's light/dark setting **live** — switching the scheme

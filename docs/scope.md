@@ -397,9 +397,9 @@ everything-for-linux/
 ├── Cargo.toml                 ← workspace
 ├── core/                      ← library: walker, watcher, matcher, content,
 │   └── src/                     content_index, disk_index (mmap), sqlite_index,
-│                                engine, backend, remote, config, api
+│                                engine, backend, remote, update, config, api
 ├── app/                       ← the single binary users run (GUI + daemon mode)
-├── gui/                       ← eframe/egui frontend (+ the system tray)
+├── gui/                       ← eframe/egui frontend (+ the system tray, control socket)
 ├── cli/                       ← clap frontend
 ├── daemon/                    ← tiny_http frontend: owns the index
 └── vendor/                    ← the arrayref shim (see Cargo.toml)
@@ -410,7 +410,7 @@ everything-for-linux/
 | Phase | Status |
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
-| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), substring/fuzzy ranking (v0.17.0), **bundled docx extractor (v0.18.0)**. **Outstanding**: global hotkey |
+| **2 — Polish** | **Done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), fuzzy ranking (v0.17.0), bundled docx extractor (v0.18.0), global hotkey via the control socket (v0.19.0) |
 | **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |

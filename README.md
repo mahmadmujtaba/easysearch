@@ -99,6 +99,10 @@ make run                          # or: ./target/release/everything-linux
 ./target/release/everything status                      # index state, counts
 ./target/release/everything self-update --check         # is a newer release out?
 ./target/release/everything self-update                 # install it in place
+
+# Control a running window (bind these to desktop shortcuts — no privileged API)
+./target/release/everything-linux --toggle              # show the window / hide it
+./target/release/everything-linux --search TODO         # open and search
 ```
 
 The GUI follows the “FileSearch Pro” reference layout (see

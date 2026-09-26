@@ -25,6 +25,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod ipc;
 mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
@@ -1018,6 +1019,8 @@ struct App {
     ignore_text: String,
     /// Transient status line shown inside the ignore window.
     ignore_msg: Option<String>,
+    /// Commands from the control socket (`--toggle`, `--search …`).
+    ipc_rx: mpsc::Receiver<ipc::Command>,
     /// Row context-menu actions, applied after the panels are drawn.
     pending_cmds: Vec<RowCmd>,
     /// Fingerprint of the desktop theme files, to follow system theme changes.
@@ -1055,6 +1058,10 @@ impl App {
             .expect("failed to spawn search thread");
 
         let prefs = GuiPrefs::load();
+        // Control socket: lets `everything-linux --toggle` drive this window
+        // (the portable way to bind a global hotkey — see gui/src/ipc.rs).
+        let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Command>();
+        ipc::spawn_listener(ipc_tx);
         let dark = match prefs.dark {
             Some(d) => d,
             None => detect_system_dark(),
@@ -1232,6 +1239,7 @@ impl App {
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
+            ipc_rx,
             pending_cmds: Vec::new(),
             theme_fp: theme_fingerprint(),
             theme_at: Instant::now(),
@@ -1661,6 +1669,12 @@ impl App {
 
 fn search_id() -> egui::Id {
     egui::Id::new("search_input")
+}
+
+/// Bring the window to the front (show it and give it focus).
+fn show_window(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 }
 
 /// Icons painted by hand (no icon font, no emoji) so they look identical in
@@ -3023,6 +3037,44 @@ impl eframe::App for App {
 
         ctx.request_repaint_after(Duration::from_millis(250));
 
+        // Control-socket commands (a global hotkey bound to `--toggle`, etc.).
+        let mut ipc_msgs = Vec::new();
+        while let Ok(cmd) = self.ipc_rx.try_recv() {
+            ipc_msgs.push(cmd);
+        }
+        for cmd in ipc_msgs {
+            match cmd {
+                ipc::Command::Toggle => {
+                    if self.window_visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.window_visible = false;
+                    } else {
+                        show_window(ctx);
+                        self.window_visible = true;
+                    }
+                }
+                ipc::Command::Show => {
+                    show_window(ctx);
+                    self.window_visible = true;
+                }
+                ipc::Command::Hide => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    self.window_visible = false;
+                }
+                ipc::Command::Search(query) => {
+                    show_window(ctx);
+                    self.window_visible = true;
+                    self.run_query(&query);
+                    self.send_query();
+                    ctx.memory_mut(|m| m.request_focus(search_id()));
+                }
+                ipc::Command::Quit => {
+                    self.tray_quit = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
         // Tray messages: toggle/open the window, run a search, or quit.
         let mut tray_msgs = Vec::new();
         if let Some(rx) = &self.tray_rx {
@@ -3033,8 +3085,7 @@ impl eframe::App for App {
         for msg in tray_msgs {
             match msg {
                 tray::TrayMsg::Open => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    show_window(ctx);
                     self.window_visible = true;
                 }
                 tray::TrayMsg::Toggle => {
@@ -3042,8 +3093,7 @@ impl eframe::App for App {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         self.window_visible = false;
                     } else {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        show_window(ctx);
                         self.window_visible = true;
                     }
                 }

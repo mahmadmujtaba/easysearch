@@ -24,6 +24,15 @@ OPTIONS:
     --quiet              daemon: don't log when the index becomes live
     -h, --help           show this help
     -V, --version        show the version
+
+CONTROL (talk to a running window — bind these to desktop shortcuts):
+    --toggle             show the window if hidden, hide it if visible
+    --show / --hide      show / hide the window
+    --search <QUERY>     show the window and run a search
+    --quit               ask the running app to exit
+
+The first --toggle with nothing running starts the app, so one key can both
+launch it and toggle the window.
 ";
 
 fn main() -> ExitCode {
@@ -36,6 +45,12 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("everything-linux {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
+    }
+
+    // Control commands drive an already-running window (global-hotkey support);
+    // `--toggle` falls through to a normal start when nothing is listening.
+    if let Some(code) = everything_app::control_command(&args) {
+        return ExitCode::from(code as u8);
     }
 
     let addr = everything_app::addr_from_args(&args)
