@@ -113,6 +113,8 @@ enum Command {
 }
 
 fn main() {
+    // Before clap or the in-process engine can start a thread.
+    easysearch_core::process::cap_malloc_arenas();
     let cli = Cli::parse();
     // Local (default) or a running daemon.
     let backend = match &cli.remote {

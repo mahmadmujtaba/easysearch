@@ -110,8 +110,19 @@ pub struct Config {
     pub content_index_enabled: bool,
     /// Skip content extraction for files larger than this (bytes).
     pub content_index_max_file_bytes: u64,
-    /// Total in-RAM content cache cap (bytes). LRU eviction beyond this.
+    /// Total content cache cap (bytes). LRU eviction beyond this. In the default
+    /// disk store this bounds the spool directory; with `--content-in-memory` it
+    /// bounds resident memory.
     pub content_index_total_cap_bytes: u64,
+    /// Keep cached document text **in RAM** instead of spooling it to disk.
+    ///
+    /// Off by default: with the disk store a content search reads each document
+    /// back, uses it and drops it, so the documents searched do not stay
+    /// resident. Turning this on trades up to `content_index_total_cap_bytes` of
+    /// memory for another pass not having to touch the disk. Set it at boot with
+    /// `--content-in-memory`, or `EASYSEARCH_CONTENT_MEMORY=1` — which is how a
+    /// launcher flag reaches the daemon the app spawns.
+    pub content_index_in_memory: bool,
     /// Period of the degraded-mode rescan (seconds), used when kernel watch
     /// limits are exhausted.
     pub degraded_rescan_secs: u64,
@@ -136,6 +147,7 @@ impl Default for Config {
             content_index_enabled: false,
             content_index_max_file_bytes: 8 * 1024 * 1024,
             content_index_total_cap_bytes: 256 * 1024 * 1024,
+            content_index_in_memory: false,
             degraded_rescan_secs: 30,
             max_results: 1000,
         }
@@ -181,19 +193,35 @@ impl Config {
         }
     }
 
+    /// Directory the content cache spools to when it is not holding text in RAM.
+    ///
+    /// Beside the index and the database, so a caller that redirects
+    /// `disk_index_dir` (tests, portable installs) redirects it too.
+    pub fn content_spool_dir(&self) -> PathBuf {
+        self.disk_index_dir().join("content")
+    }
+
     /// Load config from the default path; returns defaults if absent or invalid.
     pub fn load() -> Config {
         Self::load_from(&Self::default_path())
     }
 
     pub fn load_from(path: &std::path::Path) -> Config {
-        match std::fs::read_to_string(path) {
+        let mut config = match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
                 eprintln!("config: ignoring invalid {}: {e}", path.display());
                 Config::default()
             }),
             Err(_) => Config::default(),
+        };
+        // Boot-time override: the launcher passes the flag through the
+        // environment so it reaches the daemon the app spawns.
+        if let Some(on) =
+            content_memory_from_env(std::env::var("EASYSEARCH_CONTENT_MEMORY").ok().as_deref())
+        {
+            config.content_index_in_memory = on;
         }
+        config
     }
 
     /// Effective exclusion list: defaults + user extras.
@@ -226,5 +254,54 @@ impl Config {
         roots.sort();
         roots.dedup();
         roots
+    }
+}
+
+/// Parse the `EASYSEARCH_CONTENT_MEMORY` boot override.
+///
+/// `Some(true)`/`Some(false)` for a recognised value, `None` when the variable
+/// is unset or meaningless — in which case the config file decides.
+fn content_memory_from_env(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_content_memory_boot_flag_is_parsed_leniently() {
+        for on in ["1", "true", "TRUE", " yes ", "on"] {
+            assert_eq!(content_memory_from_env(Some(on)), Some(true), "{on}");
+        }
+        for off in ["0", "false", "No", "off"] {
+            assert_eq!(content_memory_from_env(Some(off)), Some(false), "{off}");
+        }
+        assert_eq!(content_memory_from_env(None), None);
+        assert_eq!(content_memory_from_env(Some("maybe")), None);
+    }
+
+    #[test]
+    fn the_content_spool_sits_beside_the_index() {
+        let config = Config {
+            disk_index_dir: Some("/tmp/idx".into()),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.content_spool_dir(),
+            PathBuf::from("/tmp/idx/content")
+        );
+        assert!(Config::default().content_spool_dir().ends_with("content"));
+    }
+
+    #[test]
+    fn the_content_cache_is_off_and_disk_backed_by_default() {
+        let config = Config::default();
+        assert!(!config.content_index_enabled, "off at boot");
+        assert!(!config.content_index_in_memory, "disk store by default");
     }
 }

@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.15.0** (2026-09-26), in rough priority order. Everything
+Outstanding items at **v0.32.0** (2026-09-26), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -154,6 +154,16 @@ that each map the same index, so the *same* page-cache pages and the same
 initialisation cost are paid twice. The alternative — the GUI as a thin client
 over the HTTP API, with a single owner of the index — would remove one process
 and its copy of the index from the resident set.
+
+**Resolved in v0.32.0 — the 1.4 GB `easysearch` process.** An installed build was
+seen holding ~1.44 GB resident (100 % anonymous heap, vs 66 MB of database on
+disk). The bulk was the optional content cache keeping every searched document's
+text in a RAM map, plus glibc malloc arenas: `smaps` showed **22 mappings of
+exactly 64 MiB** — arenas that glibc never unmaps. Both levers were moved: the
+content cache is now disk-spooled and **off at boot** (see
+[`config.md`](config.md) and [`scope.md` §9](scope.md#9-resource-footprint-budget-non-negotiable-targets)),
+and every entry point caps `MALLOC_ARENA_MAX=2` before any thread starts. Idle CPU
+was measured at 0 %, so CPU was never part of this.
 
 ---
 

@@ -261,10 +261,16 @@ Bind one of those as a **custom shortcut** in your desktop:
   `easysearch --toggle`.
 - **Sway / i3 / Hyprland:** `bindsym $mod+space exec easysearch --toggle`.
 
-The first `--toggle` with nothing running **starts** the app, so one key launches
-it and then hides/shows it. The socket lives at
+The first `--toggle`, `--show` or `--search` with nothing running **starts** the
+app, so one key launches it and then drives it — a fresh `--search QUERY` runs
+that query as soon as the window opens. `--hide` and `--quit` need a running
+instance and quietly do nothing otherwise. The socket lives at
 `$XDG_RUNTIME_DIR/easysearch.sock` with mode `0600`, so only your own user
 can reach it.
+
+Hiding (`--hide`, or the tray's *Toggle*) is not the same as quitting: the window
+governs only itself, so the daemon and its index keep serving the CLI and the HTTP
+API either way.
 
 ## Theming and fonts
 
@@ -279,10 +285,17 @@ system font lacks. You can override the theme in Settings, or pin it with
 
 - A **0-byte file** shows “No text preview for this file” rather than an empty
   document.
-- The **content index** (the optional in-RAM text cache) has no UI switch yet;
-  set `content_index_enabled` in `config.json` and restart. See
-  [`config.md`](config.md).
+- The **content index** (the optional document-text cache) has no UI switch yet;
+  set `content_index_enabled` in `config.json` and restart. It is **off at boot**
+  and, by default, **spooled to disk** rather than held in RAM, so it does not
+  grow the resident set; use `--content-in-memory` for the old RAM-backed mode.
+  See [`config.md`](config.md).
 - The **Fuzzy** and **Duplicate Finder** buttons from the reference design are
   deliberately absent rather than present-but-dead; so are Tags and Rename/Delete.
   [`pending.md`](pending.md) §4 lists them.
 - The tray icon offers Open, the recent-searches list, and Quit.
+- **Closing the window keeps EasySearch running** in the tray by default, so a
+  search stays warm and the app reopens instantly. Exit from the tray's *Quit*,
+  File ▸ Quit, or `easysearch --quit`. Settings has *Quit when the window is
+  closed* if you would rather the X button exit; with no tray available the window
+  is closed for real, since there would be no way back.

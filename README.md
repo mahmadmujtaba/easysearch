@@ -10,8 +10,8 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
   filesystem events (`inotify`); a file created / renamed / edited / deleted is
   reflected in the next query within ~1 s.
 - **Content search**: the embedded **ripgrep engine** reads files live, so
-  content results are always current. An optional bounded in-RAM content cache
-  accelerates repeated queries (default off).
+  content results are always current. An optional bounded content cache
+  accelerates repeated queries (default off; spooled to disk, not held in RAM).
 - **Everything-style queries**: `*.pdf`, `invoice 2026`, `!draft`, regex mode,
   case toggle, hidden files, basename or full-path matching.
 - **Self-updating**: check a signed HTTPS manifest and replace the binaries in
@@ -180,6 +180,7 @@ Query semantics (Everything-style):
   "content_index_enabled": false,
   "content_index_max_file_bytes": 8388608,
   "content_index_total_cap_bytes": 268435456,
+  "content_index_in_memory": false,
   "degraded_rescan_secs": 30,
   "max_results": 1000
 }
@@ -199,7 +200,12 @@ Query semantics (Everything-style):
   background compaction (mmap backend).
 - **content_index_enabled**: `true` enables the background content cache
   (bounded, LRU; keeps repeated content searches fast). It can also be toggled
-  while running, in **Settings ▸ Indexing**, or over `POST /v1/config`.
+  while running, in **Settings ▸ Indexing**, or over `POST /v1/config`. It is
+  **off at boot** and, by default, **spooled to disk** (`<disk_index_dir>/content/`)
+  rather than held in RAM, so it does not grow the resident set.
+- **content_index_in_memory**: `true` keeps that cache in RAM instead of on
+  disk (up to `content_index_total_cap_bytes`). Start with
+  `easysearch --content-in-memory` to set it for one run.
 - A global ignore file at `~/.config/easysearch/ignore` adds extra
   exclusions.
 
@@ -268,6 +274,12 @@ The index is a **SQLite database** in `~/.cache/easysearch/db/`
 - `storage = "mmap"` in the config switches back to the original memory-mapped
   file (`index-v1.bin`, zero-copy scan) and `persist_index = false` keeps nothing
   on disk at all. Details and the trade-offs: [`sqlite.md`](docs/sqlite.md).
+- The optional **content cache** is off at boot and, when on, **spools document
+  text to disk** (`~/.cache/easysearch/content/`, read back per lookup) instead
+  of holding it in RAM — so searching content does not leave what it read
+  resident. `--content-in-memory` opts back into the RAM map. Measured: with
+  ≈ 112 MB of text cached, the daemon sat at ≈ 11–15 MiB resident on disk vs
+  ≈ 122 MiB in RAM.
 
 Measured on a real `$HOME`: ≈ 15 MiB idle for the headless engine (mmap mode, ≈137k
 files); on 100 479 entries the SQLite daemon sits at ≈ 51 MiB and the GUI at ≈ 92 MiB,

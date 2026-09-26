@@ -35,6 +35,7 @@ app manages itself.
   "content_index_enabled": false,
   "content_index_max_file_bytes": 8388608,
   "content_index_total_cap_bytes": 268435456,
+  "content_index_in_memory": false,
   "degraded_rescan_secs": 30,
   "max_results": 1000
 }
@@ -64,14 +65,15 @@ app manages itself.
 ## Content search
 
 Content search reads files **live** through the embedded ripgrep engine, so
-results are always current. Separately, an optional in-RAM cache can speed up
-repeated queries:
+results are always current. Separately, an optional cache can speed up repeated
+queries:
 
 | Key | Default | Effect |
 |---|---|---|
-| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) kept in RAM (LRU, ≤ `content_index_total_cap_bytes`) to speed up repeated content searches. **Live-toggleable** — **Settings ▸ Indexing ▸ Background content index**, or `POST /v1/config` — and switching it off frees the cache, so it costs nothing while off. |
+| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) is cached so repeated content searches do not re-extract it. **Off at boot** and **live-toggleable** — **Settings ▸ Indexing ▸ Background content index**, or `POST /v1/config` — and switching it off frees the cache, so it costs nothing while off. |
 | `content_index_max_file_bytes` | `8388608` (8 MB) | Files larger than this are not cached (they are still searched live). |
-| `content_index_total_cap_bytes` | `268435456` (256 MB) | Total size of the in-RAM cache; LRU-evicted beyond this. |
+| `content_index_total_cap_bytes` | `268435456` (256 MB) | Total size of the cache; LRU-evicted beyond this. With the default disk store this bounds the spool directory; with `content_index_in_memory` it bounds resident memory. |
+| `content_index_in_memory` | `false` | **Where** the cache lives: `false` spools text to `<disk_index_dir>/content/` and reads it back per lookup, so documents do not stay resident; `true` keeps it in RAM. Set at boot with `--content-in-memory` or `EASYSEARCH_CONTENT_MEMORY=1` (the launcher flag reaches the daemon the app spawns through the environment). |
 
 ## Behaviour and limits
 

@@ -180,11 +180,14 @@ mod tests {
         let path = dir.join("note.txt");
         std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
         let paths = vec![path.clone()];
-        // A disabled cache keeps the test on the live-read path.
+        // A disabled cache keeps the test on the live-read path (and the RAM
+        // store needs no spool directory).
         let cache = ContentIndex::new(
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             1024 * 1024,
             1024 * 1024,
+            crate::content_index::ContentStore::Memory,
+            std::path::PathBuf::new(),
         );
 
         // Line by line (the default): a pattern containing a newline never

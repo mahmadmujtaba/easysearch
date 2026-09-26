@@ -48,6 +48,20 @@ fn addr_flag_is_parsed() {
 }
 
 #[test]
+fn search_flag_is_parsed() {
+    let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        easysearch_app::search_from_args(&args(&["--search", "report 2024"])),
+        Some("report 2024".to_string())
+    );
+    assert_eq!(
+        easysearch_app::search_from_args(&args(&["--search=*.rs"])),
+        Some("*.rs".to_string())
+    );
+    assert_eq!(easysearch_app::search_from_args(&args(&["--toggle"])), None);
+}
+
+#[test]
 fn single_binary_starts_a_daemon_and_serves_search() {
     let dir = TestDir::new("daemon");
     let root = dir.0.join("root");

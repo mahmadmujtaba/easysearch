@@ -22,6 +22,9 @@ OPTIONS:
     --addr <HOST:PORT>   daemon address (default 127.0.0.1:5858)
     --daemon             run only the search daemon, no GUI
     --quiet              daemon: don't log when the index becomes live
+    --content-in-memory  keep the content cache in RAM instead of spooling it to
+                         disk; faster for repeated content searches, but it holds
+                         up to the configured cap (256 MB) resident
     -h, --help           show this help
     -V, --version        show the version
 
@@ -37,6 +40,14 @@ launch it and toggle the window.
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Before anything can start a thread: bound glibc's malloc arenas, and take
+    // the content-cache mode from the command line so the daemon spawned below
+    // inherits it through the environment.
+    easysearch_core::process::cap_malloc_arenas();
+    if args.iter().any(|a| a == "--content-in-memory") {
+        easysearch_core::process::use_content_memory();
+    }
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{HELP}");

@@ -8,7 +8,7 @@
 
 use crate::config::{Config, Storage};
 use crate::content::{ContentPattern, search_contents};
-use crate::content_index::{ContentIndex, ExtractQueue, spawn_extractor};
+use crate::content_index::{ContentIndex, ContentStore, ExtractQueue, spawn_extractor};
 use crate::disk_index::{DiskIndex, INDEX_FILE};
 use crate::matcher::{CompiledQuery, Query, is_hidden, matches_category};
 use crate::overlay::{Meta, Overlay};
@@ -128,6 +128,19 @@ pub struct Engine {
     follow_symlinks: Arc<AtomicBool>,
 }
 
+/// Where the optional content cache keeps the text it extracts.
+///
+/// Disk by default: a content search then reads a document back, uses it and
+/// drops it, so searching contents does not leave the documents it read sitting
+/// in memory. `--content-in-memory` asks for the RAM store instead.
+fn content_store(config: &Config) -> ContentStore {
+    if config.content_index_in_memory {
+        ContentStore::Memory
+    } else {
+        ContentStore::Disk
+    }
+}
+
 impl Engine {
     pub fn new(config: Config) -> Engine {
         let roots = Arc::new(RootSet::discover(&config));
@@ -150,12 +163,15 @@ impl Engine {
             Arc::clone(&content_enabled),
             config.content_index_max_file_bytes,
             config.content_index_total_cap_bytes,
+            content_store(&config),
+            config.content_spool_dir(),
         ));
         let pending = Arc::new(AtomicUsize::new(0));
         // Created regardless of the switch (which can be flipped live, see
         // `set_content_index`): while it is off nothing is queued and the
         // extractor thread stays parked, so an idle cache still costs nothing.
-        let (extract_queue, extract_rx) = ExtractQueue::new(Arc::clone(&content_enabled));
+        let (extract_queue, extract_rx) =
+            ExtractQueue::new(Arc::clone(&content_enabled), Arc::clone(&pending));
         spawn_extractor(Arc::clone(&cache), extract_rx, Arc::clone(&pending));
         let queue = Some(Arc::new(extract_queue));
 

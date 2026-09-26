@@ -1,9 +1,12 @@
 //! Optional background content index (default off).
 //!
 //! When enabled, a worker thread extracts text from newly indexed / changed
-//! files and caches it in RAM (bounded, insertion-order LRU). Content queries
-//! use the cache when available and fall back to live reads otherwise, so
-//! freshness is never compromised — the cache only accelerates.
+//! files and caches it. The default store spools that text to disk (one file per
+//! document) and reads it back per lookup, so the documents searched do not stay
+//! resident; `ContentStore::Memory` (`--content-in-memory`) keeps the older
+//! bounded in-RAM map. Content queries use the cache when available and fall back
+//! to live reads otherwise, so freshness is never compromised — the cache only
+//! accelerates.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
@@ -27,23 +30,29 @@ pub fn needs_extraction(path: &Path) -> bool {
 /// Queue of paths awaiting background text extraction.
 ///
 /// `pending` mirrors the channel length so the UI can show progress without
-/// touching the receiver (which lives on the extraction thread). Sends are
+/// touching the receiver (which lives on the extraction thread). It is an `Arc`
+/// **shared with the extraction thread** so the count that goes up here is the
+/// count that comes down there; a private counter on either side would drift
+/// (and, being unsigned, underflow into a nonsensical progress line). Sends are
 /// dropped while the content index is switched off, so nothing is extracted and
 /// the worker thread stays parked.
 pub struct ExtractQueue {
     tx: mpsc::Sender<PathBuf>,
-    pub pending: AtomicUsize,
+    pub pending: Arc<AtomicUsize>,
     /// Shared with the [`ContentIndex`] so one switch controls both.
     enabled: Arc<AtomicBool>,
 }
 
 impl ExtractQueue {
-    pub fn new(enabled: Arc<AtomicBool>) -> (ExtractQueue, Receiver<PathBuf>) {
+    pub fn new(
+        enabled: Arc<AtomicBool>,
+        pending: Arc<AtomicUsize>,
+    ) -> (ExtractQueue, Receiver<PathBuf>) {
         let (tx, rx) = mpsc::channel();
         (
             ExtractQueue {
                 tx,
-                pending: AtomicUsize::new(0),
+                pending,
                 enabled,
             },
             rx,
@@ -64,22 +73,138 @@ pub struct ContentIndex {
     enabled: Arc<AtomicBool>,
     pub max_file_bytes: u64,
     total_cap: u64,
-    cache: RwLock<HashMap<PathBuf, String>>,
+    /// Where the cached text is kept.
+    store: ContentStore,
+    /// Directory holding the spool files (disk mode only).
+    spool_dir: PathBuf,
+    cache: RwLock<HashMap<PathBuf, Payload>>,
     /// Insertion order for LRU-ish eviction.
     order: Mutex<VecDeque<PathBuf>>,
     total_bytes: AtomicU64,
 }
 
+/// Where cached document text is kept.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ContentStore {
+    /// Spooled to `spool_dir`, one file per document. RAM holds the
+    /// bookkeeping plus the text of the document being searched and nothing
+    /// else, so a content search does not leave the documents it read sitting
+    /// in memory. This is the default.
+    Disk,
+    /// Held in RAM, up to `total_cap` bytes. Faster for repeated searches of
+    /// the same documents, but that much resident memory until it is switched
+    /// off. Opt in with `--content-in-memory`.
+    Memory,
+}
+
+/// One cached document.
+enum Payload {
+    /// RAM mode: the text itself.
+    Text(String),
+    /// Disk mode: the spool file, and the size of the text inside it.
+    File { path: PathBuf, len: u64 },
+}
+
+impl Payload {
+    fn len(&self) -> u64 {
+        match self {
+            Payload::Text(text) => text.len() as u64,
+            Payload::File { len, .. } => *len,
+        }
+    }
+}
+
+/// True when the old and new payload are backed by the same storage, which
+/// happens when the same document is cached again: its spool file name is
+/// derived from the path, so the new write overwrote the old file.
+fn same_backing(old: &Payload, new: Option<&Payload>) -> bool {
+    match (old, new) {
+        (Payload::File { path: a, .. }, Some(Payload::File { path: b, .. })) => a == b,
+        // RAM payloads own their text outright; there is nothing to delete.
+        (Payload::Text(_), _) => true,
+        _ => false,
+    }
+}
+
+/// Delete whatever backs an evicted or replaced entry.
+fn discard(payload: Payload) {
+    if let Payload::File { path, .. } = payload {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Stable file name for a document's spool file.
+///
+/// FNV-1a over the path bytes: stable across runs (so the spool survives a
+/// restart) and cheap. Collisions are handled on read — see [`read_spool`].
+fn spool_name(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.as_os_str().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}.txt")
+}
+
+/// Write a spool file: the path length, a newline, the path, then the text.
+///
+/// The path is stored so that a hash collision cannot serve one document's text
+/// for another, and paths may legally contain newlines, hence the length.
+fn write_spool(file: &Path, path: &Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = path.as_os_str().as_bytes();
+    let mut buf = Vec::with_capacity(raw.len() + text.len() + 24);
+    buf.extend_from_slice(raw.len().to_string().as_bytes());
+    buf.push(b'\n');
+    buf.extend_from_slice(raw);
+    buf.extend_from_slice(text.as_bytes());
+    std::fs::write(file, buf)
+}
+
+/// Read back a spool file, or `None` if it is missing, truncated, or belongs to
+/// a different path (a collision).
+fn read_spool(file: &Path, path: &Path) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::fs::read(file).ok()?;
+    let newline = raw.iter().position(|b| *b == b'\n')?;
+    let len: usize = std::str::from_utf8(&raw[..newline]).ok()?.parse().ok()?;
+    let start = newline + 1;
+    let end = start.checked_add(len)?;
+    if end > raw.len() || &raw[start..end] != path.as_os_str().as_bytes() {
+        return None;
+    }
+    String::from_utf8(raw[end..].to_vec()).ok()
+}
+
 impl ContentIndex {
-    pub fn new(enabled: Arc<AtomicBool>, max_file_bytes: u64, total_cap: u64) -> ContentIndex {
+    pub fn new(
+        enabled: Arc<AtomicBool>,
+        max_file_bytes: u64,
+        total_cap: u64,
+        store: ContentStore,
+        spool_dir: PathBuf,
+    ) -> ContentIndex {
+        if store == ContentStore::Disk {
+            // Spool files from a previous run have no bookkeeping to match them
+            // (and their documents may have changed), so start clean rather
+            // than leak them for ever.
+            let _ = std::fs::remove_dir_all(&spool_dir);
+        }
         ContentIndex {
             enabled,
             max_file_bytes,
             total_cap,
+            store,
+            spool_dir,
             cache: RwLock::new(HashMap::new()),
             order: Mutex::new(VecDeque::new()),
             total_bytes: AtomicU64::new(0),
         }
+    }
+
+    pub fn store(&self) -> ContentStore {
+        self.store
     }
 
     pub fn enabled(&self) -> bool {
@@ -95,10 +220,16 @@ impl ContentIndex {
         }
     }
 
-    /// Drop every cached document and reclaim its memory.
+    /// Drop every cached document and reclaim its memory (and its spool files).
     pub fn clear(&self) {
         self.order.lock().unwrap().clear();
-        self.cache.write().unwrap().clear();
+        let dropped: Vec<Payload> = match self.cache.write() {
+            Ok(mut cache) => cache.drain().map(|(_, payload)| payload).collect(),
+            Err(_) => Vec::new(),
+        };
+        for payload in dropped {
+            discard(payload);
+        }
         self.total_bytes.store(0, Ordering::Relaxed);
     }
 
@@ -112,12 +243,29 @@ impl ContentIndex {
     }
 
     /// Run `f` over the cached text for `path`, if present.
+    ///
+    /// With the disk store the text is read back, handed to `f`, and dropped
+    /// again, so nothing stays resident once the query is over.
     pub fn get_with<R>(&self, path: &Path, f: impl FnOnce(&str) -> R) -> Option<R> {
         if !self.enabled() {
             return None;
         }
-        let g = self.cache.read().ok()?;
-        g.get(path).map(|t| f(t))
+        let file = {
+            let cache = self.cache.read().ok()?;
+            match cache.get(path)? {
+                Payload::Text(text) => return Some(f(text)),
+                Payload::File { path, .. } => path.clone(),
+            }
+        };
+        match read_spool(&file, path) {
+            Some(text) => Some(f(&text)),
+            // Missing, truncated or a hash collision: forget the entry rather
+            // than answer from the wrong document.
+            None => {
+                self.remove_exact(path);
+                None
+            }
+        }
     }
 
     pub fn insert(&self, path: PathBuf, text: String) {
@@ -125,26 +273,63 @@ impl ContentIndex {
             return;
         }
         let bytes = text.len() as u64;
+        let payload = match self.store {
+            ContentStore::Memory => Payload::Text(text),
+            ContentStore::Disk => {
+                if std::fs::create_dir_all(&self.spool_dir).is_err() {
+                    return; // no spool directory: queries stay on the live path
+                }
+                let file = self.spool_dir.join(spool_name(&path));
+                if write_spool(&file, &path, &text).is_err() {
+                    return;
+                }
+                Payload::File {
+                    path: file,
+                    len: bytes,
+                }
+            }
+        };
+
         let mut order = self.order.lock().unwrap();
         let mut cache = self.cache.write().unwrap();
         let mut total = self.total_bytes.load(Ordering::Relaxed);
-        if let Some(prev) = cache.get(&path) {
-            total = total.saturating_sub(prev.len() as u64);
-        }
-        // Evict oldest entries until the new text fits under the cap.
+        let mut doomed = Vec::new();
+        // Evict oldest entries until the new one fits under the cap.
         while !order.is_empty() && total.saturating_add(bytes) > self.total_cap {
-            let victim = match order.pop_front() {
-                Some(v) => v,
-                None => break,
+            let Some(victim) = order.pop_front() else {
+                break;
             };
-            if let Some(vt) = cache.remove(&victim) {
-                total = total.saturating_sub(vt.len() as u64);
+            if let Some(previous) = cache.remove(&victim) {
+                total = total.saturating_sub(previous.len());
+                doomed.push(previous);
             }
         }
-        cache.insert(path.clone(), text);
+        if let Some(previous) = cache.insert(path.clone(), payload) {
+            total = total.saturating_sub(previous.len());
+            if !same_backing(&previous, cache.get(&path)) {
+                doomed.push(previous);
+            }
+        }
         order.push_back(path);
         self.total_bytes
             .store(total.saturating_add(bytes), Ordering::Relaxed);
+        drop(cache);
+        drop(order);
+        for payload in doomed {
+            discard(payload);
+        }
+    }
+
+    /// Forget one path (see [`ContentIndex::remove`] for a subtree).
+    fn remove_exact(&self, path: &Path) {
+        let mut order = self.order.lock().unwrap();
+        let payload = self.cache.write().ok().and_then(|mut c| c.remove(path));
+        order.retain(|p| p != path);
+        drop(order);
+        if let Some(payload) = payload {
+            self.total_bytes.fetch_sub(payload.len(), Ordering::Relaxed);
+            discard(payload);
+        }
     }
 
     /// Remove one path (and any descendants) from the cache.
@@ -157,13 +342,20 @@ impl ContentIndex {
             .filter(|p| p.starts_with(path))
             .cloned()
             .collect();
+        let mut evicted = Vec::new();
         for d in doomed {
-            if let Some(t) = cache.remove(&d) {
-                total = total.saturating_sub(t.len() as u64);
+            if let Some(payload) = cache.remove(&d) {
+                total = total.saturating_sub(payload.len());
+                evicted.push(payload);
             }
         }
         order.retain(|p| !p.starts_with(path));
         self.total_bytes.store(total, Ordering::Relaxed);
+        drop(cache);
+        drop(order);
+        for payload in evicted {
+            discard(payload);
+        }
     }
 
     pub fn stats(&self) -> (usize, u64) {
@@ -521,44 +713,104 @@ mod tests {
 
     #[test]
     fn disabling_the_content_index_frees_the_cache() {
+        // Both stores must behave identically through the public API.
+        let scratch = Scratch::new("cache-store");
+        for store in [ContentStore::Memory, ContentStore::Disk] {
+            let enabled = Arc::new(AtomicBool::new(true));
+            let cache = ContentIndex::new(
+                Arc::clone(&enabled),
+                1024 * 1024,
+                1024 * 1024,
+                store,
+                scratch.path().join(format!("{store:?}")),
+            );
+            let a = PathBuf::from("/x/a.txt");
+
+            cache.insert(a.clone(), "hello".to_string());
+            assert!(cache.enabled(), "{store:?}");
+            assert!(cache.contains(&a), "{store:?}");
+            assert_eq!(cache.get_with(&a, |t| t.len()), Some(5), "{store:?}");
+            assert_eq!(cache.stats(), (1, 5), "{store:?}");
+
+            // Off means *empty*, not merely "stops growing": the budget promises
+            // zero bytes while it is off.
+            cache.set_enabled(false);
+            assert!(!cache.enabled(), "{store:?}");
+            assert!(!cache.contains(&a), "{store:?}");
+            assert_eq!(cache.get_with(&a, |t| t.len()), None, "{store:?}");
+            assert_eq!(cache.stats(), (0, 0), "{store:?}");
+            cache.insert(PathBuf::from("/x/b.txt"), "world".to_string());
+            assert_eq!(
+                cache.stats(),
+                (0, 0),
+                "{store:?}: inserts ignored while off"
+            );
+
+            // …and it works again once switched back on.
+            cache.set_enabled(true);
+            cache.insert(a.clone(), "again".to_string());
+            assert_eq!(cache.get_with(&a, |t| t.len()), Some(5), "{store:?}");
+        }
+    }
+
+    #[test]
+    fn the_disk_store_spools_the_text_and_cleans_up_after_itself() {
+        let scratch = Scratch::new("cache-disk");
+        let dir = scratch.path().join("content");
         let enabled = Arc::new(AtomicBool::new(true));
-        let cache = ContentIndex::new(Arc::clone(&enabled), 1024 * 1024, 1024 * 1024);
+        let cache = ContentIndex::new(
+            Arc::clone(&enabled),
+            1024 * 1024,
+            1024 * 1024,
+            ContentStore::Disk,
+            dir.clone(),
+        );
+        let spool = |dir: &Path| -> Vec<PathBuf> {
+            std::fs::read_dir(dir)
+                .map(|entries| entries.map(|e| e.unwrap().path()).collect())
+                .unwrap_or_default()
+        };
         let a = PathBuf::from("/x/a.txt");
-
         cache.insert(a.clone(), "hello".to_string());
-        assert!(cache.enabled());
-        assert!(cache.contains(&a));
-        assert_eq!(cache.get_with(&a, |t| t.len()), Some(5));
-        assert_eq!(cache.stats(), (1, 5));
 
-        // Off means *empty*, not merely "stops growing": the budget promises
-        // zero bytes while it is off.
-        cache.set_enabled(false);
-        assert!(!cache.enabled());
-        assert!(!cache.contains(&a));
+        // One file per document; RAM holds the bookkeeping and nothing else.
+        assert_eq!(spool(&dir).len(), 1);
+        assert_eq!(cache.stats(), (1, 5));
+        assert_eq!(cache.get_with(&a, |t| t.to_string()), Some("hello".into()));
+
+        // Re-caching the same document replaces its file rather than orphaning
+        // the old one.
+        cache.insert(a.clone(), "much longer text".to_string());
+        assert_eq!(spool(&dir).len(), 1);
+        assert_eq!(cache.get_with(&a, |t| t.len()), Some(16));
+
+        // A spool file deleted behind the cache's back drops the entry instead
+        // of answering from the wrong document.
+        let first = spool(&dir).remove(0);
+        std::fs::remove_file(&first).unwrap();
         assert_eq!(cache.get_with(&a, |t| t.len()), None);
         assert_eq!(cache.stats(), (0, 0));
-        cache.insert(PathBuf::from("/x/b.txt"), "world".to_string());
-        assert_eq!(cache.stats(), (0, 0), "inserts must be ignored while off");
 
-        // …and it works again once switched back on.
-        cache.set_enabled(true);
-        cache.insert(a.clone(), "again".to_string());
-        assert_eq!(cache.get_with(&a, |t| t.len()), Some(5));
+        // Switching the cache off empties the spool directory too.
+        cache.insert(PathBuf::from("/x/b.txt"), "world".to_string());
+        assert_eq!(spool(&dir).len(), 1);
+        cache.set_enabled(false);
+        assert!(spool(&dir).is_empty(), "no spool files may be left behind");
     }
 
     #[test]
     fn the_queue_drops_sends_while_the_cache_is_off() {
         let enabled = Arc::new(AtomicBool::new(false));
-        let (queue, rx) = ExtractQueue::new(Arc::clone(&enabled));
+        let pending = Arc::new(AtomicUsize::new(0));
+        let (queue, rx) = ExtractQueue::new(Arc::clone(&enabled), Arc::clone(&pending));
 
         queue.send(PathBuf::from("/x/a.txt"));
-        assert_eq!(queue.pending.load(Ordering::Relaxed), 0);
+        assert_eq!(pending.load(Ordering::Relaxed), 0);
         assert!(rx.try_recv().is_err(), "nothing should have been queued");
 
         enabled.store(true, Ordering::Relaxed);
         queue.send(PathBuf::from("/x/b.txt"));
-        assert_eq!(queue.pending.load(Ordering::Relaxed), 1);
+        assert_eq!(pending.load(Ordering::Relaxed), 1);
         assert_eq!(rx.try_recv().ok(), Some(PathBuf::from("/x/b.txt")));
     }
 

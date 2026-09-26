@@ -6,7 +6,8 @@
 //!   in-memory change overlay,
 //! - Everything-style name matching via `globset` + `regex`,
 //! - content search via the embedded ripgrep engine (`grep-searcher`),
-//! - an optional bounded in-RAM content cache for repeated queries.
+//! - an optional bounded content cache (spooled to disk by default, RAM with
+//!   `--content-in-memory`) for repeated queries.
 
 pub mod api;
 pub mod backend;
@@ -17,6 +18,7 @@ pub mod disk_index;
 pub mod engine;
 pub mod matcher;
 pub mod overlay;
+pub mod process;
 pub mod remote;
 pub mod roots;
 pub mod sqlite_index;

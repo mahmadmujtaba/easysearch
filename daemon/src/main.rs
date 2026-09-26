@@ -27,10 +27,19 @@ struct Cli {
     /// Don't print a line when the initial index becomes live.
     #[arg(long)]
     quiet: bool,
+    /// Keep the content cache in RAM (up to `content_index_total_cap_bytes`)
+    /// instead of spooling it to disk. Faster for repeated content searches.
+    #[arg(long)]
+    content_in_memory: bool,
 }
 
 fn main() {
+    // Before clap, the engine, or anything else can start a thread.
+    easysearch_core::process::cap_malloc_arenas();
     let cli = Cli::parse();
+    if cli.content_in_memory {
+        easysearch_core::process::use_content_memory();
+    }
 
     let mut engine = Engine::new(Config::load());
     engine.start();

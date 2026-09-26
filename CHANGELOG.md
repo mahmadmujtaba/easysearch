@@ -4,6 +4,57 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-09-26
+
+### Changed
+
+- **Content search no longer keeps documents in memory.** The content cache
+  used to hold every searched document's text in a RAM map (up to the
+  `content_index_total_cap_bytes` cap, 256 MB) and never gave the pages back to
+  the OS, which is what made an installed `easysearch` sit at ~1.4 GB resident
+  after a few content searches. The cache is now **disk-backed by default**: text
+  is spooled to `<disk_index_dir>/content/<hash>.txt`, the map holds only
+  bookkeeping (path, length, last use), and a lookup reads the spool file, uses
+  it and drops it — so the footprint tracks the number of files, not their
+  contents. Eviction, replacement and `clear` delete the spool files, and
+  rebuilding the store wipes the directory first.
+- **A content cache in RAM is now an explicit boot choice.** Pass
+  `--content-in-memory` (or set `EASYSEARCH_CONTENT_MEMORY=1`) to keep the old
+  behaviour when you would rather trade memory for not re-reading the disk. It
+  is a start-up flag because it changes what the daemon does, not a setting to
+  flip mid-session; `content_index_in_memory` in `config.json` gives the same
+  choice declaratively. Content indexing itself stays **off at boot** as before.
+- **glibc's malloc arenas are capped at two** (`MALLOC_ARENA_MAX=2`) before any
+  thread starts, in every entry point. On a many-core machine the default ceiling
+  of 8 × cores let the allocator grow dozens of 64 MiB arenas that were never
+  unmapped; capping this is why the fixes above are enough. An explicit
+  `MALLOC_ARENA_MAX` in the environment is left alone.
+
+### Fixed
+
+- **The content cache's “N pending” progress no longer underflows.** The queue
+  incremented a private counter while the extraction thread decremented the
+  engine's *separate* one, so the unsigned count wrapped on the first extraction
+  and the status bar could show a nonsensical "18446744073709550116 pending".
+  Both now share one `Arc<AtomicUsize>`. (Pre-existing, found while measuring
+  this release.)
+
+### Added
+
+- **Closing the window keeps EasySearch running in the tray by default.** The X
+  button now hides the window instead of quitting, so the index and the last
+  search stay warm and one click brings it back. Quit explicitly from the File
+  menu, the tray's *Quit*, or `easysearch --quit`. The old opt-in became its
+  inverse — Settings has *Quit when the window is closed* (off by default) — and
+  existing `gui.json` files fall back to the new default. When no system tray is
+  available the window is closed for real, since there would be no way to get it
+  back.
+- **`easysearch --search QUERY` and `--show` now launch the app when nothing is
+  running.** They previously reported "nothing is running" and did nothing, so a
+  desktop shortcut could not both start the app and drive it. As with `--toggle`,
+  they now fall through to a normal start, and a fresh `--search QUERY` runs that
+  query in the window as soon as it opens.
+
 ## [0.31.1] - 2026-09-26
 
 ### Fixed

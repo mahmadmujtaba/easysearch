@@ -62,6 +62,23 @@ pub fn health(addr: &str) -> Option<Health> {
     serde_json::from_slice(&body).ok()
 }
 
+/// Read the query out of `--search <QUERY>` / `--search=<QUERY>`, if present.
+///
+/// Used so a `--search` that has to launch the app still runs the search once
+/// the window is up.
+pub fn search_from_args(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if let Some(rest) = arg.strip_prefix("--search=") {
+            return Some(rest.to_string());
+        }
+        if arg == "--search" {
+            return it.next().cloned();
+        }
+    }
+    None
+}
+
 /// Make sure a daemon serves `addr`, spawning `exe` in `--daemon` mode if not.
 pub fn ensure_daemon_with(addr: &str, exe: &Path) -> Ensured {
     if daemon_is_up(addr) {
@@ -194,6 +211,9 @@ pub fn run_daemon(addr: &str, quiet: bool) -> Result<(), String> {
 
 /// Open the GUI, starting a daemon first when possible.
 ///
+/// `--search <QUERY>` on the command line runs that search in the window as
+/// soon as it opens, so the launcher path and the control path behave alike.
+///
 /// Returns `Err` only if the window subsystem itself fails (mapped to a string
 /// so this crate needs no direct dependency on the GUI toolkit).
 pub fn run_gui(addr: &str) -> Result<(), String> {
@@ -219,7 +239,8 @@ pub fn run_gui(addr: &str) -> Result<(), String> {
             Backend::local(Config::load())
         }
     };
-    easysearch_gui::run(std::sync::Arc::new(backend)).map_err(|e| e.to_string())
+    let initial = search_from_args(&std::env::args().skip(1).collect::<Vec<_>>());
+    easysearch_gui::run_with_query(std::sync::Arc::new(backend), initial).map_err(|e| e.to_string())
 }
 
 /// Default daemon address (re-exported for the binary's help text).
@@ -228,32 +249,39 @@ pub const DEFAULT: &str = DEFAULT_ADDR;
 /// Handle the control commands that talk to a *running* GUI.
 ///
 /// Returns `Some(exit_code)` when the command was handled, or `None` when a
-/// `--toggle` found nothing listening — in that case the caller should start the
-/// GUI, so one shortcut both launches the app and toggles its window.
+/// window-opening command (`--toggle`, `--show`, `--search`) found nothing
+/// listening — in that case the caller should start the GUI, so one shortcut
+/// both launches the app and drives its window. A fresh `--search QUERY` start
+/// carries the query through [`search_from_args`].
 ///
 /// This is how a global hotkey is bound on Wayland (which has no global-hotkey
 /// API): the desktop runs `easysearch --toggle` and it reaches the
 /// instance that is already up. See `docs/ui.md`.
 pub fn control_command(args: &[String]) -> Option<i32> {
     let mut command: Option<gui_ipc::Command> = None;
-    let mut toggle = false;
+    let mut opens_window = false;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
         match arg {
             "--toggle" => {
-                toggle = true;
+                opens_window = true;
                 command = Some(gui_ipc::Command::Toggle);
             }
-            "--show" => command = Some(gui_ipc::Command::Show),
+            "--show" => {
+                opens_window = true;
+                command = Some(gui_ipc::Command::Show);
+            }
             "--hide" => command = Some(gui_ipc::Command::Hide),
             "--quit" => command = Some(gui_ipc::Command::Quit),
             "--search" => {
+                opens_window = true;
                 let query = args.get(i + 1).cloned().unwrap_or_default();
                 command = Some(gui_ipc::Command::Search(query));
                 i += 1;
             }
             _ if arg.starts_with("--search=") => {
+                opens_window = true;
                 command = Some(gui_ipc::Command::Search(
                     arg["--search=".len()..].to_string(),
                 ));
@@ -266,9 +294,10 @@ pub fn control_command(args: &[String]) -> Option<i32> {
     let command = command?;
     match gui_ipc::send(&command) {
         Ok(true) => Some(0),
-        // Nothing is listening: launcher semantics for `--toggle`, otherwise a
-        // quiet no-op (there is nothing to control).
-        Ok(false) if toggle => None,
+        // Nothing is listening. A command that opens the window falls through so
+        // the caller starts the GUI (launcher semantics); the rest are quiet
+        // no-ops because there is nothing to control.
+        Ok(false) if opens_window => None,
         Ok(false) => {
             eprintln!(
                 "easysearch: nothing is running to {}. (Start the app first.)",

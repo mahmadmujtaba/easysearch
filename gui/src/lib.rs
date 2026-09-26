@@ -547,6 +547,13 @@ fn gtk_settings_dark_from(text: &str) -> Option<bool> {
 
 /// Run the GUI against an already-chosen search backend (blocks until exit).
 pub fn run(backend: Arc<Backend>) -> eframe::Result {
+    run_with_query(backend, None)
+}
+
+/// Like [`run`], but runs `initial_query` as soon as the window opens.
+///
+/// Used by `easysearch --search QUERY` when it has to launch the app itself.
+pub fn run_with_query(backend: Arc<Backend>, initial_query: Option<String>) -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("EasySearch")
         // Must match the installed desktop entry / icon name so Wayland
@@ -565,7 +572,7 @@ pub fn run(backend: Arc<Backend>) -> eframe::Result {
     eframe::run_native(
         "EasySearch",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, backend)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, backend, initial_query)))),
     )
 }
 
@@ -623,8 +630,13 @@ struct GuiPrefs {
     dark: Option<bool>,
     /// Preview pane on by default (it can be turned off in Settings/View).
     show_preview: bool,
-    /// X button hides to the tray instead of quitting (opt-in).
-    close_to_tray: bool,
+    /// The X button quits instead of hiding to the tray.
+    ///
+    /// Default `false`: closing the window keeps EasySearch running in the
+    /// tray. Only meaningful when a tray is actually available. The field used
+    /// to be the inverse, named `close_to_tray`; old configs simply fall back to
+    /// the new default (serde ignores the unknown key), which is what we want.
+    quit_on_close: bool,
     /// Most recent first.
     history: Vec<String>,
     /// UI zoom factor (1.0 = 100%).
@@ -656,7 +668,7 @@ impl Default for GuiPrefs {
         GuiPrefs {
             dark: None,
             show_preview: true,
-            close_to_tray: false,
+            quit_on_close: false,
             history: Vec::new(),
             zoom: 1.0,
             include_dirs: true,
@@ -1073,7 +1085,11 @@ struct App {
 }
 
 impl App {
-    fn new(cc: &eframe::CreationContext<'_>, backend: Arc<Backend>) -> App {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        backend: Arc<Backend>,
+        initial_query: Option<String>,
+    ) -> App {
         let (query_tx, query_rx) = mpsc::channel::<UiMsg>();
         let (result_tx, result_rx) = mpsc::channel::<OutMsg>();
         let backend_worker = Arc::clone(&backend);
@@ -1300,6 +1316,14 @@ impl App {
         };
         app.apply_style(&cc.egui_ctx);
         cc.egui_ctx.set_zoom_factor(app.prefs.zoom);
+        if let Some(q) = initial_query {
+            let q = q.trim().to_string();
+            if !q.is_empty() {
+                app.run_query(&q);
+                app.prefs.commit_query(&q);
+                app.sync_history();
+            }
+        }
         app.send_query();
         app.maybe_auto_check_updates();
         app
@@ -3191,11 +3215,15 @@ impl eframe::App for App {
             }
         }
 
-        // Close button: default = quit the app. With "close to tray" enabled
-        // (opt-in setting) the window hides instead; only Quit then exits.
+        // Close button: keep running in the tray by default, so a search stays
+        // warm and the app can be brought back with one click. It only exits on
+        // an explicit Quit (menu, tray, or `easysearch --quit`), when the user
+        // has opted into quitting on close, or when there is no tray to restore
+        // the window from (otherwise the process would be unreachable).
         if ctx.input(|i| i.viewport().close_requested())
-            && self.prefs.close_to_tray
             && !self.tray_quit
+            && self.tray_handle.is_some()
+            && !self.prefs.quit_on_close
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -3358,15 +3386,28 @@ impl App {
                 {
                     self.prefs.save();
                 }
-                if ui
-                    .checkbox(
-                        &mut self.prefs.close_to_tray,
-                        "Keep running in tray when the window is closed",
-                    )
-                    .on_hover_text("Off (default): the X button quits the app.")
-                    .changed()
-                {
-                    self.prefs.save();
+                let has_tray = self.tray_handle.is_some();
+                ui.add_enabled_ui(has_tray, |ui| {
+                    if ui
+                        .checkbox(&mut self.prefs.quit_on_close, "Quit when the window is closed")
+                        .on_hover_text(
+                            "Off (default): the X button hides the window and EasySearch keeps \
+                             running in the tray, so the index and your search stay warm. Use \
+                             Quit in the File menu or the tray to exit.",
+                        )
+                        .changed()
+                    {
+                        self.prefs.save();
+                    }
+                });
+                if !has_tray {
+                    ui.label(
+                        egui::RichText::new(
+                            "No system tray is available here, so closing the window quits.",
+                        )
+                        .small()
+                        .color(self.fg_dim()),
+                    );
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Updates").strong());

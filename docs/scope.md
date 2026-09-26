@@ -325,7 +325,16 @@ small writes (so short SSE frames are never flushed).
 | Warm start (cache present) | **< 1 s** to first search |
 | Filename query latency (1M entries) | < 50 ms |
 | Content query (typical tree) | first result < 2 s; results streamed, cancellable |
-| Content index (when **enabled**) | + extracted text only (≤ 256 MB cap, LRU); **0 MB / 0 CPU when off** |
+| Content index (when **enabled**) | text spooled to `disk_index_dir/content/` on disk by default; ≤ 256 MB spool, LRU; **0 MB / 0 CPU when off**. `--content-in-memory` moves the ≤ 256 MB cap into RAM |
+
+**Memory architecture (v0.32):** the optional content cache is **disk-backed by
+default** — extracted text is spooled to `~/.cache/easysearch/content/` and
+read back per lookup, so searching content does not leave the documents resident;
+`--content-in-memory` (`EASYSEARCH_CONTENT_MEMORY=1`) keeps the old RAM map.
+Every entry point calls `MALLOC_ARENA_MAX=2` before starting a thread, which
+stops glibc from growing dozens of never-unmapped 64 MiB arenas on many-core
+machines — the reason a long-running content search could sit at well over a
+gigabyte of anonymous RSS.
 
 **Memory architecture (v0.13):** the index lives in a SQLite database
 (`~/.cache/easysearch/db/index.db`, WAL mode) owned by the daemon; only a small
