@@ -15,7 +15,7 @@ filter bar      Type Size Modified Path Ext: Case Hidden   [ ✕ Clear Filters ]
 results header  31 results · 100,477 files indexed · 2 ms   Sort by ▾  Cozy Compact
 ┌───────────────┬───────────────────────────────────────────┬──────────────────┐
 │ sidebar       │ results table                             │ preview panel    │
-│ categories    │ #  Name  Path  Type  Size  Modified  Match  │ Preview │ Details│
+│ categories    │ #  Name  Path  Type  Size  Modified  Created  Match  │ Preview │ Details│
 │ saved search  │                                             │ details + actions│
 │ locations     │                                             │                  │
 │ advanced      │                                             │                  │
@@ -104,8 +104,13 @@ off — the sidebar's `cache …` indicator in the status bar shows its state.
 
 Columns: `#` row number · **Name** (with a type badge and, in Cozy density, a
 clickable breadcrumb) · **Path** (parent, shortened — hover for the full path) ·
-**Type** pill · **Size** · **Modified** · **Match** (which query terms this hit
-satisfied) · **Relevance** (score + bar).
+**Type** pill · **Size** · **Modified** · **Created** (birth time) · **Match**
+(which query terms this hit satisfied) · **Relevance** (score + bar).
+
+**Created** is read live with `stat` for the visible rows rather than stored in
+the index, so it is right even for a file made a second ago and needs no format
+change. Where the filesystem records no birth time (many do not) the cell shows
+`—`, and those rows sort together at one end.
 
 **Relevance is a documented heuristic, not a black box.** Terms that match the
 file *name* score highest — exact match, then prefix, then substring — with
@@ -114,8 +119,8 @@ because they are usually the more specific hit; a query with no positive terms
 scores everything equally. The best possible score is 100%. Use `Sort by →
 Relevance` (the default) to order by it.
 
-Header clicks sort by Name / Size / Modified; clicking again reverses, a third
-time clears the sort. **Cozy / Compact** switch the row density (two-line rows
+Header clicks sort by Name / Size / Modified / Created; clicking again reverses,
+a third time clears the sort. **Cozy / Compact** switch the row density (two-line rows
 with breadcrumbs, or one compact line).
 
 Right-click a row for the full menu — it acts on the whole **selection** when the

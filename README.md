@@ -115,8 +115,8 @@ location history, Home, Index, Content Search, Regex, Recent, Saved), a search r
 (query + scope + location + `Search`), a filter bar (Type / Size / Modified / Path /
 Ext / Case / Hidden), a results header with sorting and row density, then three
 panes — a sidebar (categories with live counts, saved searches, indexed locations),
-the results table (`#`, Name, Path, coloured type pill, Size, Modified, Match,
-Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
+the results table (`#`, Name, Path, coloured type pill, Size, Modified, Created,
+Match, Relevance, bulk checkboxes) and a right-hand panel with Preview/Details tabs and
 quick actions. Under it: view tabs, bulk actions, recent searches and a live status
 bar (index state, CPU, RAM, query stats, 100/110/125% zoom). It follows the
 desktop's light/dark scheme live and uses your system fonts.

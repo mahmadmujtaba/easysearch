@@ -367,10 +367,10 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
 - **Filter bar:** Type, Size, Modified, Path, Ext chips, Case, Hidden, Clear Filters.
   Every control drives a real engine filter (§4.1) — nothing decorative.
 - **Results header:** `N results · N files indexed · N ms`, `Sort by`
-  (Relevance/Name/Size/Modified) and Cozy/Compact row density.
+  (Relevance/Name/Size/Modified/Created) and Cozy/Compact row density.
 - **Three panes:** sidebar (a filter box, categories with live counts, saved searches,
   indexed locations, Advanced Search) · results table (`#`, Name with breadcrumbs, Path,
-  coloured Type pill, Size, Modified, Match, Relevance, bulk-selection checkboxes) ·
+  coloured Type pill, Size, Modified, Created, Match, Relevance, bulk-selection checkboxes) ·
   right panel (Preview / Details tabs, with MIME type, permissions, creation time and an
   on-demand SHA-256, plus Quick Actions).
 - **Footer:** view tabs (Results / Preview / Details / Search History), bulk actions

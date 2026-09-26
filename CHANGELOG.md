@@ -4,6 +4,26 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-09-26
+
+### Added
+
+- **The `Created` column** — the last reference-UI table gap. Every result row now
+  shows its **birth time** ("3 d ago", "1 mo ago", …), and the `Created` header
+  sorts by it exactly as Name / Size / Modified do: click for ascending, again for
+  descending, a third time to clear.
+- The value is read live with `stat` rather than stored in the index. The table
+  only ever renders a screenful of rows, so one `stat` per visible row (and per
+  sort click) is cheap, and the column stays right for a file created since the
+  last index build. It also avoids any change to the on-disk formats — neither the
+  SQLite `SCHEMA_VERSION` nor the memory-mapped `MAGIC` moved, so nothing rebuilds.
+- Where the filesystem records no birth time (many do not) the cell shows `—` and
+  those rows sort together at one end; ext4, btrfs and xfs do record one.
+- New tests cover the column: the sort cycle (`ascending → descending → off`, keyed
+  on its own column) and `birth_secs` (a missing path is `0` → `—`; a fresh file's
+  time is recent where the filesystem supplies one). 106 tests pass and
+  `clippy --workspace --all-targets` is clean.
+
 ## [0.26.0] - 2026-09-26
 
 ### Added

@@ -713,11 +713,12 @@ impl GuiPrefs {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Sort {
     Name(bool),
     Size(bool),
     Mtime(bool),
+    Created(bool),
     Relevance(bool),
 }
 
@@ -2538,13 +2539,32 @@ fn file_perms(path: &Path) -> String {
 
 /// Creation (birth) time where the filesystem records one, else `—`. ext4,
 /// btrfs and xfs do; many others do not.
+///
+/// Read live rather than stored in the index: a `stat` per *visible* row is
+/// cheap (the table only renders a screenful), and it means the column is right
+/// even for files created since the last index build. The same reason applies to
+/// sorting by it, which is a one-off per click.
 fn file_created(path: &Path) -> String {
+    let secs = birth_secs(path);
+    if secs <= 0 {
+        return "—".to_string();
+    }
+    let text = human_time(secs);
+    if text.is_empty() {
+        "—".to_string()
+    } else {
+        text
+    }
+}
+
+/// Birth time in unix seconds, or `0` when the filesystem has no `btime`.
+fn birth_secs(path: &Path) -> i64 {
     std::fs::metadata(path)
         .and_then(|m| m.created())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| human_time(d.as_secs() as i64))
-        .unwrap_or_else(|| "—".to_string())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// A best-effort MIME type from the extension (no libmagic dependency).
@@ -4235,14 +4255,16 @@ impl App {
                             Some(Sort::Name(_)) => "Name",
                             Some(Sort::Size(_)) => "Size",
                             Some(Sort::Mtime(_)) => "Modified",
+                            Some(Sort::Created(_)) => "Created",
                         };
                         ui.menu_button(sort_label, |ui| {
                             ui.set_min_width(150.0);
-                            let opts: [(&str, Sort); 4] = [
+                            let opts: [(&str, Sort); 5] = [
                                 ("Relevance", Sort::Relevance(false)),
                                 ("Name", Sort::Name(true)),
                                 ("Size", Sort::Size(false)),
                                 ("Modified", Sort::Mtime(false)),
+                                ("Created", Sort::Created(false)),
                             ];
                             for (label, s) in opts {
                                 let active = match (self.sort, s) {
@@ -4675,10 +4697,19 @@ impl App {
         let type_w = 58.0_f32;
         let size_w = 74.0_f32;
         let mod_w = 92.0_f32;
+        let created_w = 92.0_f32;
         let match_w = 120.0_f32;
         let rel_w = 74.0_f32;
-        let fixed =
-            check_w + num_w + path_w + type_w + size_w + mod_w + match_w + rel_w + spacing * 8.0;
+        let fixed = check_w
+            + num_w
+            + path_w
+            + type_w
+            + size_w
+            + mod_w
+            + created_w
+            + match_w
+            + rel_w
+            + spacing * 9.0;
         let name_w = (ui.available_width() - fixed - 2.0).max(90.0);
 
         let mut table = TableBuilder::new(ui)
@@ -4692,6 +4723,7 @@ impl App {
             .column(Column::exact(type_w))
             .column(Column::exact(size_w))
             .column(Column::exact(mod_w))
+            .column(Column::exact(created_w))
             .column(Column::exact(match_w))
             .column(Column::exact(rel_w));
         if let Some(target) = self.scroll_to.take() {
@@ -4731,6 +4763,16 @@ impl App {
                             .clicked()
                         {
                             self.toggle_sort(Sort::Mtime(true));
+                        }
+                    });
+                });
+                header.col(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if sort_button(ui, "Created", self.sort, |s| matches!(s, Sort::Created(_)))
+                            .on_hover_text("Birth time, read live (— when the filesystem has none)")
+                            .clicked()
+                        {
+                            self.toggle_sort(Sort::Created(true));
                         }
                     });
                 });
@@ -4838,6 +4880,12 @@ impl App {
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(egui::RichText::new(human_time(r.mtime)).color(t.dim));
+                        });
+                    });
+                    // Created (birth time, read live).
+                    row.col(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(file_created(&r.path)).color(t.dim));
                         });
                     });
                     // Which query terms this hit matched.
@@ -6664,7 +6712,11 @@ fn sort_button(
     let active = current.is_some_and(&is_active);
     let mark = match current {
         Some(s) if is_active(s) => match s {
-            Sort::Name(asc) | Sort::Size(asc) | Sort::Mtime(asc) | Sort::Relevance(asc) => {
+            Sort::Name(asc)
+            | Sort::Size(asc)
+            | Sort::Mtime(asc)
+            | Sort::Created(asc)
+            | Sort::Relevance(asc) => {
                 if asc {
                     "  ↑"
                 } else {
@@ -6689,6 +6741,7 @@ fn cycle_sort(current: Option<Sort>, prefer: Sort) -> Option<Sort> {
             Sort::Name(true) => Some(Sort::Name(false)),
             Sort::Size(true) => Some(Sort::Size(false)),
             Sort::Mtime(true) => Some(Sort::Mtime(false)),
+            Sort::Created(true) => Some(Sort::Created(false)),
             Sort::Relevance(true) => Some(Sort::Relevance(false)),
             _ => None,
         },
@@ -6702,6 +6755,7 @@ fn same_key(a: Sort, b: Sort) -> bool {
         (Sort::Name(_), Sort::Name(_))
             | (Sort::Size(_), Sort::Size(_))
             | (Sort::Mtime(_), Sort::Mtime(_))
+            | (Sort::Created(_), Sort::Created(_))
             | (Sort::Relevance(_), Sort::Relevance(_))
     )
 }
@@ -6839,6 +6893,14 @@ fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str, fuzzy: bool
                 } else {
                     b.mtime.cmp(&a.mtime)
                 }
+            });
+        }
+        Sort::Created(asc) => {
+            // Birth time is read live (see `birth_secs`), so sorting by it costs
+            // one `stat` per row — a one-off per sort action, not per frame.
+            results.sort_by_cached_key(|r| {
+                let t = birth_secs(&r.path);
+                if asc { t } else { -t }
             });
         }
         Sort::Relevance(asc) => {
@@ -7063,6 +7125,94 @@ mod tests {
         );
         assert_eq!(report.candidates, 2, "but they were compared");
         assert_eq!(report.hashed, 2, "and fully hashed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn created_sort_cycles_and_is_keyed_on_its_own_column() {
+        // Clicking the Created header sorts ascending, again descending, a third
+        // time clears it — the same contract as Name / Size / Modified.
+        assert!(same_key(Sort::Created(true), Sort::Created(false)));
+        assert!(!same_key(Sort::Created(true), Sort::Mtime(false)));
+        assert_eq!(
+            cycle_sort(None, Sort::Created(true)),
+            Some(Sort::Created(true))
+        );
+        assert_eq!(
+            cycle_sort(Some(Sort::Created(true)), Sort::Created(true)),
+            Some(Sort::Created(false))
+        );
+        assert_eq!(
+            cycle_sort(Some(Sort::Created(false)), Sort::Created(true)),
+            None
+        );
+        // Switching to Created from another column starts ascending.
+        assert_eq!(
+            cycle_sort(Some(Sort::Mtime(true)), Sort::Created(true)),
+            Some(Sort::Created(true))
+        );
+    }
+
+    #[test]
+    fn birth_time_is_zero_for_a_missing_path() {
+        let missing = std::env::temp_dir().join("easysearch-birth-does-not-exist");
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(birth_secs(&missing), 0, "no file, no birth time");
+        assert_eq!(file_created(&missing), "—");
+
+        // A file we just wrote: where the filesystem records a birth time it
+        // must be recent, and where it does not the cell falls back to `—`.
+        let dir = std::env::temp_dir().join(format!("easysearch-birth-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("fresh.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let secs = birth_secs(&file);
+        if secs > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            assert!(secs <= now + 2, "birth time {secs} is in the future");
+            assert!(now - secs < 3600, "birth time {secs} looks stale");
+        } else {
+            assert_eq!(file_created(&file), "—");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn created_sort_orders_by_birth_time_both_ways() {
+        let dir =
+            std::env::temp_dir().join(format!("easysearch-created-sort-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let older = dir.join("older.txt");
+        std::fs::write(&older, b"a").unwrap();
+        // Birth times have one-second resolution; separate the two files by more.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let newer = dir.join("newer.txt");
+        std::fs::write(&newer, b"b").unwrap();
+
+        let row = |p: &Path| ResultRow {
+            path: p.to_path_buf(),
+            size: 1,
+            mtime: 0,
+            is_dir: false,
+        };
+        let (a, b) = (birth_secs(&older), birth_secs(&newer));
+        // Only meaningful where the filesystem records usable birth times.
+        if a > 0 && b > a {
+            let mut rows = vec![row(&newer), row(&older)];
+            sort_results(&mut rows, Sort::Created(true), "", false);
+            assert_eq!(rows.first().unwrap().path, older, "ascending: oldest first");
+            assert_eq!(rows.last().unwrap().path, newer);
+            sort_results(&mut rows, Sort::Created(false), "", false);
+            assert_eq!(
+                rows.first().unwrap().path,
+                newer,
+                "descending: newest first"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }
