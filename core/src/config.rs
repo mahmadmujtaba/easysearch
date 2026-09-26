@@ -85,6 +85,10 @@ pub struct Config {
     /// `~/.config/everything-linux/ignore`) while walking, so non-essential
     /// folders listed there are never indexed.
     pub respect_ignore_files: bool,
+    /// Follow symbolic links into their targets while walking. Off by default:
+    /// it can duplicate whole subtrees, and cycles are only detected by the
+    /// walker skipping them. Live-toggleable in the GUI (Ignore files dialog).
+    pub follow_symlinks: bool,
     /// Keep the index on disk (memory-mapped) instead of entirely in RAM, and
     /// keep only recent filesystem changes in memory. See docs/scope.md §9.
     pub persist_index: bool,
@@ -122,6 +126,7 @@ impl Default for Config {
             exclude_removable: true,
             exclude_network: true,
             respect_ignore_files: true,
+            follow_symlinks: false,
             persist_index: true,
             storage: Storage::default(),
             db_dir: None,

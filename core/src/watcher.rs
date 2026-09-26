@@ -9,12 +9,12 @@ use crate::content_index::{ContentIndex, ExtractQueue};
 use crate::engine::Status;
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
-use crate::walker::walk_root_apply;
+use crate::walker::{WalkOptions, walk_root_apply};
 use notify::{
     Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::thread::JoinHandle;
 
 /// Spawn the watcher thread. `on_error` is invoked when watching is impaired
@@ -32,7 +32,7 @@ pub fn start_watcher(
     cache: Arc<ContentIndex>,
     queue: Option<Arc<ExtractQueue>>,
     status: Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
     on_error: Arc<dyn Fn() + Send + Sync>,
 ) -> JoinHandle<()> {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
@@ -65,7 +65,7 @@ pub fn start_watcher(
                         }
                     }
                 }
-                for dir in crate::walker::collect_dirs(root, &roots_set, respect_ignore) {
+                for dir in crate::walker::collect_dirs(root, &roots_set, opts) {
                     match watcher.watch(&dir, RecursiveMode::NonRecursive) {
                         Ok(_) => watched += 1,
                         Err(e) => {
@@ -109,7 +109,7 @@ pub fn start_watcher(
                                 p.is_dir() && roots_set.is_in_roots(p) && !roots_set.is_excluded(p)
                             }) {
                                 let _ = watcher.watch(p, RecursiveMode::NonRecursive);
-                                for dir in crate::walker::collect_dirs(p, &roots_set, respect_ignore) {
+                                for dir in crate::walker::collect_dirs(p, &roots_set, opts) {
                                     let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
                                 }
                             }
@@ -121,7 +121,7 @@ pub fn start_watcher(
                             &cache,
                             queue.as_ref(),
                             &status,
-                            respect_ignore,
+                            opts,
                         );
                     }
                     Err(e) => {
@@ -141,7 +141,7 @@ fn handle_event(
     cache: &ContentIndex,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
 ) {
     let Some(path) = event.paths.first().cloned() else {
         return;
@@ -150,13 +150,13 @@ fn handle_event(
         return;
     }
     match event.kind {
-        EventKind::Create(_) => add_path(&path, overlay, roots, queue, status, respect_ignore),
+        EventKind::Create(_) => add_path(&path, overlay, roots, queue, status, opts),
         EventKind::Remove(_) => remove_path(&path, overlay, cache),
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
             remove_path(&path, overlay, cache)
         }
         EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
-            add_path(&path, overlay, roots, queue, status, respect_ignore)
+            add_path(&path, overlay, roots, queue, status, opts)
         }
         EventKind::Modify(
             notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_),
@@ -176,7 +176,7 @@ fn add_path(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
 ) {
     if roots.is_excluded(path) {
         return;
@@ -200,7 +200,7 @@ fn add_path(
     if is_dir {
         // A new directory may already contain files that predate the watch:
         // index its subtree immediately (into the overlay).
-        walk_root_apply(path, overlay, roots, queue, status, respect_ignore);
+        walk_root_apply(path, overlay, roots, queue, status, opts);
     } else if let Some(q) = queue {
         q.send(path.to_path_buf());
     }

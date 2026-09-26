@@ -3,9 +3,9 @@
 //! Results are either collected (`walk_root_collect`, for building the
 //! on-disk index) or applied in batches to the change overlay
 //! (`walk_root_apply`, for RAM-only mode and watcher-driven subtree indexing).
-//! When `respect_ignore` is set, `.gitignore`/`.ignore` files in the searched
-//! tree are honored, plus a global ignore file at
-//! `~/.config/everything-linux/ignore`.
+//! [`WalkOptions`] carries the two user-visible knobs: honoring
+//! `.gitignore`/`.ignore` files (plus the global ignore file at
+//! `~/.config/everything-linux/ignore`) and following symbolic links.
 
 use crate::content_index::ExtractQueue;
 use crate::engine::Status;
@@ -16,6 +16,27 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 const BATCH: usize = 512;
+
+/// Settings that shape a walk. Bundled into one value so adding an option does
+/// not ripple through every walker/watcher signature.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WalkOptions {
+    /// Honor `.gitignore`/`.ignore` files in the tree, plus the global ignore
+    /// file at `~/.config/everything-linux/ignore`.
+    pub respect_ignore: bool,
+    /// Follow symbolic links into their targets (cycles are detected by the
+    /// walker and skipped).
+    pub follow_symlinks: bool,
+}
+
+impl WalkOptions {
+    pub const fn new(respect_ignore: bool, follow_symlinks: bool) -> WalkOptions {
+        WalkOptions {
+            respect_ignore,
+            follow_symlinks,
+        }
+    }
+}
 
 enum Sink {
     /// Collect everything (used to build the disk index).
@@ -39,7 +60,7 @@ pub fn walk_root_collect(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
 ) -> Vec<(PathBuf, Meta)> {
     let out = Arc::new(Mutex::new(Vec::new()));
     walk_impl(
@@ -47,7 +68,7 @@ pub fn walk_root_collect(
         roots,
         queue,
         status,
-        respect_ignore,
+        opts,
         Sink::Collect(Arc::clone(&out)),
     );
     match Arc::try_unwrap(out) {
@@ -63,14 +84,14 @@ pub fn walk_root_apply(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
 ) {
     walk_impl(
         root,
         roots,
         queue,
         status,
-        respect_ignore,
+        opts,
         Sink::Apply(Arc::clone(overlay)),
     );
 }
@@ -80,19 +101,19 @@ fn walk_impl(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: WalkOptions,
     sink: Sink,
 ) {
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false) // index hidden files too; filtering happens at query time
-        .follow_links(false)
+        .follow_links(opts.follow_symlinks)
         .threads(
             std::thread::available_parallelism()
                 .map(|n| n.get().min(8))
                 .unwrap_or(4),
         );
-    if respect_ignore {
+    if opts.respect_ignore {
         builder
             .ignore(true)
             .git_ignore(true)
@@ -206,10 +227,13 @@ fn apply(overlay: &Arc<RwLock<Overlay>>, batch: Vec<(PathBuf, Meta)>) {
 /// Uses the same ignore-file and mount-exclusion rules as indexing, and —
 /// unlike a single recursive inotify watch — *skips* unreadable directories
 /// instead of failing, so one bad folder cannot knock out the whole watcher.
-pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, respect_ignore: bool) -> Vec<PathBuf> {
+pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, opts: WalkOptions) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(root);
-    builder.hidden(false).follow_links(false).threads(1);
-    if respect_ignore {
+    builder
+        .hidden(false)
+        .follow_links(opts.follow_symlinks)
+        .threads(1);
+    if opts.respect_ignore {
         builder
             .ignore(true)
             .git_ignore(true)

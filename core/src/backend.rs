@@ -103,6 +103,16 @@ impl Backend {
         }
     }
 
+    /// Turn following of symbolic links on/off (in-process engine, or daemon).
+    pub fn set_follow_symlinks(&self, on: bool) {
+        match self {
+            Backend::Local(e) => e.set_follow_symlinks(on, true),
+            Backend::Remote(r) => {
+                let _ = r.set_follow_symlinks(on);
+            }
+        }
+    }
+
     /// Number of entries matching `q`, without shipping them (used for the
     /// sidebar's per-category counts).
     pub fn count(&self, q: &Query) -> Result<u64, String> {

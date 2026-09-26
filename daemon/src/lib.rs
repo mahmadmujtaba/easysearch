@@ -11,7 +11,8 @@
 //!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
 //! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
-//! POST /v1/ignore   → {"respect":bool,"rebuild":bool} → {"ok":true}
+//! POST /v1/ignore   → {"respect":bool,"follow_symlinks":bool,"rebuild":bool} → {"ok":true}
+//! POST /v1/config   → alias of /v1/ignore (live index settings)
 //! POST /v1/shutdown → {"ok":true}, then the daemon stops (and exits)
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
 //!                              returned when it changes (or on timeout)
@@ -136,21 +137,32 @@ impl Daemon {
                 self.request_shutdown();
                 (200, r#"{"ok":true}"#.to_string())
             }
-            (Method::Post, "/v1/ignore") => {
+            (Method::Post, "/v1/ignore") | (Method::Post, "/v1/config") => {
                 let mut body = String::new();
                 match request.as_reader().read_to_string(&mut body) {
                     Ok(_) => {
                         let value: serde_json::Value =
                             serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                        // Each field is optional: only what is present is changed,
+                        // and the rebuild happens once at the end.
                         let respect = value
                             .get("respect")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(true);
+                            .or_else(|| value.get("respect_ignore_files"))
+                            .and_then(|v| v.as_bool());
+                        let follow = value.get("follow_symlinks").and_then(|v| v.as_bool());
                         let rebuild = value
                             .get("rebuild")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(true);
-                        self.engine.set_respect_ignore(respect, rebuild);
+                        if let Some(on) = respect {
+                            self.engine.set_respect_ignore(on, false);
+                        }
+                        if let Some(on) = follow {
+                            self.engine.set_follow_symlinks(on, false);
+                        }
+                        if (respect.is_some() || follow.is_some()) && rebuild {
+                            self.engine.rebuild();
+                        }
                         (200, r#"{"ok":true}"#.to_string())
                     }
                     Err(e) => (400, err_json(&format!("cannot read body: {e}"))),

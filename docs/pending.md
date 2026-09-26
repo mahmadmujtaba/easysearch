@@ -112,7 +112,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | `Created` **column** in the table | Deferred: birth time is shown in the Details tab, but a table column would need `btime` stored in the on-disk index (a format change) |
 | `Full Text (content + name)` scope | Offered as `Filenames` / `Full path` / `Contents` instead: the engine ANDs name and content, so an OR mode needs an engine change |
 | Per-location counts in the sidebar | Locations are listed with their paths; only the categories carry live counts |
-| `Follow symlinks` advanced checkbox | Not built (the walker does not follow symlinks) |
+| `Follow symlinks` advanced checkbox | **Built in v0.22.0** — Tools ▸ Ignore files… and Settings ▸ Indexing, live via `POST /v1/config` |
 | `Content: Any` filter | Not built (no meaningful second value today) |
 
 The reference also has a single tab strip; this app keeps its **multi-search

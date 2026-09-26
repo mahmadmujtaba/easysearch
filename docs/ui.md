@@ -71,7 +71,7 @@ predicate whether the app is counting or listing:
 | **Multiline** *(content mode)* | let the content pattern span lines (`foo\nbar`); much slower |
 | **✕ Clear Filters** | resets all of the above (enabled only when something is set) |
 
-## Ignoring files
+## Ignoring files and following symlinks
 
 Indexing honours `.gitignore` and `.ignore` files found in the tree, plus a
 global list at `~/.config/everything-linux/ignore`. Both are managed without
@@ -79,11 +79,14 @@ hand-editing:
 
 - **Tools ▸ Ignore files…** opens an editor for the global list (`.gitignore`
 syntax; `**/node_modules/` matches at any depth) with **Save & rebuild**,
-**Reload** and **Rebuild index**.
-- **Settings ▸ Indexing** toggles whether ignore files are consulted at all.
+**Reload** and **Rebuild index**, plus two live switches:
+  - **Honor `.gitignore` / `.ignore` files** — off means index everything.
+  - **Follow symbolic links** — index the targets of symlinked folders too
+    (off by default; cycles are detected and skipped).
+- **Settings ▸ Indexing** offers the same two switches and a link to the editor.
 
-The toggle is **live**: it is pushed to the running engine (or, over
-`POST /v1/ignore`, to the daemon) and followed by a rebuild, so it takes effect
+Both switches are **live**: they are pushed to the running engine (or, over
+`POST /v1/config`, to the daemon) and followed by a rebuild, so they take effect
 immediately rather than at the next restart.
 
 ## Results

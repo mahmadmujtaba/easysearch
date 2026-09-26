@@ -3331,6 +3331,15 @@ impl App {
                     self.engine.set_respect_ignore(respect);
                     self.status.respect_ignore_files = respect;
                 }
+                let mut follow = self.status.follow_symlinks;
+                if ui
+                    .checkbox(&mut follow, "Follow symbolic links")
+                    .on_hover_text("Index the targets of symlinked folders too.")
+                    .changed()
+                {
+                    self.engine.set_follow_symlinks(follow);
+                    self.status.follow_symlinks = follow;
+                }
                 if ui.button("Edit ignore files…").clicked() {
                     self.open_ignore_dialog();
                 }
@@ -5541,6 +5550,7 @@ impl App {
         let mut reload = false;
         let mut rebuild = false;
         let mut toggle: Option<bool> = None;
+        let mut follow_toggle: Option<bool> = None;
         egui::Window::new("Ignore files")
             .collapsible(false)
             .resizable(true)
@@ -5569,6 +5579,17 @@ impl App {
                     .changed()
                 {
                     toggle = Some(respect);
+                }
+                ui.add_space(4.0);
+                let mut follow = self.status.follow_symlinks;
+                if ui
+                    .checkbox(&mut follow, "Follow symbolic links")
+                    .on_hover_text(
+                        "Index the targets of symlinked folders too (cycles are skipped).",
+                    )
+                    .changed()
+                {
+                    follow_toggle = Some(follow);
                 }
                 ui.add_space(10.0);
                 ui.label(egui::RichText::new("Global ignore file").strong());
@@ -5631,6 +5652,15 @@ impl App {
                 "Honoring ignore files — reindexing…".to_string()
             } else {
                 "Not consulting ignore files — reindexing…".to_string()
+            });
+        }
+        if let Some(on) = follow_toggle {
+            self.engine.set_follow_symlinks(on);
+            self.status.follow_symlinks = on;
+            self.ignore_msg = Some(if on {
+                "Following symbolic links — reindexing…".to_string()
+            } else {
+                "Not following symbolic links — reindexing…".to_string()
             });
         }
         if rebuild {

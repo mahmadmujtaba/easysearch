@@ -51,7 +51,7 @@ make daemon                              # release build, 127.0.0.1:5858
 | `GET` | `/v1/search` | same, with query parameters (see below) |
 | `POST` | `/v1/count` | body: a `Query` object → `{"count":n}` (counts only, no rows) |
 | `POST` | `/v1/rebuild` | rebuild the on-disk index in the background → `{ok:true}` |
-| `POST` | `/v1/ignore` | body `{"respect":bool,"rebuild":bool}` — honor `.gitignore`/`.ignore` files (and the global ignore file) or not → `{ok:true}`. The new value is reported as `status.respect_ignore_files` in `/v1/status`. |
+| `POST` | `/v1/ignore` | body `{"respect":bool,"follow_symlinks":bool,"rebuild":bool}` — every field is optional; only what is present changes. Sets whether `.gitignore`/`.ignore` files are honored and/or whether symlinks are followed, then rebuilds → `{ok:true}`. `POST /v1/config` is an alias. Both values are reported in `/v1/status` as `status.respect_ignore_files` and `status.follow_symlinks`. |
 | `POST` | `/v1/shutdown` | ask the daemon to stop and exit → `{ok:true}` (used to restart onto a freshly installed binary) |
 | `GET` | `/v1/watch` | long-poll: the `/v1/status` payload, returned when it changes or after `?timeout=<secs>` (default 25, max 120) |
 

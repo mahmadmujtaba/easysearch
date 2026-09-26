@@ -25,6 +25,7 @@ app manages itself.
   "exclude_removable": true,
   "exclude_network": true,
   "respect_ignore_files": true,
+  "follow_symlinks": false,
   "persist_index": true,
   "storage": "sqlite",
   "db_dir": null,
@@ -48,6 +49,7 @@ app manages itself.
 | `exclude_network` | `true` | Skip network mounts (`nfs`, `cifs`/`smb`, `sshfs`, `gvfsd-fuse`, `9p`, …). |
 | `exclude_fstypes` | `[]` | *Extra* filesystem types to skip, on top of the built-in list (pseudo filesystems, container overlays, network FS). Union, not replacement. |
 | `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files inside the searched tree, plus the global ignore file at `~/.config/everything-linux/ignore`. This is what keeps `node_modules/`, `target/` and the like out of the index. |
+| `follow_symlinks` | `false` | Follow symbolic links into their targets while walking, so the contents of a symlinked folder are indexed too. Off by default (it can duplicate subtrees); cycles are detected and skipped. Both this and `respect_ignore_files` can be toggled live from the GUI or `POST /v1/config`. |
 
 ## Where the index is stored
 

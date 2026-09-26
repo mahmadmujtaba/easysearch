@@ -14,7 +14,7 @@ use crate::matcher::{CompiledQuery, Query, is_hidden, matches_category};
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
 use crate::sqlite_index::{REFRESH_AFTER_DIRTY, SqliteIndex};
-use crate::walker::{walk_root_apply, walk_root_collect};
+use crate::walker::{self, walk_root_apply, walk_root_collect};
 use crate::watcher;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -75,6 +75,10 @@ pub struct Status {
     /// honoured while walking. Live-toggleable via [`Engine::set_respect_ignore`].
     #[serde(default)]
     pub respect_ignore_files: bool,
+    /// Whether symbolic links are followed into their targets. Live-toggleable
+    /// via [`Engine::set_follow_symlinks`].
+    #[serde(default)]
+    pub follow_symlinks: bool,
 }
 
 impl Default for Status {
@@ -90,6 +94,7 @@ impl Default for Status {
             base_files: 0,
             base_dirs: 0,
             respect_ignore_files: true,
+            follow_symlinks: false,
         }
     }
 }
@@ -118,6 +123,8 @@ pub struct Engine {
     /// Whether ignore files are honoured. Read once per walk/rebuild, so a change
     /// takes effect on the next rebuild; see [`Engine::set_respect_ignore`].
     respect_ignore: Arc<AtomicBool>,
+    /// Whether symbolic links are followed. Same live-toggle semantics.
+    follow_symlinks: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -134,6 +141,7 @@ impl Engine {
             base_files: 0,
             base_dirs: 0,
             respect_ignore_files: config.respect_ignore_files,
+            follow_symlinks: config.follow_symlinks,
         }));
         let cache = Arc::new(ContentIndex::new(
             config.content_index_enabled,
@@ -199,6 +207,7 @@ impl Engine {
         }
 
         let respect_ignore_files = config.respect_ignore_files;
+        let follow_symlinks = config.follow_symlinks;
 
         Engine {
             config,
@@ -214,6 +223,7 @@ impl Engine {
             index_path,
             counts_cache,
             respect_ignore: Arc::new(AtomicBool::new(respect_ignore_files)),
+            follow_symlinks: Arc::new(AtomicBool::new(follow_symlinks)),
         }
     }
 
@@ -261,6 +271,30 @@ impl Engine {
         self.respect_ignore.load(Ordering::Relaxed)
     }
 
+    /// Follow symbolic links into their targets (and rebuild so it takes effect).
+    pub fn set_follow_symlinks(&self, on: bool, rebuild: bool) {
+        self.follow_symlinks.store(on, Ordering::Relaxed);
+        if let Ok(mut s) = self.status.write() {
+            s.follow_symlinks = on;
+        }
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// Current value of the follow-symlinks setting.
+    pub fn follow_symlinks(&self) -> bool {
+        self.follow_symlinks.load(Ordering::Relaxed)
+    }
+
+    /// The walk settings in force right now (read fresh for every walk).
+    fn walk_options(&self) -> walker::WalkOptions {
+        walker::WalkOptions::new(
+            self.respect_ignore.load(Ordering::Relaxed),
+            self.follow_symlinks.load(Ordering::Relaxed),
+        )
+    }
+
     /// Start the watcher and the initial index build.
     pub fn start(&mut self) {
         self.start_watcher();
@@ -274,14 +308,13 @@ impl Engine {
                 let roots = Arc::clone(&self.roots);
                 let status = Arc::clone(&self.status);
                 let queue = self.queue.clone();
-                let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+                let opts = self.walk_options();
                 let counts_cache = Arc::clone(&self.counts_cache);
                 std::thread::Builder::new()
                     .name("sqlite-build".into())
                     .spawn(move || {
                         status.write().unwrap().state = State::Indexing;
-                        let entries =
-                            build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                        let entries = build_entries(&roots, queue.as_ref(), &status, opts);
                         let n = entries.len();
                         if let Ok(mut d) = db.lock() {
                             match d.rebuild(&entries) {
@@ -327,7 +360,7 @@ impl Engine {
             let queue = self.queue.clone();
             let overlay = Arc::clone(&self.overlay);
             let base = Arc::clone(&self.base);
-            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+            let opts = self.walk_options();
             let persist = self.config.persist_index;
             let index_path = self.index_path.clone();
             std::thread::Builder::new()
@@ -335,8 +368,7 @@ impl Engine {
                 .spawn(move || {
                     status.write().unwrap().state = State::Indexing;
                     if persist {
-                        let entries =
-                            build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                        let entries = build_entries(&roots, queue.as_ref(), &status, opts);
                         match DiskIndex::write_and_load(&index_path, &entries) {
                             Ok(idx) => *base.write().unwrap() = Some(Arc::new(idx)),
                             Err(e) => eprintln!("initial index build failed: {e}"),
@@ -344,14 +376,7 @@ impl Engine {
                         trim_allocator();
                     } else {
                         for root in &roots.roots {
-                            walk_root_apply(
-                                root,
-                                &overlay,
-                                &roots,
-                                queue.as_ref(),
-                                &status,
-                                respect_ignore,
-                            );
+                            walk_root_apply(root, &overlay, &roots, queue.as_ref(), &status, opts);
                         }
                     }
                     status.write().unwrap().state = State::Live;
@@ -367,7 +392,7 @@ impl Engine {
         let cache = Arc::clone(&self.cache);
         let queue = self.queue.clone();
         let secs = self.config.degraded_rescan_secs.max(5);
-        let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+        let opts = self.walk_options();
 
         // Degraded mode: the kernel watcher failed (usually exhausted watch
         // limits). Fall back to periodic full rebuilds.
@@ -382,7 +407,7 @@ impl Engine {
             let queue = self.queue.clone();
             let rebuilding = Arc::clone(&self.rebuilding);
             let persist = self.config.persist_index;
-            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+            let opts = self.walk_options();
             Arc::new(move || {
                 status.write().unwrap().degraded = true;
                 if started.swap(true, Ordering::SeqCst) {
@@ -411,7 +436,7 @@ impl Engine {
                                     queue.as_ref(),
                                     &rebuilding,
                                     &status,
-                                    respect_ignore,
+                                    opts,
                                 );
                             } else {
                                 for root in &roots.roots {
@@ -421,7 +446,7 @@ impl Engine {
                                         &roots,
                                         queue.as_ref(),
                                         &status,
-                                        respect_ignore,
+                                        opts,
                                     );
                                 }
                             }
@@ -438,7 +463,7 @@ impl Engine {
             cache,
             queue,
             status,
-            respect_ignore,
+            opts,
             on_error,
         );
         drop(handle); // detached: the thread runs until process exit
@@ -459,14 +484,14 @@ impl Engine {
             let queue = self.queue.clone();
             let rebuilding = Arc::clone(&self.rebuilding);
             let counts_cache = Arc::clone(&self.counts_cache);
-            let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+            let opts = self.walk_options();
             std::thread::Builder::new()
                 .name("sqlite-rebuild".into())
                 .spawn(move || {
                     if rebuilding.swap(true, Ordering::SeqCst) {
                         return;
                     }
-                    let entries = build_entries(&roots, queue.as_ref(), &status, respect_ignore);
+                    let entries = build_entries(&roots, queue.as_ref(), &status, opts);
                     let n = entries.len();
                     if let Ok(mut d) = db.lock() {
                         match d.rebuild(&entries) {
@@ -496,7 +521,7 @@ impl Engine {
         let overlay = Arc::clone(&self.overlay);
         let queue = self.queue.clone();
         let rebuilding = Arc::clone(&self.rebuilding);
-        let respect_ignore = self.respect_ignore.load(Ordering::Relaxed);
+        let opts = self.walk_options();
         let index_path = self.index_path.clone();
         std::thread::Builder::new()
             .name("index-rebuild".into())
@@ -509,7 +534,7 @@ impl Engine {
                     queue.as_ref(),
                     &rebuilding,
                     &status,
-                    respect_ignore,
+                    opts,
                 );
             })
             .expect("failed to spawn rebuild thread");
@@ -553,6 +578,7 @@ impl Engine {
     pub fn status_snapshot(&self) -> Status {
         let mut s = self.status.read().unwrap().clone();
         s.respect_ignore_files = self.respect_ignore.load(Ordering::Relaxed);
+        s.follow_symlinks = self.follow_symlinks.load(Ordering::Relaxed);
         s.content_index = if self.cache.enabled() {
             let (entries, bytes) = self.cache.stats();
             ContentIndexStatus::Enabled {
@@ -945,17 +971,11 @@ fn build_entries(
     roots: &Arc<RootSet>,
     queue: Option<&Arc<ExtractQueue>>,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: walker::WalkOptions,
 ) -> Vec<(PathBuf, Meta)> {
     let mut out = Vec::new();
     for root in &roots.roots {
-        out.extend(walk_root_collect(
-            root,
-            roots,
-            queue,
-            status,
-            respect_ignore,
-        ));
+        out.extend(walk_root_collect(root, roots, queue, status, opts));
     }
     out
 }
@@ -970,12 +990,12 @@ fn rebuild_once(
     queue: Option<&Arc<ExtractQueue>>,
     rebuilding: &AtomicBool,
     status: &Arc<RwLock<Status>>,
-    respect_ignore: bool,
+    opts: walker::WalkOptions,
 ) {
     if rebuilding.swap(true, Ordering::SeqCst) {
         return;
     }
-    let entries = build_entries(roots, queue, status, respect_ignore);
+    let entries = build_entries(roots, queue, status, opts);
     match DiskIndex::write_and_load(index_path, &entries) {
         Ok(idx) => {
             let idx = Arc::new(idx);

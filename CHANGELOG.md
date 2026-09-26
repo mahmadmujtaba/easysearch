@@ -4,6 +4,24 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-26
+
+### Added
+
+- **Follow symbolic links** (the last of the reference UI's advanced options).
+  Off by default — it can duplicate whole subtrees — but when on, the contents of
+  a symlinked folder are indexed too. The walker detects and skips cycles.
+- Walk settings are now one value: `walker::WalkOptions { respect_ignore,
+  follow_symlinks }` replaces the lone `respect_ignore: bool` threaded through
+  every walker/watcher signature, so the next option will not ripple through
+  them again.
+- Live toggle for it, exactly like the ignore setting:
+  `Engine::set_follow_symlinks`, reported as
+  `Status::follow_symlinks`, changed by the GUI checkboxes in **Tools ▸ Ignore
+  files…** and **Settings ▸ Indexing**, and set over the API by
+  `POST /v1/config` (`/v1/ignore` is now an alias of it, and every field of the
+  body is optional). `Config::follow_symlinks` sets the default.
+
 ## [0.21.0] - 2026-09-26
 
 ### Added

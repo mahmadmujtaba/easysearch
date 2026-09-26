@@ -129,21 +129,27 @@ fn ignore_setting_round_trips_over_http() {
 
     let status = || {
         let body = request(&addr, "GET", "/v1/status", None).unwrap();
-        serde_json::from_slice::<StatusReport>(&body)
-            .unwrap()
-            .status
-            .respect_ignore_files
+        let report: StatusReport = serde_json::from_slice(&body).unwrap();
+        (
+            report.status.respect_ignore_files,
+            report.status.follow_symlinks,
+        )
     };
 
-    // The default config honors ignore files.
-    assert!(status(), "ignore files should be honored by default");
+    // The default config honors ignore files and does not follow symlinks.
+    assert_eq!(status(), (true, false), "unexpected defaults");
 
-    // The client toggles it off; the daemon reports the new value.
+    // The client toggles them; the daemon reports the new values.
     Backend::remote(&addr).set_respect_ignore(false);
-    assert!(!status(), "the toggle should have taken effect");
+    assert_eq!(status(), (false, false), "the ignore toggle failed");
+    Backend::remote(&addr).set_follow_symlinks(true);
+    assert_eq!(status(), (false, true), "the symlink toggle failed");
 
+    // Both are reversible, and changing one leaves the other alone.
     Backend::remote(&addr).set_respect_ignore(true);
-    assert!(status(), "the toggle should be reversible");
+    assert_eq!(status(), (true, true));
+    Backend::remote(&addr).set_follow_symlinks(false);
+    assert_eq!(status(), (true, false));
 }
 
 #[test]
