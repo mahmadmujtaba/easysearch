@@ -4,6 +4,23 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0] - 2026-09-27
+
+### Added
+
+- **Syntax highlighting in the preview pane.** Source code is now coloured —
+  comments, strings, numbers, keywords, types and call sites — by a small
+  tokeniser (no parser, no external crate) that understands each language's
+  comment and string syntax. It covers the major languages: Rust, C/C++,
+  Java, Go, Python, JavaScript/TypeScript, shell, JSON/YAML/TOML/INI,
+  HTML/XML, CSS, SQL, Ruby, PHP, Lua, Kotlin, Swift, C#, R, Haskell, Scala,
+  Dart, Perl, Nix, Elixir, Erlang and Clojure, mapped from the file extension
+  (and a few well-known names such as `Makefile` and `Dockerfile`). Fenced code
+  blocks inside a **Markdown** preview are highlighted using the fence's
+  language tag. Colours are drawn from the active theme (Dark/Light/Brand), so
+  highlighting matches the appearance; files over 128 KiB fall back to plain
+  monospace so layout never stalls.
+
 ## [0.38.0] - 2026-09-27
 
 ### Changed

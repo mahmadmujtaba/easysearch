@@ -14,6 +14,9 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
   accelerates repeated queries (default off; spooled to disk, not held in RAM).
 - **Everything-style queries**: `*.pdf`, `invoice 2026`, `!draft`, regex mode,
   case toggle, hidden files, basename or full-path matching.
+- **Previews** in the right-hand pane: image thumbnails, audio/video metadata and
+  a video first-frame, the text layer of PDF and office documents, rendered
+  Markdown, and **syntax-highlighted source code** for the major languages.
 - **Fully offline**: the app makes **no network connections at all** — no
   updater, no telemetry, no remote API. Everything stays local; install and
   upgrade with your package manager (`.deb`/`.rpm`).

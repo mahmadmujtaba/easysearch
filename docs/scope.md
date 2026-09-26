@@ -386,8 +386,9 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
 - **Three panes:** sidebar (a filter box, categories with live counts, saved searches,
   indexed locations, Advanced Search) · results table (`#`, Name with breadcrumbs, Path,
   coloured Type pill, Size, Modified, Created, Match, Relevance, bulk-selection checkboxes) ·
-  right panel (Preview / Details tabs, with MIME type, permissions, creation time and an
-  on-demand SHA-256, plus Quick Actions).
+  right panel (Preview / Details tabs — previews by kind: image, media, document
+  text, rendered Markdown, syntax-highlighted code; Details with MIME type,
+  permissions, creation time and an on-demand SHA-256 — plus Quick Actions).
 - **Footer:** view tabs (Results / Preview / Details / Search History), bulk actions
   (Select All, Invert, Copy paths), recent-search chips, and a live status bar
   (index state, system CPU and RAM, query stats, 100/110/125% zoom, keyboard hints).

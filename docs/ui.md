@@ -204,8 +204,17 @@ and reveals.
 
 ## Right-hand panel
 
-- **Preview** — image thumbnails for pictures, monospace text for text/code
-  files, and folder/empty notes otherwise.
+- **Preview** — by file kind: image thumbnails for pictures; **audio/video**
+  metadata plus a video first-frame; the **text layer** of PDF and office
+  documents (`.docx`, `.odt`/`.ods`/`.odp`/`.odg`) extracted in-process;
+  **rendered Markdown**; and **syntax-highlighted source code**. The highlighter
+  covers the major languages (Rust, C/C++, Java, Go, Python, JS/TS, shell,
+  JSON/YAML/TOML/INI, HTML/XML, CSS, SQL, Ruby, PHP, Lua, Kotlin, Swift, C#,
+  R, Haskell, Scala, Dart, Perl, Nix, Elixir, Erlang, Clojure, …) and colours
+  fenced code inside a Markdown preview too. It is a lightweight tokeniser —
+  comments, strings, numbers, keywords, types and calls — not a parser; files
+  over 128 KiB fall back to plain monospace. Folders and empty files get a short
+  note instead.
 - **Details** — Name · Path · Size (with exact bytes) · Modified · Created
   (filesystem birth time where the filesystem records one, else `—`) · MIME type
   (from the extension) · Permissions · **SHA-256** (computed on demand for files

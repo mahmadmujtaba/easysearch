@@ -87,6 +87,20 @@ struct Theme {
     kind_av: egui::Color32,
 }
 
+/// Colours for the preview's code highlighter. Each is a role the theme already
+/// defines, so a highlighted preview always matches the active appearance
+/// (comment and string use the muted and “good” tones, keywords and calls the
+/// archive/avenue accents, and so on).
+struct SyntaxColors {
+    text: egui::Color32,
+    comment: egui::Color32,
+    string: egui::Color32,
+    keyword: egui::Color32,
+    number: egui::Color32,
+    type_: egui::Color32,
+    func: egui::Color32,
+}
+
 impl Theme {
     const DARK: Theme = Theme {
         dark: true,
@@ -189,6 +203,18 @@ impl Theme {
             blur,
             spread: 0,
             color: egui::Color32::from_black_alpha(if self.dark { 130 } else { 26 }),
+        }
+    }
+
+    fn syntax(&self) -> SyntaxColors {
+        SyntaxColors {
+            text: self.text,
+            comment: self.faint,
+            string: self.good,
+            keyword: self.kind_av,
+            number: self.kind_arch,
+            type_: self.kind_img,
+            func: self.accent,
         }
     }
 }
@@ -885,6 +911,8 @@ struct Preview {
     image: Option<egui::TextureHandle>,
     /// Render `text` with light Markdown styling.
     markdown: bool,
+    /// The language to highlight `text` with, when it is source code.
+    lang: Option<Lang>,
     /// The text is the head of a larger file.
     truncated: bool,
     /// Metadata rows for audio/video (key, value).
@@ -1657,6 +1685,7 @@ impl App {
             binary: false,
             image: None,
             markdown: false,
+            lang: None,
             truncated: false,
             media: Vec::new(),
             note: None,
@@ -1707,6 +1736,11 @@ impl App {
                         preview.text = text;
                         preview.truncated = truncated;
                         preview.markdown = is_markdown_file(&path);
+                        preview.lang = if preview.markdown {
+                            None
+                        } else {
+                            lang_for_path(&path)
+                        };
                     }
                     TextHead::Binary => preview.binary = true,
                     TextHead::Empty => {}
@@ -5550,6 +5584,8 @@ impl App {
                             .show(ui, |ui| {
                                 if pv.markdown {
                                     markdown_preview(ui, &t, &pv.text);
+                                } else if let Some(lang) = pv.lang {
+                                    code_preview(ui, &t, lang, &pv.text);
                                 } else {
                                     ui.label(
                                         egui::RichText::new(&pv.text)
@@ -6890,19 +6926,37 @@ fn human_duration(secs: f64) -> String {
     }
 }
 
-/// Render Markdown with light styling: headings, bullets, quotes, fenced code,
-/// and the inline emphasis markers stripped. Deliberately small — this is a
-/// preview, not a Markdown engine.
+/// Render Markdown with light styling: headings, bullets, quotes, fenced code
+/// (syntax-highlighted when the fence names a language) and the inline emphasis
+/// markers stripped. Deliberately small — this is a preview, not a Markdown
+/// engine.
 fn markdown_preview(ui: &mut egui::Ui, t: &Theme, text: &str) {
-    let mut in_code = false;
-    for raw in text.lines() {
+    let mut lines = text.lines();
+    while let Some(raw) = lines.next() {
         let trimmed = raw.trim_start();
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            ui.label(egui::RichText::new(raw).monospace().size(11.0).color(t.dim));
+        if let Some(tag) = trimmed.strip_prefix("```") {
+            let tag = tag.trim();
+            let mut block = String::new();
+            for line in lines.by_ref() {
+                if line.trim_start().starts_with("```") {
+                    break;
+                }
+                block.push_str(line);
+                block.push('\n');
+            }
+            let body = block.trim_end_matches('\n');
+            if let Some(lang) = Lang::from_tag(tag) {
+                code_preview(ui, t, lang, body);
+            } else {
+                for line in body.lines() {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(11.0)
+                            .color(t.dim),
+                    );
+                }
+            }
             continue;
         }
         if trimmed.is_empty() {
@@ -6950,6 +7004,1639 @@ fn markdown_preview(ui: &mut egui::Ui, t: &Theme, text: &str) {
             );
         }
     }
+}
+
+/// How big a file still gets syntax highlighting. Larger previews fall back to
+/// plain monospace, so laying out tens of thousands of coloured runs never
+/// stalls the UI.
+const MAX_HIGHLIGHT_BYTES: usize = 128 * 1024;
+
+/// A language the preview highlighter has a token table for. This is a keyword
+/// table plus comment/string syntax, **not** a grammar: the scanner has no
+/// parser, no error recovery and no state between lines, which is all a preview
+/// needs.
+#[derive(Clone, Copy)]
+enum Lang {
+    Rust,
+    Python,
+    Js,
+    C,
+    Java,
+    Go,
+    Shell,
+    Json,
+    Yaml,
+    Toml,
+    Markup,
+    Css,
+    Sql,
+    Ruby,
+    Php,
+    Lua,
+    Kotlin,
+    Swift,
+    Csharp,
+    R,
+    Haskell,
+    Scala,
+    Dart,
+    Perl,
+    Ini,
+    Make,
+    Docker,
+    Nix,
+    Elixir,
+    Erlang,
+    Clojure,
+}
+
+/// The token classes and punctuation a [`Lang`] recognises.
+struct LangSpec {
+    /// Markers that begin a comment that runs to the end of the line.
+    line: &'static [&'static str],
+    /// A `(open, close)` pair for a comment that can span lines.
+    block: Option<(&'static str, &'static str)>,
+    /// Quote characters that open a string.
+    quotes: &'static [char],
+    /// Whether a string may span lines (template literals, triple quotes, …).
+    multiline_strings: bool,
+    keywords: &'static [&'static str],
+    types: &'static [&'static str],
+    constants: &'static [&'static str],
+}
+
+impl Lang {
+    /// The language for a Markdown fence tag (`rust`, `python`, `sh`, …).
+    fn from_tag(tag: &str) -> Option<Lang> {
+        let t = tag.trim().to_ascii_lowercase();
+        Some(match t.as_str() {
+            "rust" | "rs" => Lang::Rust,
+            "python" | "py" | "python3" => Lang::Python,
+            "js" | "javascript" | "jsx" | "ts" | "typescript" | "tsx" | "node" => Lang::Js,
+            "c" | "h" | "cpp" | "c++" | "cxx" | "hpp" | "objc" => Lang::C,
+            "java" => Lang::Java,
+            "go" | "golang" => Lang::Go,
+            "sh" | "bash" | "shell" | "zsh" | "console" => Lang::Shell,
+            "json" | "jsonc" => Lang::Json,
+            "yaml" | "yml" => Lang::Yaml,
+            "toml" => Lang::Toml,
+            "html" | "xml" | "svg" | "vue" | "svelte" | "markup" => Lang::Markup,
+            "css" | "scss" | "sass" | "less" => Lang::Css,
+            "sql" => Lang::Sql,
+            "ruby" | "rb" => Lang::Ruby,
+            "php" => Lang::Php,
+            "lua" => Lang::Lua,
+            "kotlin" | "kt" => Lang::Kotlin,
+            "swift" => Lang::Swift,
+            "csharp" | "c#" | "cs" => Lang::Csharp,
+            "r" => Lang::R,
+            "haskell" | "hs" => Lang::Haskell,
+            "scala" => Lang::Scala,
+            "dart" => Lang::Dart,
+            "perl" | "pl" => Lang::Perl,
+            "ini" => Lang::Ini,
+            "make" | "makefile" => Lang::Make,
+            "docker" | "dockerfile" => Lang::Docker,
+            "nix" => Lang::Nix,
+            "elixir" | "ex" | "exs" => Lang::Elixir,
+            "erlang" | "erl" => Lang::Erlang,
+            "clojure" | "clj" => Lang::Clojure,
+            _ => return None,
+        })
+    }
+
+    fn spec(self) -> LangSpec {
+        match self {
+            Lang::Rust => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"'],
+                multiline_strings: false,
+                keywords: &[
+                    "as",
+                    "async",
+                    "await",
+                    "break",
+                    "const",
+                    "continue",
+                    "crate",
+                    "dyn",
+                    "else",
+                    "enum",
+                    "extern",
+                    "fn",
+                    "for",
+                    "if",
+                    "impl",
+                    "in",
+                    "let",
+                    "loop",
+                    "match",
+                    "mod",
+                    "move",
+                    "mut",
+                    "pub",
+                    "ref",
+                    "return",
+                    "self",
+                    "static",
+                    "struct",
+                    "super",
+                    "trait",
+                    "type",
+                    "unsafe",
+                    "use",
+                    "where",
+                    "while",
+                    "union",
+                    "macro_rules",
+                    "trait",
+                ],
+                types: &[
+                    "bool", "char", "str", "String", "Vec", "Option", "Result", "Box", "Rc", "Arc",
+                    "HashMap", "HashSet", "BTreeMap", "Cow", "i8", "i16", "i32", "i64", "i128",
+                    "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64", "Self",
+                ],
+                constants: &["true", "false", "None", "Some", "Ok", "Err"],
+            },
+            Lang::Python => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: true,
+                keywords: &[
+                    "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
+                    "del", "elif", "else", "except", "finally", "for", "from", "global", "if",
+                    "import", "in", "is", "lambda", "match", "case", "nonlocal", "not", "or",
+                    "pass", "raise", "return", "try", "while", "with", "yield",
+                ],
+                types: &[
+                    "bool",
+                    "bytes",
+                    "dict",
+                    "float",
+                    "frozenset",
+                    "int",
+                    "list",
+                    "object",
+                    "set",
+                    "str",
+                    "tuple",
+                    "type",
+                    "Exception",
+                ],
+                constants: &["True", "False", "None", "self", "cls", "__name__"],
+            },
+            Lang::Js => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\'', '`'],
+                multiline_strings: true,
+                keywords: &[
+                    "async",
+                    "await",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "const",
+                    "continue",
+                    "debugger",
+                    "default",
+                    "delete",
+                    "do",
+                    "else",
+                    "export",
+                    "extends",
+                    "finally",
+                    "for",
+                    "from",
+                    "function",
+                    "get",
+                    "if",
+                    "import",
+                    "in",
+                    "instanceof",
+                    "let",
+                    "new",
+                    "of",
+                    "return",
+                    "set",
+                    "static",
+                    "super",
+                    "switch",
+                    "throw",
+                    "try",
+                    "typeof",
+                    "var",
+                    "void",
+                    "while",
+                    "with",
+                    "yield",
+                ],
+                types: &[
+                    "Array", "Boolean", "Date", "Error", "JSON", "Map", "Math", "Number", "Object",
+                    "Promise", "RegExp", "Set", "String", "Symbol", "console", "document",
+                    "window",
+                ],
+                constants: &[
+                    "true",
+                    "false",
+                    "null",
+                    "undefined",
+                    "NaN",
+                    "Infinity",
+                    "this",
+                ],
+            },
+            Lang::C => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "auto",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "const",
+                    "constexpr",
+                    "continue",
+                    "default",
+                    "delete",
+                    "do",
+                    "else",
+                    "enum",
+                    "explicit",
+                    "extern",
+                    "for",
+                    "friend",
+                    "goto",
+                    "if",
+                    "inline",
+                    "namespace",
+                    "new",
+                    "operator",
+                    "private",
+                    "protected",
+                    "public",
+                    "register",
+                    "return",
+                    "sizeof",
+                    "static",
+                    "struct",
+                    "switch",
+                    "template",
+                    "this",
+                    "throw",
+                    "try",
+                    "typedef",
+                    "typename",
+                    "union",
+                    "using",
+                    "virtual",
+                    "volatile",
+                    "while",
+                ],
+                types: &[
+                    "bool", "char", "double", "float", "int", "long", "short", "signed", "size_t",
+                    "string", "unsigned", "void", "wchar_t", "FILE", "vector", "map", "set",
+                ],
+                constants: &["true", "false", "NULL", "nullptr", "EOF"],
+            },
+            Lang::Java => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "assert",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "continue",
+                    "default",
+                    "do",
+                    "else",
+                    "enum",
+                    "extends",
+                    "final",
+                    "finally",
+                    "for",
+                    "if",
+                    "implements",
+                    "import",
+                    "instanceof",
+                    "interface",
+                    "native",
+                    "new",
+                    "package",
+                    "private",
+                    "protected",
+                    "public",
+                    "record",
+                    "return",
+                    "sealed",
+                    "static",
+                    "strictfp",
+                    "super",
+                    "switch",
+                    "synchronized",
+                    "throw",
+                    "throws",
+                    "transient",
+                    "try",
+                    "volatile",
+                    "while",
+                    "var",
+                    "sealed",
+                    "permits",
+                    "yield",
+                ],
+                types: &[
+                    "String",
+                    "Integer",
+                    "Long",
+                    "Double",
+                    "Float",
+                    "Boolean",
+                    "Object",
+                    "List",
+                    "Map",
+                    "Set",
+                    "ArrayList",
+                    "HashMap",
+                    "Optional",
+                    "Stream",
+                    "byte",
+                    "char",
+                    "double",
+                    "float",
+                    "int",
+                    "long",
+                    "short",
+                    "void",
+                ],
+                constants: &["true", "false", "null", "this", "super"],
+            },
+            Lang::Go => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '`'],
+                multiline_strings: true,
+                keywords: &[
+                    "break",
+                    "case",
+                    "chan",
+                    "const",
+                    "continue",
+                    "default",
+                    "defer",
+                    "else",
+                    "fallthrough",
+                    "for",
+                    "func",
+                    "go",
+                    "goto",
+                    "if",
+                    "import",
+                    "interface",
+                    "map",
+                    "package",
+                    "range",
+                    "return",
+                    "select",
+                    "struct",
+                    "switch",
+                    "type",
+                    "var",
+                ],
+                types: &[
+                    "any", "bool", "byte", "error", "float32", "float64", "int", "int8", "int16",
+                    "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32",
+                    "uint64", "uintptr",
+                ],
+                constants: &["true", "false", "nil", "iota"],
+            },
+            Lang::Shell => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "alias", "break", "case", "cd", "continue", "declare", "do", "done", "echo",
+                    "elif", "else", "esac", "eval", "exec", "exit", "export", "fi", "for",
+                    "function", "if", "in", "local", "printf", "read", "readonly", "return",
+                    "select", "set", "shift", "source", "then", "time", "trap", "typeset", "unset",
+                    "until", "while",
+                ],
+                types: &[],
+                constants: &["true", "false"],
+            },
+            Lang::Json => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"'],
+                multiline_strings: false,
+                keywords: &[],
+                types: &[],
+                constants: &["true", "false", "null"],
+            },
+            Lang::Yaml => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: true,
+                keywords: &[],
+                types: &[],
+                constants: &[
+                    "true", "false", "null", "yes", "no", "on", "off", "True", "False", "Null",
+                    "Yes", "No",
+                ],
+            },
+            Lang::Toml => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: true,
+                keywords: &[],
+                types: &[],
+                constants: &["true", "false"],
+            },
+            Lang::Markup => LangSpec {
+                line: &[],
+                block: Some(("<!--", "-->")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "html",
+                    "head",
+                    "body",
+                    "title",
+                    "meta",
+                    "link",
+                    "script",
+                    "style",
+                    "div",
+                    "span",
+                    "a",
+                    "p",
+                    "br",
+                    "hr",
+                    "img",
+                    "ul",
+                    "ol",
+                    "li",
+                    "table",
+                    "tr",
+                    "td",
+                    "th",
+                    "thead",
+                    "tbody",
+                    "form",
+                    "input",
+                    "button",
+                    "select",
+                    "option",
+                    "label",
+                    "section",
+                    "header",
+                    "footer",
+                    "nav",
+                    "main",
+                    "article",
+                    "svg",
+                    "path",
+                    "g",
+                    "xml",
+                    "component",
+                    "template",
+                    "router",
+                    "slot",
+                ],
+                types: &[],
+                constants: &[],
+            },
+            Lang::Css => LangSpec {
+                line: &[],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "important",
+                    "inherit",
+                    "initial",
+                    "none",
+                    "auto",
+                    "block",
+                    "flex",
+                    "grid",
+                    "absolute",
+                    "relative",
+                    "fixed",
+                    "sticky",
+                    "hidden",
+                    "visible",
+                    "solid",
+                    "transparent",
+                    "pointer",
+                    "nowrap",
+                    "center",
+                    "middle",
+                    "repeat",
+                    "cover",
+                    "contain",
+                    "border-box",
+                    "content-box",
+                ],
+                types: &[],
+                constants: &[],
+            },
+            Lang::Sql => LangSpec {
+                line: &["--"],
+                block: Some(("/*", "*/")),
+                quotes: &['\''],
+                multiline_strings: false,
+                keywords: &[
+                    "add",
+                    "all",
+                    "alter",
+                    "and",
+                    "as",
+                    "asc",
+                    "begin",
+                    "between",
+                    "by",
+                    "cascade",
+                    "case",
+                    "commit",
+                    "constraint",
+                    "create",
+                    "delete",
+                    "desc",
+                    "distinct",
+                    "drop",
+                    "else",
+                    "end",
+                    "exists",
+                    "foreign",
+                    "from",
+                    "full",
+                    "group",
+                    "having",
+                    "in",
+                    "index",
+                    "inner",
+                    "insert",
+                    "into",
+                    "is",
+                    "join",
+                    "key",
+                    "left",
+                    "like",
+                    "limit",
+                    "not",
+                    "offset",
+                    "on",
+                    "or",
+                    "order",
+                    "outer",
+                    "primary",
+                    "references",
+                    "returning",
+                    "right",
+                    "rollback",
+                    "select",
+                    "set",
+                    "table",
+                    "then",
+                    "transaction",
+                    "union",
+                    "unique",
+                    "update",
+                    "values",
+                    "view",
+                    "when",
+                    "where",
+                    "with",
+                ],
+                types: &[
+                    "bigint",
+                    "boolean",
+                    "char",
+                    "date",
+                    "decimal",
+                    "int",
+                    "integer",
+                    "json",
+                    "jsonb",
+                    "numeric",
+                    "serial",
+                    "text",
+                    "timestamp",
+                    "uuid",
+                    "varchar",
+                ],
+                constants: &["null", "true", "false"],
+            },
+            Lang::Ruby => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "and",
+                    "begin",
+                    "break",
+                    "case",
+                    "class",
+                    "def",
+                    "do",
+                    "else",
+                    "elsif",
+                    "end",
+                    "ensure",
+                    "for",
+                    "if",
+                    "in",
+                    "include",
+                    "lambda",
+                    "module",
+                    "next",
+                    "not",
+                    "or",
+                    "require",
+                    "rescue",
+                    "retry",
+                    "return",
+                    "self",
+                    "super",
+                    "then",
+                    "unless",
+                    "until",
+                    "when",
+                    "while",
+                    "yield",
+                    "attr_accessor",
+                    "attr_reader",
+                    "attr_writer",
+                ],
+                types: &[],
+                constants: &["nil", "true", "false", "self"],
+            },
+            Lang::Php => LangSpec {
+                line: &["//", "#"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "and",
+                    "array",
+                    "as",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "clone",
+                    "const",
+                    "continue",
+                    "declare",
+                    "default",
+                    "do",
+                    "echo",
+                    "else",
+                    "elseif",
+                    "empty",
+                    "enddeclare",
+                    "endfor",
+                    "endforeach",
+                    "endif",
+                    "endswitch",
+                    "endwhile",
+                    "extends",
+                    "final",
+                    "finally",
+                    "fn",
+                    "for",
+                    "foreach",
+                    "function",
+                    "global",
+                    "goto",
+                    "if",
+                    "implements",
+                    "include",
+                    "include_once",
+                    "instanceof",
+                    "interface",
+                    "isset",
+                    "list",
+                    "match",
+                    "namespace",
+                    "new",
+                    "or",
+                    "print",
+                    "private",
+                    "protected",
+                    "public",
+                    "require",
+                    "require_once",
+                    "return",
+                    "static",
+                    "switch",
+                    "throw",
+                    "trait",
+                    "try",
+                    "unset",
+                    "use",
+                    "while",
+                    "xor",
+                    "yield",
+                ],
+                types: &[],
+                constants: &["true", "false", "null", "self", "parent"],
+            },
+            Lang::Lua => LangSpec {
+                line: &["--"],
+                block: Some(("--[[", "]]")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "and", "break", "do", "else", "elseif", "end", "for", "function", "goto", "if",
+                    "in", "local", "not", "or", "repeat", "return", "then", "until", "while",
+                ],
+                types: &[],
+                constants: &["true", "false", "nil", "self"],
+            },
+            Lang::Kotlin => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "actual",
+                    "as",
+                    "break",
+                    "by",
+                    "catch",
+                    "class",
+                    "companion",
+                    "const",
+                    "constructor",
+                    "continue",
+                    "data",
+                    "do",
+                    "else",
+                    "enum",
+                    "expect",
+                    "final",
+                    "finally",
+                    "for",
+                    "fun",
+                    "get",
+                    "if",
+                    "in",
+                    "infix",
+                    "init",
+                    "inline",
+                    "interface",
+                    "internal",
+                    "is",
+                    "lateinit",
+                    "object",
+                    "open",
+                    "operator",
+                    "out",
+                    "override",
+                    "package",
+                    "private",
+                    "protected",
+                    "public",
+                    "reified",
+                    "return",
+                    "sealed",
+                    "set",
+                    "super",
+                    "suspend",
+                    "tailrec",
+                    "this",
+                    "throw",
+                    "try",
+                    "typealias",
+                    "val",
+                    "var",
+                    "vararg",
+                    "when",
+                    "where",
+                    "while",
+                    "import",
+                ],
+                types: &[
+                    "Any", "Array", "Boolean", "Char", "Double", "Float", "Int", "List", "Long",
+                    "Map", "Nothing", "Set", "String", "Unit",
+                ],
+                constants: &["true", "false", "null", "this", "super"],
+            },
+            Lang::Swift => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"'],
+                multiline_strings: true,
+                keywords: &[
+                    "actor",
+                    "any",
+                    "as",
+                    "associatedtype",
+                    "async",
+                    "await",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "convenience",
+                    "continue",
+                    "default",
+                    "defer",
+                    "deinit",
+                    "do",
+                    "else",
+                    "enum",
+                    "extension",
+                    "fallthrough",
+                    "fileprivate",
+                    "final",
+                    "for",
+                    "func",
+                    "guard",
+                    "if",
+                    "import",
+                    "in",
+                    "init",
+                    "inout",
+                    "internal",
+                    "is",
+                    "lazy",
+                    "let",
+                    "mutating",
+                    "nonmutating",
+                    "open",
+                    "operator",
+                    "override",
+                    "private",
+                    "protocol",
+                    "public",
+                    "repeat",
+                    "required",
+                    "rethrows",
+                    "return",
+                    "self",
+                    "some",
+                    "static",
+                    "struct",
+                    "subscript",
+                    "super",
+                    "switch",
+                    "throw",
+                    "throws",
+                    "try",
+                    "typealias",
+                    "var",
+                    "weak",
+                    "where",
+                    "while",
+                ],
+                types: &[
+                    "Any",
+                    "AnyObject",
+                    "Array",
+                    "Bool",
+                    "Character",
+                    "Dictionary",
+                    "Double",
+                    "Float",
+                    "Int",
+                    "Optional",
+                    "Set",
+                    "String",
+                    "Void",
+                ],
+                constants: &["nil", "true", "false", "self", "super"],
+            },
+            Lang::Csharp => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "as",
+                    "async",
+                    "await",
+                    "base",
+                    "break",
+                    "case",
+                    "catch",
+                    "checked",
+                    "class",
+                    "const",
+                    "continue",
+                    "default",
+                    "delegate",
+                    "do",
+                    "else",
+                    "enum",
+                    "event",
+                    "explicit",
+                    "extern",
+                    "finally",
+                    "fixed",
+                    "for",
+                    "foreach",
+                    "get",
+                    "goto",
+                    "if",
+                    "implicit",
+                    "in",
+                    "interface",
+                    "internal",
+                    "is",
+                    "lock",
+                    "namespace",
+                    "new",
+                    "operator",
+                    "out",
+                    "override",
+                    "params",
+                    "partial",
+                    "private",
+                    "protected",
+                    "public",
+                    "readonly",
+                    "record",
+                    "ref",
+                    "return",
+                    "sealed",
+                    "set",
+                    "sizeof",
+                    "stackalloc",
+                    "static",
+                    "struct",
+                    "switch",
+                    "this",
+                    "throw",
+                    "try",
+                    "typeof",
+                    "unchecked",
+                    "unsafe",
+                    "using",
+                    "value",
+                    "virtual",
+                    "when",
+                    "where",
+                    "while",
+                    "yield",
+                ],
+                types: &[
+                    "bool", "byte", "char", "decimal", "double", "float", "int", "long", "object",
+                    "sbyte", "short", "string", "uint", "ulong", "ushort", "void",
+                ],
+                constants: &["null", "true", "false", "this", "base"],
+            },
+            Lang::R => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "break", "else", "for", "function", "if", "in", "library", "next", "repeat",
+                    "require", "return", "while",
+                ],
+                types: &[],
+                constants: &["TRUE", "FALSE", "NULL", "NA", "NaN", "Inf", "True", "False"],
+            },
+            Lang::Haskell => LangSpec {
+                line: &["--"],
+                block: Some(("{-", "-}")),
+                quotes: &['"'],
+                multiline_strings: false,
+                keywords: &[
+                    "as",
+                    "case",
+                    "class",
+                    "data",
+                    "default",
+                    "deriving",
+                    "do",
+                    "else",
+                    "forall",
+                    "foreign",
+                    "hiding",
+                    "if",
+                    "import",
+                    "in",
+                    "infix",
+                    "infixl",
+                    "infixr",
+                    "instance",
+                    "let",
+                    "module",
+                    "newtype",
+                    "of",
+                    "qualified",
+                    "then",
+                    "type",
+                    "where",
+                ],
+                types: &[
+                    "Bool", "Char", "Double", "Either", "Float", "IO", "Int", "Integer", "Maybe",
+                    "String",
+                ],
+                constants: &["True", "False", "Nothing", "Just"],
+            },
+            Lang::Scala => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "case",
+                    "catch",
+                    "class",
+                    "def",
+                    "do",
+                    "else",
+                    "extends",
+                    "final",
+                    "finally",
+                    "for",
+                    "forSome",
+                    "if",
+                    "implicit",
+                    "import",
+                    "lazy",
+                    "match",
+                    "new",
+                    "object",
+                    "override",
+                    "package",
+                    "private",
+                    "protected",
+                    "return",
+                    "sealed",
+                    "super",
+                    "this",
+                    "throw",
+                    "trait",
+                    "try",
+                    "type",
+                    "val",
+                    "var",
+                    "while",
+                    "with",
+                    "yield",
+                ],
+                types: &[
+                    "Any", "AnyRef", "Array", "Boolean", "Byte", "Char", "Double", "Either",
+                    "Float", "Int", "List", "Long", "Map", "None", "Nothing", "Option", "Set",
+                    "Short", "Some", "String", "Unit",
+                ],
+                constants: &["null", "true", "false", "this", "super"],
+            },
+            Lang::Dart => LangSpec {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "abstract",
+                    "as",
+                    "assert",
+                    "async",
+                    "await",
+                    "break",
+                    "case",
+                    "catch",
+                    "class",
+                    "const",
+                    "continue",
+                    "covariant",
+                    "default",
+                    "do",
+                    "dynamic",
+                    "else",
+                    "enum",
+                    "extends",
+                    "external",
+                    "factory",
+                    "final",
+                    "finally",
+                    "for",
+                    "get",
+                    "if",
+                    "implements",
+                    "import",
+                    "in",
+                    "is",
+                    "late",
+                    "library",
+                    "mixin",
+                    "new",
+                    "operator",
+                    "part",
+                    "required",
+                    "rethrow",
+                    "return",
+                    "set",
+                    "static",
+                    "super",
+                    "switch",
+                    "sync",
+                    "this",
+                    "throw",
+                    "try",
+                    "typedef",
+                    "var",
+                    "void",
+                    "while",
+                    "with",
+                    "yield",
+                ],
+                types: &[
+                    "bool", "double", "Dynamic", "Future", "int", "Iterable", "List", "Map", "num",
+                    "Object", "Set", "Stream", "String",
+                ],
+                constants: &["null", "true", "false", "this", "super"],
+            },
+            Lang::Perl => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "bless", "chomp", "chop", "continue", "defined", "delete", "die", "do", "each",
+                    "else", "elsif", "eval", "exists", "foreach", "for", "grep", "if", "join",
+                    "keys", "last", "local", "map", "my", "next", "our", "package", "pop", "print",
+                    "push", "redo", "ref", "require", "return", "reverse", "say", "shift", "sort",
+                    "split", "sub", "undef", "unless", "unshift", "until", "use", "values", "warn",
+                    "while",
+                ],
+                types: &[],
+                constants: &["undef", "__FILE__", "__LINE__"],
+            },
+            Lang::Ini => LangSpec {
+                line: &["#", ";"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[],
+                types: &[],
+                constants: &["true", "false", "yes", "no", "on", "off", "null"],
+            },
+            Lang::Make => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "define",
+                    "else",
+                    "endef",
+                    "endif",
+                    "export",
+                    "ifdef",
+                    "ifeq",
+                    "ifndef",
+                    "ifneq",
+                    "include",
+                    "override",
+                    "unexport",
+                    "vpath",
+                    ".PHONY",
+                    ".SUFFIXES",
+                    ".DEFAULT",
+                    ".PRECIOUS",
+                ],
+                types: &[],
+                constants: &[],
+            },
+            Lang::Docker => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "ADD",
+                    "ARG",
+                    "AS",
+                    "CMD",
+                    "COPY",
+                    "ENTRYPOINT",
+                    "ENV",
+                    "EXPOSE",
+                    "FROM",
+                    "HEALTHCHECK",
+                    "LABEL",
+                    "MAINTAINER",
+                    "ONBUILD",
+                    "RUN",
+                    "SHELL",
+                    "STOPSIGNAL",
+                    "USER",
+                    "VOLUME",
+                    "WORKDIR",
+                ],
+                types: &[],
+                constants: &[],
+            },
+            Lang::Nix => LangSpec {
+                line: &["#"],
+                block: Some(("/*", "*/")),
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "assert", "else", "if", "import", "in", "inherit", "let", "or", "rec", "then",
+                    "with",
+                ],
+                types: &["builtins", "derivation", "mkDerivation"],
+                constants: &["true", "false", "null"],
+            },
+            Lang::Elixir => LangSpec {
+                line: &["#"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: true,
+                keywords: &[
+                    "after",
+                    "alias",
+                    "and",
+                    "case",
+                    "catch",
+                    "cond",
+                    "def",
+                    "defguard",
+                    "defimpl",
+                    "defmacro",
+                    "defmodule",
+                    "defp",
+                    "defprotocol",
+                    "defstruct",
+                    "do",
+                    "else",
+                    "end",
+                    "fn",
+                    "for",
+                    "if",
+                    "import",
+                    "in",
+                    "not",
+                    "or",
+                    "quote",
+                    "raise",
+                    "receive",
+                    "require",
+                    "rescue",
+                    "super",
+                    "try",
+                    "unless",
+                    "unquote",
+                    "use",
+                    "when",
+                    "with",
+                ],
+                types: &[],
+                constants: &["nil", "true", "false"],
+            },
+            Lang::Erlang => LangSpec {
+                line: &["%"],
+                block: None,
+                quotes: &['"', '\''],
+                multiline_strings: false,
+                keywords: &[
+                    "after", "and", "andalso", "band", "begin", "bnot", "bor", "bsl", "bsr",
+                    "bxor", "case", "catch", "cond", "div", "end", "fun", "if", "let", "not", "of",
+                    "or", "orelse", "receive", "rem", "try", "when", "xor",
+                ],
+                types: &[],
+                constants: &["true", "false", "ok", "error", "undefined"],
+            },
+            Lang::Clojure => LangSpec {
+                line: &[";"],
+                block: None,
+                quotes: &['"'],
+                multiline_strings: false,
+                keywords: &[
+                    "and",
+                    "binding",
+                    "case",
+                    "catch",
+                    "comment",
+                    "cond",
+                    "condp",
+                    "def",
+                    "defmacro",
+                    "defmethod",
+                    "defmulti",
+                    "defn",
+                    "defonce",
+                    "defprotocol",
+                    "defrecord",
+                    "deftype",
+                    "do",
+                    "doseq",
+                    "dotimes",
+                    "finally",
+                    "fn",
+                    "for",
+                    "if",
+                    "if-let",
+                    "if-not",
+                    "import",
+                    "in-ns",
+                    "let",
+                    "letfn",
+                    "loop",
+                    "new",
+                    "not",
+                    "ns",
+                    "or",
+                    "quote",
+                    "recur",
+                    "refer",
+                    "require",
+                    "set!",
+                    "throw",
+                    "try",
+                    "use",
+                    "var",
+                    "when",
+                    "when-let",
+                ],
+                types: &[],
+                constants: &["nil", "true", "false"],
+            },
+        }
+    }
+}
+
+/// The language for a path, or `None` when it is not source code we highlight.
+fn lang_for_path(path: &Path) -> Option<Lang> {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        match name {
+            "Makefile" | "makefile" | "GNUmakefile" | "Justfile" | "justfile" => {
+                return Some(Lang::Make);
+            }
+            "Dockerfile" | "Containerfile" => return Some(Lang::Docker),
+            "CMakeLists.txt" => return Some(Lang::C),
+            ".bashrc" | ".zshrc" | ".bash_profile" | ".profile" => return Some(Lang::Shell),
+            _ => {}
+        }
+    }
+    Some(match ext_lower(path)?.as_str() {
+        "rs" => Lang::Rust,
+        "py" | "pyw" | "pyi" => Lang::Python,
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "mts" | "cts" => Lang::Js,
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "ino" | "m" | "mm" => Lang::C,
+        "java" => Lang::Java,
+        "go" => Lang::Go,
+        "sh" | "bash" | "zsh" | "fish" | "ksh" | "dash" => Lang::Shell,
+        "json" | "jsonc" | "json5" | "geojson" => Lang::Json,
+        "yml" | "yaml" => Lang::Yaml,
+        "toml" => Lang::Toml,
+        "html" | "htm" | "xhtml" | "xml" | "svg" | "vue" | "svelte" | "astro" => Lang::Markup,
+        "css" | "scss" | "sass" | "less" | "styl" => Lang::Css,
+        "sql" => Lang::Sql,
+        "rb" | "rake" | "gemspec" => Lang::Ruby,
+        "php" | "phtml" => Lang::Php,
+        "lua" => Lang::Lua,
+        "kt" | "kts" => Lang::Kotlin,
+        "swift" => Lang::Swift,
+        "cs" => Lang::Csharp,
+        "r" | "rmd" => Lang::R,
+        "hs" | "lhs" => Lang::Haskell,
+        "scala" | "sc" => Lang::Scala,
+        "dart" => Lang::Dart,
+        "pl" | "pm" => Lang::Perl,
+        "ini" | "cfg" | "conf" | "properties" | "editorconfig" | "env" | "service" => Lang::Ini,
+        "mk" | "mak" => Lang::Make,
+        "nix" => Lang::Nix,
+        "ex" | "exs" => Lang::Elixir,
+        "erl" | "hrl" => Lang::Erlang,
+        "clj" | "cljs" | "cljc" | "edn" => Lang::Clojure,
+        _ => return None,
+    })
+}
+
+/// Render source code with lightweight syntax highlighting, or plain monospace
+/// when the file is too big to colour.
+fn code_preview(ui: &mut egui::Ui, t: &Theme, lang: Lang, text: &str) {
+    if text.len() > MAX_HIGHLIGHT_BYTES {
+        ui.label(
+            egui::RichText::new(text)
+                .monospace()
+                .size(11.5)
+                .color(t.dim),
+        );
+        return;
+    }
+    ui.label(highlight_code(text, lang, &t.syntax()));
+}
+
+/// Append `s` to the job in `color`, merging with the previous run when the
+/// colour is unchanged so a mostly-plain file stays a handful of sections.
+fn push_run(job: &mut egui::text::LayoutJob, s: &str, format: egui::TextFormat) {
+    if s.is_empty() {
+        return;
+    }
+    job.text.push_str(s);
+    let end = job.text.len();
+    if let Some(last) = job.sections.last_mut()
+        && last.format.color == format.color
+    {
+        last.byte_range.end = end;
+        return;
+    }
+    let start = end - s.len();
+    job.sections.push(egui::text::LayoutSection {
+        leading_space: 0.0,
+        byte_range: start..end,
+        format,
+    });
+}
+
+/// Tokenise `text` into coloured runs. Best-effort by design: an unknown word
+/// is plain, and an unterminated string or block comment simply runs to the end
+/// of its line (or of the file) with no error recovery.
+fn highlight_code(text: &str, lang: Lang, c: &SyntaxColors) -> egui::text::LayoutJob {
+    let spec = lang.spec();
+    let font = egui::FontId::monospace(11.5);
+    let fmt = |color| egui::TextFormat {
+        font_id: font.clone(),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    let n = text.len();
+    let mut i = 0;
+    while i < n {
+        let rest = &text[i..];
+        let ch = rest.chars().next().unwrap();
+
+        // Block comment.
+        if let Some((open, close)) = spec.block
+            && rest.starts_with(open)
+        {
+            let from = i + open.len();
+            let end = text[from..]
+                .find(close)
+                .map_or(n, |p| from + p + close.len());
+            push_run(&mut job, &text[i..end], fmt(c.comment));
+            i = end;
+            continue;
+        }
+
+        // Line comment.
+        if spec.line.iter().any(|m| rest.starts_with(*m)) {
+            let end = text[i..].find('\n').map_or(n, |p| i + p);
+            push_run(&mut job, &text[i..end], fmt(c.comment));
+            i = end;
+            continue;
+        }
+
+        // String literal.
+        if spec.quotes.contains(&ch) {
+            let quote = ch;
+            let mut j = i + quote.len_utf8();
+            let mut escaped = false;
+            while j < n {
+                let cj = text[j..].chars().next().unwrap();
+                if escaped {
+                    escaped = false;
+                } else if cj == '\\' {
+                    escaped = true;
+                } else if cj == quote {
+                    let after = j + cj.len_utf8();
+                    // A doubled quote is an escaped quote (SQL) and, in practice,
+                    // harmless to treat the same way elsewhere.
+                    if text[after..].starts_with(quote) {
+                        j = after + quote.len_utf8();
+                        continue;
+                    }
+                    j = after;
+                    break;
+                } else if cj == '\n' && !spec.multiline_strings {
+                    break;
+                }
+                j += cj.len_utf8();
+            }
+            push_run(&mut job, &text[i..j], fmt(c.string));
+            i = j;
+            continue;
+        }
+
+        // `#directive` (C, Rust attributes), `#id` (CSS) and `@decorator`.
+        if (ch == '@' || (ch == '#' && !spec.line.contains(&"#")))
+            && let Some(next) = rest[ch.len_utf8()..].chars().next()
+            && (next.is_alphabetic() || next == '_')
+        {
+            let mut j = i + ch.len_utf8();
+            while j < n {
+                let cj = text[j..].chars().next().unwrap();
+                if cj.is_alphanumeric() || cj == '_' || cj == '-' || cj == '.' {
+                    j += cj.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            push_run(&mut job, &text[i..j], fmt(c.type_));
+            i = j;
+            continue;
+        }
+
+        // Number (including hex/binary/float tails, crudely).
+        if ch.is_ascii_digit() {
+            let mut j = i;
+            let mut prev = '\0';
+            while j < n {
+                let cj = text[j..].chars().next().unwrap();
+                let exponent_sign =
+                    (cj == '+' || cj == '-') && matches!(prev, 'e' | 'E' | 'p' | 'P');
+                if cj.is_ascii_alphanumeric() || cj == '_' || cj == '.' || exponent_sign {
+                    prev = cj;
+                    j += cj.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            push_run(&mut job, &text[i..j], fmt(c.number));
+            i = j;
+            continue;
+        }
+
+        // Identifier: keyword, type, constant, call, or plain.
+        if ch.is_alphabetic() || ch == '_' || ch == '$' || !ch.is_ascii() {
+            let mut j = i;
+            while j < n {
+                let cj = text[j..].chars().next().unwrap();
+                if cj.is_alphanumeric() || cj == '_' || cj == '$' || !cj.is_ascii() {
+                    j += cj.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let word = &text[i..j];
+            let color = if spec.keywords.contains(&word) {
+                c.keyword
+            } else if spec.types.contains(&word) {
+                c.type_
+            } else if spec.constants.contains(&word) {
+                c.number
+            } else if is_call(&text[j..]) {
+                c.func
+            } else {
+                c.text
+            };
+            push_run(&mut job, word, fmt(color));
+            i = j;
+            continue;
+        }
+
+        // Plain run: whitespace, operators and punctuation.
+        let mut j = i + ch.len_utf8();
+        while j < n {
+            let cj = text[j..].chars().next().unwrap();
+            if cj.is_ascii_digit()
+                || cj.is_alphabetic()
+                || cj == '_'
+                || cj == '$'
+                || cj == '@'
+                || cj == '#'
+                || !cj.is_ascii()
+                || spec.quotes.contains(&cj)
+            {
+                break;
+            }
+            let r = &text[j..];
+            if spec.block.is_some_and(|(o, _)| r.starts_with(o))
+                || spec.line.iter().any(|m| r.starts_with(*m))
+            {
+                break;
+            }
+            j += cj.len_utf8();
+        }
+        push_run(&mut job, &text[i..j], fmt(c.text));
+        i = j;
+    }
+    job
+}
+
+/// Whether the identifier ending at `rest` is immediately called (`name(`).
+fn is_call(rest: &str) -> bool {
+    rest.trim_start().starts_with('(')
 }
 
 /// A `##`..`######` heading's text, or `None` for anything else.
@@ -7544,5 +9231,121 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The syntax highlighter is a pure function over `(text, language)`, so its
+/// behaviour pins down cheaply: it never loses a byte, it colours the classes
+/// it claims to, and an unterminated token cannot run away.
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+
+    /// The run whose text contains `needle`, with its colour.
+    fn run_containing(job: &egui::text::LayoutJob, needle: &str) -> (String, egui::Color32) {
+        for s in &job.sections {
+            let text = &job.text[s.byte_range.clone()];
+            if text.contains(needle) {
+                return (text.to_string(), s.format.color);
+            }
+        }
+        panic!("no highlighted run contains {needle:?}");
+    }
+
+    fn highlight(text: &str, lang: Lang) -> egui::text::LayoutJob {
+        highlight_code(text, lang, &Theme::DARK.syntax())
+    }
+
+    #[test]
+    fn runs_tile_the_text_exactly() {
+        let src = "fn main() {\n    let x = 1; // hi\n}\n";
+        let job = highlight(src, Lang::Rust);
+        assert_eq!(job.text, src, "no bytes are added or dropped");
+        let mut at = 0;
+        for s in &job.sections {
+            assert_eq!(s.byte_range.start, at, "sections are contiguous");
+            at = s.byte_range.end;
+        }
+        assert_eq!(at, src.len(), "sections cover the whole text");
+    }
+
+    #[test]
+    fn rust_colours_keywords_comments_strings_and_numbers() {
+        let c = Theme::DARK.syntax();
+        assert_eq!(
+            run_containing(&highlight("fn main() {}", Lang::Rust), "fn").1,
+            c.keyword
+        );
+        let src = "let s = \"hi\"; let n = 42; // note";
+        assert_eq!(
+            run_containing(&highlight(src, Lang::Rust), "\"hi\"").1,
+            c.string
+        );
+        assert_eq!(
+            run_containing(&highlight(src, Lang::Rust), "42").1,
+            c.number
+        );
+        assert_eq!(
+            run_containing(&highlight(src, Lang::Rust), "// note").1,
+            c.comment
+        );
+    }
+
+    #[test]
+    fn an_unterminated_string_stops_at_the_newline() {
+        let src = "let s = \"unterminated\nlet y = 2;";
+        let job = highlight(src, Lang::Rust);
+        assert_eq!(job.text, src);
+        assert_eq!(
+            run_containing(&job, "\"unterminated").1,
+            Theme::DARK.syntax().string
+        );
+        // `let y` is still recognised after the broken string.
+        assert_eq!(run_containing(&job, "let").1, Theme::DARK.syntax().keyword);
+    }
+
+    #[test]
+    fn python_string_escapes_do_not_end_the_string() {
+        let src = "s = \"a\\\"b\"";
+        let job = highlight(src, Lang::Python);
+        assert_eq!(
+            run_containing(&job, "a\\\"b").1,
+            Theme::DARK.syntax().string
+        );
+    }
+
+    #[test]
+    fn hash_comments_and_css_ids_are_told_apart() {
+        let c = Theme::DARK.syntax();
+        // Python: `#` begins a comment.
+        assert_eq!(
+            run_containing(&highlight("x = 1  # hi", Lang::Python), "# hi").1,
+            c.comment
+        );
+        // Rust: `#` never starts a comment (`//` does).
+        let job = highlight("#[derive(Debug)]", Lang::Rust);
+        assert!(job.sections.iter().all(|s| s.format.color != c.comment));
+        // CSS: `#id` is a selector, coloured as a name.
+        assert_eq!(
+            run_containing(&highlight("#id { color: red }", Lang::Css), "#id").1,
+            c.type_
+        );
+    }
+
+    #[test]
+    fn extensions_and_fence_tags_map_to_languages() {
+        assert!(matches!(lang_for_path(Path::new("a.rs")), Some(Lang::Rust)));
+        assert!(matches!(
+            lang_for_path(Path::new("Makefile")),
+            Some(Lang::Make)
+        ));
+        assert!(matches!(
+            lang_for_path(Path::new("Dockerfile")),
+            Some(Lang::Docker)
+        ));
+        assert!(lang_for_path(Path::new("notes.md")).is_none());
+        assert!(matches!(Lang::from_tag("bash"), Some(Lang::Shell)));
+        assert!(matches!(Lang::from_tag("TypeScript"), Some(Lang::Js)));
+        assert!(Lang::from_tag("").is_none());
     }
 }
