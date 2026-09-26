@@ -22,7 +22,7 @@ results header  31 results · 100,477 files indexed · 2 ms   Sort by ▾  Cozy 
 └───────────────┴───────────────────────────────────────────┴──────────────────┘
 view tabs       Results · Preview · Details · Search History | bulk actions
 recent row      Recent searches: chips…                          Clear
-status bar      Indexing: idle (86,100 files) CPU RAM Zoom | Query Search time Indexed · hints · mark · version
+status bar      Indexing: idle (86,100 files) CPU RAM Zoom | Query Search time Indexed · hints · version
 ```
 
 ## Searching

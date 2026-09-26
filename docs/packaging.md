@@ -42,6 +42,15 @@ All three formats install the same payload:
 (which already runs the GUI *and* the daemon) and would add another ~17 MB, so
 it is deliberately not packaged. `make install` still installs it locally.
 
+`make install` is the user-local counterpart to these packages: it drops the
+binaries in `~/.local/bin` and the desktop entry, AppStream metadata and hicolor
+icon in `~/.local/share/…`. The desktop entry and icon are what put the app in
+the launcher, and what let the compositor find the logo for the *window
+decoration* — on Wayland a window carries no icon of its own, so the decoration
+resolves the application id against the installed desktop entry. Without them a
+title bar shows a generic placeholder even though the binaries work fine.
+`make uninstall` removes all of it.
+
 The installed size of the `.deb` is ~23 MB (6.4 MB compressed), essentially all
 of it the three Rust binaries.
 
@@ -50,9 +59,11 @@ of it the three Rust binaries.
 ```
 packaging/
   common/           desktop entry + AppStream metainfo (shared by all formats)
-  icons/            hicolor icon theme tree (SVG; PNGs are rendered at build time).
-                    The mark is drawn in code too — see `gui/src/logo.rs`, which
-                    the SVG mirrors shape for shape.
+  icons/            hicolor icon theme tree; the SVG is `icons/colored-logo.svg`
+                    under the application id, and PNGs are rendered from it at
+                    build time. The app embeds a 512 px copy —
+                    `gui/assets/logo.png` — for its window icon, tray pixmap and
+                    About dialog.
   debian/           control template (substituted by the build script)
   rpm/              spec template (substituted by the build script)
   flatpak/          manifest + generated cargo-sources.json
@@ -101,6 +112,28 @@ These are placeholders and should be changed to your own identifiers:
    field matches, so the old `url-homepage-missing` warning is gone.
 4. **Version.** Bump `VERSION`; `Cargo.toml`, the deb, the spec and the Flatpak
    build all read from it.
+
+## Brand assets
+
+`icons/` at the repository root holds the logo as exported:
+
+| File | Use |
+| --- | --- |
+| `colored-logo.svg`, `.png` | the logo on its own cream background — used by the README and the installed icon, so it reads on light *and* dark pages |
+| `transparent-logo.svg`, `.png` | the same artwork without a background, for placing on a colour you control |
+| `colored-logo.pdf`, `transparent-logo.pdf` | print |
+
+Two copies of it are checked in, because neither can be referenced from where the
+other lives. Keep them in step by hand:
+
+- `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg` —
+  `colored-logo.svg` plus a header comment. The file name has to match the
+  application id for icon themes and launchers to find it.
+- `gui/assets/logo.png` — a 512 px render of the same tile, compiled into the
+  binary for the window icon, the tray pixmap and the About dialog.
+
+`make deb` also renders PNG icons (16–512 px) from the SVG in the packaging tree,
+so a `.deb` carries both.
 
 ## Dependencies, and why they are listed by hand
 

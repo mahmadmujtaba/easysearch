@@ -3249,9 +3249,9 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// The logo, rasterised once and reused.
+    /// The logo as a texture, uploaded once and reused.
     fn logo(&mut self, ctx: &egui::Context) -> egui::TextureHandle {
-        const SIZE: u32 = 128;
+        const SIZE: u32 = 512;
         self.logo_tex
             .get_or_insert_with(|| {
                 let image = egui::ColorImage::from_rgba_unmultiplied(
@@ -3273,7 +3273,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.vertical_centered(|ui| {
                     let mark = self.logo(ui.ctx());
-                    ui.add(egui::Image::new((mark.id(), egui::vec2(64.0, 64.0))));
+                    ui.add(egui::Image::new((mark.id(), egui::vec2(168.0, 168.0))));
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new("EasySearch").size(20.0).strong());
                     ui.label(
@@ -5126,7 +5126,7 @@ impl App {
             }
             // Idle state: the mark, then search tips + recent searches.
             let mark = self.logo(ui.ctx());
-            ui.add(egui::Image::new((mark.id(), egui::vec2(72.0, 72.0))));
+            ui.add(egui::Image::new((mark.id(), egui::vec2(200.0, 200.0))));
             ui.add_space(12.0);
             ui.label(
                 egui::RichText::new("Start typing to search")
@@ -5967,12 +5967,6 @@ impl App {
                         .color(t.faint),
                 )
                 .on_hover_text("Running version — updates install in place");
-                // The mark, tucked in beside the version: always on screen, and
-                // the one place a glance ties the window to its icon.
-                let mark = self.logo(ui.ctx());
-                ui.add(egui::Image::new((mark.id(), egui::vec2(13.0, 13.0))))
-                    .on_hover_text("EasySearch");
-                ui.add_space(3.0);
                 if let Some(version) = &self.update_banner {
                     ui.label(
                         egui::RichText::new(format!("⬆ v{version} available"))

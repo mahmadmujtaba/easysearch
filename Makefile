@@ -13,7 +13,10 @@
 #   make run-gui    run just the GUI binary (dev tool)
 #   make daemon     run just the search daemon (HTTP/JSON API)
 #   make dist       copy the shareable single binary to dist/
-#   make install    copy release binaries to ~/.local/bin
+#   make install    release binaries to ~/.local/bin + desktop entry and icon
+#                   to ~/.local/share (so the launcher and the window
+#                   decoration can find the logo)
+#   make uninstall  remove everything `make install` put there
 #   make deb        build a Debian package (.deb)
 #   make rpm        build an RPM (.rpm)     [needs rpmbuild]
 #   make flatpak    build a Flatpak bundle  [needs flatpak-builder]
@@ -28,6 +31,7 @@ CARGO_BIN := $(shell command -v cargo 2>/dev/null || echo "$(HOME)/.cargo/bin/ca
 
 BIN_DIR    := target/release
 INSTALLDIR := $(HOME)/.local/bin
+DATADIR    := $(HOME)/.local/share
 
 # Reverse-DNS application id, shared by the desktop entry, the AppStream
 # metainfo file and the Flatpak manifest. Change it in one place here and in
@@ -134,17 +138,39 @@ daemon: release
 daemon-dev: build
 	./target/debug/easysearch-daemon --addr 127.0.0.1:5858
 
-## Install release binaries into ~/.local/bin.
+## Install release binaries into ~/.local/bin, plus the desktop entry, the icon
+## and the AppStream metadata into ~/.local/share.
+##
+## The desktop entry and icon are what put the app in the launcher — and what let
+## the compositor find the logo for the window decoration: on Wayland a window
+## has no icon of its own, the decoration resolves the app id against the
+## installed desktop entry.
 install: release
 	mkdir -p $(INSTALLDIR)
 	install -m 0755 $(BIN_DIR)/easysearch $(INSTALLDIR)/easysearch
 	install -m 0755 $(BIN_DIR)/easysearch-cli $(INSTALLDIR)/easysearch-cli
 	install -m 0755 $(BIN_DIR)/easysearch-gui $(INSTALLDIR)/easysearch-gui
 	install -m 0755 $(BIN_DIR)/easysearch-daemon $(INSTALLDIR)/easysearch-daemon
+	mkdir -p $(DATADIR)/applications $(DATADIR)/metainfo \
+	         $(DATADIR)/icons/hicolor/scalable/apps
+	install -m 0644 packaging/common/$(APP_ID).desktop $(DATADIR)/applications/
+	install -m 0644 packaging/common/$(APP_ID).metainfo.xml $(DATADIR)/metainfo/
+	install -m 0644 packaging/icons/hicolor/scalable/apps/$(APP_ID).svg \
+	         $(DATADIR)/icons/hicolor/scalable/apps/
+	@if command -v update-desktop-database >/dev/null 2>&1; then \
+		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
+	fi
 	@echo "Installed into $(INSTALLDIR): easysearch, easysearch-cli, easysearch-gui, easysearch-daemon"
+	@echo "Desktop integration into $(DATADIR): applications, metainfo, icons/hicolor"
 
 uninstall:
 	rm -f $(INSTALLDIR)/easysearch $(INSTALLDIR)/easysearch-cli $(INSTALLDIR)/easysearch-gui $(INSTALLDIR)/easysearch-daemon
+	rm -f $(DATADIR)/applications/$(APP_ID).desktop
+	rm -f $(DATADIR)/metainfo/$(APP_ID).metainfo.xml
+	rm -f $(DATADIR)/icons/hicolor/scalable/apps/$(APP_ID).svg
+	@if command -v update-desktop-database >/dev/null 2>&1; then \
+		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
+	fi
 
 clean:
 	$(CARGO_BIN) clean

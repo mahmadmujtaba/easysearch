@@ -1,6 +1,6 @@
 # EasySearch
 
-<img src="packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg" width="96" align="right" alt="EasySearch: a magnifier over a lightning bolt">
+<img src="icons/colored-logo.svg" width="260" align="right" alt="EasySearch">
 
 Realtime filename **and** content search across your filesystem — a Linux
 equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a

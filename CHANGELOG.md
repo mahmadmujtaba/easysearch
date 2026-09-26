@@ -4,6 +4,35 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-09-26
+
+### Changed
+
+- **The real logo replaces the drawn placeholder.** `icons/` now holds the
+  project's artwork — the *EASY SEARCH* wordmark: a magnifier over a pink
+  starburst, teal and pink lettering, a green swoosh, on cream — and it is used
+  everywhere the mark appears:
+  - `packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg`
+    is `icons/colored-logo.svg` under the application id, so launchers, icon
+    themes and software centres find it;
+  - `gui/assets/logo.png` is a 512 px copy of the same tile, compiled into the
+    binary for the window icon, the tray pixmap and the About dialog;
+  - the README shows `icons/colored-logo.svg`.
+  The hand-drawn magnifier-and-bolt rasteriser is gone: `gui/src/logo.rs` is now
+  a thin loader around the embedded artwork (its geometry regression tests went
+  with it, replaced by checks that the asset decodes and resizes opaquely).
+- **`make install` installs desktop integration, not just binaries.** The desktop
+  entry, the AppStream metadata and the hicolor icon go to `~/.local/share/…`,
+  and `make uninstall` removes them. This is what puts the app in the launcher
+  *and* what puts the logo in the window decoration: on Wayland a window carries
+  no icon of its own, so the decoration resolves the application id against the
+  installed desktop entry — without it the title bar shows a generic
+  placeholder even though everything else works.
+- The 13 px mark beside the version in the status bar is gone — a wordmark does
+  not read at that size. The logo is shown in the About dialog (168 px) and on
+  the welcome screen (200 px) instead.
+- `docs/screenshots/` was re-shot.
+
 ## [0.30.0] - 2026-09-26
 
 ### Added
