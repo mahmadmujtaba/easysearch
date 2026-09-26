@@ -4,6 +4,21 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-09-26
+
+### Added
+
+- **Per-location counts in the sidebar** (the last reference-UI gap of its kind):
+  Home, Desktop, Documents, … each show their own result count for the current
+  query, so you can see where the matches are before narrowing to one.
+- The facet worker now computes both lists in one pass — `CountRequest` carries
+  the locations and `Counts` returns `per_location` alongside `per_category`,
+  with the same throttling/coalescing as before. Each location is a count with
+  `under` set to that directory; on the SQLite backend that is an indexed prefix
+  query, so the extra work is small.
+- The sidebar's *Advanced search* note about a read-only content-index state is
+  gone — it is a live switch as of v0.24.0.
+
 ## [0.25.0] - 2026-09-26
 
 ### Added

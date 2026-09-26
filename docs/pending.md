@@ -116,7 +116,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
 | `Created` **column** in the table | Deferred: birth time is shown in the Details tab, but a table column would need `btime` stored in the on-disk index (a format change) |
 | `Full Text (content + name)` scope | **Built in v0.25.0** — the *Full text (name or contents)* scope, `--any`, or `content_or_name` on the API |
-| Per-location counts in the sidebar | Locations are listed with their paths; only the categories carry live counts |
+| Per-location counts in the sidebar | **Built in v0.26.0** — each quick location shows its own result count for the current query |
 | `Follow symlinks` advanced checkbox | **Built in v0.22.0** — Tools ▸ Ignore files… and Settings ▸ Indexing, live via `POST /v1/config` |
 | `Content: Any` filter | Not built (no meaningful second value today) |
 

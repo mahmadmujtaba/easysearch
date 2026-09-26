@@ -144,9 +144,12 @@ Double-click (or Enter) opens with the default app.
   current one; the toolbar's *Saved* button and the Tools menu open the manager,
   where you can Apply or Delete).
 - **Indexed locations** — one-click scoping to Home, Desktop, Documents,
-  Downloads, Pictures, Music, Videos, Workspace, Projects (whichever exist).
-- **Advanced search** — *Include folders* (folders in results), plus the current
-  content-index state (read-only; it is configured in `config.json`).
+  Downloads, Pictures, Music, Videos, Workspace, Projects (whichever exist),
+  each with its own **count** for the current query — so you can see where the
+  matches actually are before narrowing to one.
+- **Advanced search** — *Include folders* (folders in results). The switches
+  that change what the index contains (ignore files, symlinks, the background
+  content index) live in **Settings ▸ Indexing** and **Tools ▸ Ignore files…**.
 - **TIPS** — a collapsible cheat-sheet; its state is remembered.
 
 ## Search tabs and history

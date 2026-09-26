@@ -377,14 +377,18 @@ fn tab_title(tab: &TabState) -> String {
 /// `category` per row and forces `limit`; everything else comes from the tab.
 struct CountRequest {
     base: Query,
+    /// The sidebar's quick locations, counted with `under` set to each.
+    locations: Vec<PathBuf>,
     /// Identity of the query these counts describe; stale replies are dropped.
     key: String,
 }
 
-/// Per-category counts for one query, in [`CATEGORIES`] order.
+/// Per-category counts for one query, in [`CATEGORIES`] order, plus one count per
+/// requested location (same order).
 struct Counts {
     key: String,
     per_category: Vec<u64>,
+    per_location: Vec<u64>,
 }
 
 /// Quick "search only here" locations for the sidebar.
@@ -1005,6 +1009,8 @@ struct App {
     last_save: Instant,
     /// Per-category result counts for the sidebar facets (see `CountRequest`).
     counts: Vec<u64>,
+    /// One count per sidebar location (see [`locations`]), same order.
+    location_counts: Vec<u64>,
     /// Query key the current `counts` were computed for.
     counts_key: String,
     counts_tx: mpsc::Sender<CountRequest>,
@@ -1125,10 +1131,20 @@ impl App {
                             q.limit = 1;
                             per_category.push(backend.count(&q).unwrap_or(0));
                         }
+                        // One count per sidebar location: the same query
+                        // restricted to that directory.
+                        let mut per_location = Vec::with_capacity(req.locations.len());
+                        for loc in &req.locations {
+                            let mut q = req.base.clone();
+                            q.under = Some(loc.to_string_lossy().into_owned());
+                            q.limit = 1;
+                            per_location.push(backend.count(&q).unwrap_or(0));
+                        }
                         if counts_tx
                             .send(Counts {
                                 key: req.key,
                                 per_category,
+                                per_location,
                             })
                             .is_err()
                         {
@@ -1238,6 +1254,7 @@ impl App {
             last_save: Instant::now(),
             backend_label,
             counts: Vec::new(),
+            location_counts: Vec::new(),
             counts_key: "\u{0}counts-pending".to_string(),
             counts_tx: count_req_tx,
             counts_rx,
@@ -2824,6 +2841,7 @@ impl eframe::App for App {
         while let Ok(counts) = self.counts_rx.try_recv() {
             if counts.key == self.counts_key {
                 self.counts = counts.per_category;
+                self.location_counts = counts.per_location;
             }
         }
         if !self.pending
@@ -2858,6 +2876,7 @@ impl eframe::App for App {
             self.counts_key = self.last_sent.clone();
             let _ = self.counts_tx.send(CountRequest {
                 base,
+                locations: locations().into_iter().map(|(_, p)| p).collect(),
                 key: self.last_sent.clone(),
             });
             self.counts_at = Instant::now();
@@ -4484,13 +4503,18 @@ impl App {
         ui.add_space(5.0);
         let locs = locations();
         let mut pick: Option<Option<String>> = None;
-        for (label, path) in &locs {
+        for (i, (label, path)) in locs.iter().enumerate() {
             let s = path.to_string_lossy().into_owned();
             if !self.sidebar_matches(label) && !self.sidebar_matches(&s) {
                 continue;
             }
             let active = self.under.as_deref() == Some(s.as_str());
-            if nav_item(ui, t, t.kind_dir, label, None, active).clicked() {
+            let count = self
+                .location_counts
+                .get(i)
+                .map(|n| human_count(*n))
+                .unwrap_or_default();
+            if nav_item(ui, t, t.kind_dir, label, Some(&count), active).clicked() {
                 pick = Some(if active { None } else { Some(s) });
             }
         }
