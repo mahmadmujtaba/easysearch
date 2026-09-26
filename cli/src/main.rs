@@ -48,6 +48,10 @@ enum Command {
         /// Include hidden files and directories
         #[arg(long)]
         hidden: bool,
+        /// Fuzzy (fzf-style) matching: the term's characters in order, anywhere
+        /// (`mtn` finds `meeting-notes.md`). Exclusions (`!term`) stay literal.
+        #[arg(long)]
+        fuzzy: bool,
         /// Match against the full path instead of the basename
         #[arg(long)]
         path: bool,
@@ -116,6 +120,7 @@ fn main() {
             content,
             case,
             hidden,
+            fuzzy,
             path,
             under,
             ext,
@@ -160,6 +165,7 @@ fn main() {
                 min_size,
                 max_size,
                 modified_within_secs,
+                fuzzy,
                 limit,
             };
             match backend.search(&q) {

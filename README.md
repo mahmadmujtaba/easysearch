@@ -117,6 +117,9 @@ Query semantics (Everything-style):
 - space-separated terms are **ANDed**; `!term` **excludes**
 - terms without glob metacharacters are **substring** matches (`draft` matches
   `draft.pdf`); `*`, `?`, `[...]` work as globs
+- `--fuzzy` (or the **Fuzzy** toolbar button) matches the term's characters *in
+  order* anywhere, so `mtn` finds `meeting-notes.md`; it also drives the
+  Relevance ranking. `!term` exclusions stay literal
 - `--regex` treats each term as a regex (filenames and content)
 - case-insensitive by default (`--case` to change)
 - hidden files/dirs are indexed but hidden from results (`--hidden` to include)

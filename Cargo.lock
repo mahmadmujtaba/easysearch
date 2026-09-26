@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "everything"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "clap",
  "everything-core",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "everything-app"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "everything-core",
  "everything-daemon",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "everything-core"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "ed25519-dalek",
  "globset",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "everything-daemon"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "clap",
  "everything-core",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "everything-gui"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "dark-light",
  "eframe",

@@ -9,7 +9,7 @@ real underneath.
 ```
 menu bar        File · Search · Filters · Tools · Settings · Help
 search tabs     one pill per open search (restored on restart)      [ + ]
-toolbar         Back Forward Home Index | Content Search Regex | Recent Saved
+toolbar         Back Forward Home Index | Content Search Regex Fuzzy | Recent Saved
 search row      Search: [ query ]  [ scope ▾ ] [ location ▾ ]  [ ⌕ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden   [ ✕ Clear Filters ]
 results header  31 results · 100,477 files indexed · 2 ms   Sort by ▾  Cozy Compact
@@ -32,6 +32,7 @@ Query syntax (Everything-compatible):
 | You type | Meaning |
 |---|---|
 | `report` | substring match on the file name (`draft` matches `draft.pdf`) |
+| `mtn` *(with Fuzzy on)* | subsequence match — `mtn` finds `meeting-notes.md` |
 | `*.pdf` | glob (`*`, `?`, `[abc]`) |
 | `report 2026` | several terms are **ANDed** |
 | `!draft` | **excludes** matches |
@@ -44,6 +45,14 @@ via the embedded ripgrep engine — always read live, never stale).
 
 **Location** (and the sidebar's *Indexed Locations*) restricts the search to one
 directory; Back/Forward in the toolbar walk your location history.
+
+**Fuzzy** (the toolbar button, `Search ▸ Fuzzy matching`, or `Settings ▸ Search`)
+switches matching to fzf-style subsequences: the query's characters must appear
+*in order* anywhere in the name, so `mtn` finds `meeting-notes.md`. It is a global
+mode rather than a per-tab one. Fuzzy mode also changes the ranking — the
+**Relevance** column and sort use a score that rewards word-start and contiguous
+matches and penalises gaps — so the best match rises to the top. Exclusions
+(`!term`) are not made fuzzy: they keep their literal substring meaning.
 
 ## Filters
 

@@ -616,6 +616,8 @@ struct GuiPrefs {
     check_updates: bool,
     /// Unix seconds of the last automatic update check (0 = never).
     update_checked_at: u64,
+    /// Fuzzy (fzf-style) filename matching. A global mode (not per-tab).
+    fuzzy: bool,
 }
 
 impl Default for GuiPrefs {
@@ -634,6 +636,7 @@ impl Default for GuiPrefs {
             saved: Vec::new(),
             check_updates: true,
             update_checked_at: 0,
+            fuzzy: false,
         }
     }
 }
@@ -1493,6 +1496,7 @@ impl App {
             min_size,
             max_size,
             modified_within_secs: self.modified.secs(),
+            fuzzy: self.prefs.fuzzy,
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search {
@@ -1533,7 +1537,7 @@ impl App {
         self.sort = cycle_sort(self.sort, prefer);
         if let Some(s) = self.sort {
             let needle = self.last_sent.clone();
-            sort_results(&mut self.results, s, &needle);
+            sort_results(&mut self.results, s, &needle, self.prefs.fuzzy);
         }
     }
 
@@ -2724,7 +2728,7 @@ impl eframe::App for App {
                         self.prune_selection();
                         if let Some(sort) = self.sort {
                             let needle = self.last_sent.clone();
-                            sort_results(&mut self.results, sort, &needle);
+                            sort_results(&mut self.results, sort, &needle, self.prefs.fuzzy);
                         }
                     }
                     Err(e) => {
@@ -2746,7 +2750,7 @@ impl eframe::App for App {
                         t.pending = false;
                         if let Some(sort) = t.sort {
                             let needle = t.last_sent.clone();
-                            sort_results(&mut t.results, sort, &needle);
+                            sort_results(&mut t.results, sort, &needle, self.prefs.fuzzy);
                         }
                     }
                     Err(e) => {
@@ -2807,6 +2811,7 @@ impl eframe::App for App {
                 min_size: self.size.bounds().0,
                 max_size: self.size.bounds().1,
                 modified_within_secs: self.modified.secs(),
+                fuzzy: self.prefs.fuzzy,
                 limit: 1,
             };
             self.counts_key = self.last_sent.clone();
@@ -3244,6 +3249,17 @@ impl App {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Search").strong());
                 if ui
+                    .checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
+                    .on_hover_text(
+                        "Match the query's characters in order anywhere in the name: \
+                         mtn → meeting-notes.md",
+                    )
+                    .changed()
+                {
+                    self.prefs.save();
+                    self.send_query();
+                }
+                if ui
                     .add(egui::Slider::new(&mut self.limit, 100..=2000).text("Max results"))
                     .changed()
                 {
@@ -3373,6 +3389,8 @@ impl App {
                             .checkbox(&mut self.content_mode, "Match contents")
                             .changed()
                             | ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
+                            | ui.checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
+                                .changed()
                             | ui.checkbox(&mut self.case_sensitive, "Case-sensitive")
                                 .changed()
                             | ui.checkbox(&mut self.hidden, "Hidden files").changed()
@@ -3621,6 +3639,21 @@ impl App {
                         true,
                     ) {
                         self.regex_mode = !self.regex_mode;
+                        self.send_query();
+                    }
+                    if tool_button(
+                        ui,
+                        &t,
+                        None,
+                        Some("fz"),
+                        "Fuzzy",
+                        "Fuzzy matching: the query's characters in order, anywhere \
+                         (mtn → meeting-notes.md)",
+                        self.prefs.fuzzy,
+                        true,
+                    ) {
+                        self.prefs.fuzzy = !self.prefs.fuzzy;
+                        self.prefs.save();
                         self.send_query();
                     }
 
@@ -4117,7 +4150,7 @@ impl App {
     fn set_sort(&mut self, prefer: Sort) {
         self.sort = Some(prefer);
         let needle = self.last_sent.clone();
-        sort_results(&mut self.results, prefer, &needle);
+        sort_results(&mut self.results, prefer, &needle, self.prefs.fuzzy);
     }
 
     fn clear_filters(&mut self) {
@@ -4555,8 +4588,8 @@ impl App {
                     let i = row.index();
                     row.set_selected(i == selected);
                     let r = &self.results[i];
-                    let rel = relevance_score(&r.path, &needle);
-                    let terms = matched_terms(&r.path, &needle);
+                    let rel = relevance_score(&r.path, &needle, self.prefs.fuzzy);
+                    let terms = matched_terms(&r.path, &needle, self.prefs.fuzzy);
                     let name = r
                         .path
                         .file_name()
@@ -6489,7 +6522,7 @@ fn same_key(a: Sort, b: Sort) -> bool {
 /// then matches anywhere in the path; short names get a small bonus because they
 /// are usually the more specific hit. A query with no positive terms (including
 /// an empty one) scores everything equally.
-fn relevance_score(path: &Path, needle: &str) -> u8 {
+fn relevance_score(path: &Path, needle: &str, fuzzy: bool) -> u8 {
     let terms: Vec<String> = needle
         .split_whitespace()
         .filter(|t| !t.starts_with('!'))
@@ -6498,6 +6531,9 @@ fn relevance_score(path: &Path, needle: &str) -> u8 {
         .collect();
     if terms.is_empty() {
         return 100;
+    }
+    if fuzzy {
+        return fuzzy_relevance(path, &terms);
     }
     let name = path
         .file_name()
@@ -6525,24 +6561,60 @@ fn relevance_score(path: &Path, needle: &str) -> u8 {
     score.clamp(0, 100) as u8
 }
 
-/// Which query terms appear in this result, for the `Match` column.
-fn matched_terms<'a>(path: &Path, needle: &'a str) -> Vec<&'a str> {
+/// A 0–100 relevance score for fuzzy mode, from the core's [`fuzzy_score`].
+///
+/// Each term contributes its best score in the name (or half of it in the path),
+/// normalised against the best a term of that length could score, so terms of
+/// different lengths stay comparable.
+fn fuzzy_relevance(path: &Path, terms: &[String]) -> u8 {
+    use everything_core::matcher::fuzzy_score;
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let full = path.to_string_lossy().to_lowercase();
+    let full = path.to_string_lossy().into_owned();
+    let mut total = 0.0_f32;
+    for t in terms {
+        let best = fuzzy_score(t, &name, false)
+            .map(|s| s as f32)
+            .or_else(|| fuzzy_score(t, &full, false).map(|s| s as f32 * 0.5));
+        let ceiling = (24 * t.chars().count().max(1)) as f32;
+        total += best.map(|v| (v / ceiling).clamp(0.0, 1.0)).unwrap_or(0.0);
+    }
+    ((total / terms.len() as f32) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8
+}
+
+/// Which query terms appear in this result, for the `Match` column.
+fn matched_terms<'a>(path: &Path, needle: &'a str, fuzzy: bool) -> Vec<&'a str> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let full = path.to_string_lossy().into_owned();
+    let name_lc = name.to_lowercase();
+    let full_lc = full.to_lowercase();
     needle
         .split_whitespace()
         .filter(|t| !t.starts_with('!'))
         .filter(|t| {
-            let bare = t.trim_matches('*').to_lowercase();
-            !bare.is_empty() && (name.contains(&bare) || full.contains(&bare))
+            let bare = t.trim_matches('*');
+            if bare.is_empty() {
+                return false;
+            }
+            if fuzzy {
+                everything_core::matcher::fuzzy_score(bare, &name, false).is_some()
+                    || everything_core::matcher::fuzzy_score(bare, &full, false).is_some()
+            } else {
+                let bare = bare.to_lowercase();
+                name_lc.contains(&bare) || full_lc.contains(&bare)
+            }
         })
         .collect()
 }
 
-fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str) {
+fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str, fuzzy: bool) {
     match sort {
         Sort::Name(asc) => {
             results.sort_by(|a, b| {
@@ -6581,7 +6653,7 @@ fn sort_results(results: &mut [ResultRow], sort: Sort, needle: &str) {
         }
         Sort::Relevance(asc) => {
             results.sort_by_cached_key(|r| {
-                let s = relevance_score(&r.path, needle);
+                let s = relevance_score(&r.path, needle, fuzzy);
                 if asc { s } else { 255 - s }
             });
         }

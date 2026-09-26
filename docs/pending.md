@@ -106,7 +106,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 | Reference element | Status |
 | --- | --- |
 | `Duplicate Finder` toolbar button | Not built (would be a whole feature) |
-| `Fuzzy` toolbar button | Not built (needs fuzzy ranking in the engine) |
+| `Fuzzy` toolbar button | **Built in v0.17.0** — fzf-style subsequence matching, with a matching Relevance score |
 | `Tags` tab, tag chips, bulk `Tag` action | Not built (needs a tag store) |
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |
 | `Created` **column** in the table | Deferred: birth time is shown in the Details tab, but a table column would need `btime` stored in the on-disk index (a format change) |
@@ -162,7 +162,7 @@ deliverable; these are gated on request:
 **Phase 2 — polish**
 - Bundled docx extractor (drop the `docx2txt` dependency)
 - Global hotkey
-- Substring / fuzzy filename ranking (fzf-style)
+- ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, `?fuzzy=1`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
 - ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)
 
 **Phase 3 — stretch**

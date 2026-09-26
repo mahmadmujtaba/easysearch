@@ -371,7 +371,9 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
 - **Interactions:** double-click or Enter → open with the default app (`xdg-open`);
   right-click → Open, Open containing folder, Open in terminal, Copy path, Filter to this
   folder. Relevance is a transparent heuristic: which query terms hit the *name* and how
-  (exact > prefix > substring), then path hits, with a small bonus for short names.
+  (exact > prefix > substring), then path hits, with a small bonus for short names. In
+  fuzzy mode the same column is driven by the engine's subsequence score
+  (word-start/runs up, gaps down, short names preferred).
 - **Theming:** follows the desktop's light/dark scheme live (KDE `kdeglobals`, GTK
   settings, or the XDG portal) and uses the system UI/mono fonts. Empty state suggests
   what to search or reports indexing progress.
@@ -406,7 +408,7 @@ everything-for-linux/
 | Phase | Status |
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
-| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), **`.gitignore` management UI (v0.16.0)**. **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey, substring/fuzzy ranking |
+| **2 — Polish** | **Partly done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), **substring/fuzzy ranking (v0.17.0)**. **Outstanding**: bundled docx extractor (still needs `docx2txt`), global hotkey |
 | **3 — Stretch** | **Not started**: `fanotify` watcher, multiline content regex, PDF/ODT extraction, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |

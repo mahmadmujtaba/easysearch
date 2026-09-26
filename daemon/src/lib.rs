@@ -280,6 +280,7 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
                 q.content = if value.is_empty() { None } else { Some(value) };
             }
             "hidden" => q.include_hidden = truthy(&value),
+            "fuzzy" => q.fuzzy = truthy(&value),
             "path" | "full_path" => q.full_path = truthy(&value),
             "dirs" | "include_dirs" => q.include_dirs = truthy(&value),
             "under" => {
@@ -376,5 +377,16 @@ mod tests {
 
         assert!(parse_query_params("min_size=big").is_err());
         assert!(parse_query_params("modified_within=soon").is_err());
+    }
+
+    #[test]
+    fn parses_the_fuzzy_flag() {
+        assert!(
+            !parse_query_params("query=x").unwrap().fuzzy,
+            "off by default"
+        );
+        assert!(parse_query_params("query=x&fuzzy=1").unwrap().fuzzy);
+        assert!(parse_query_params("query=x&fuzzy=true").unwrap().fuzzy);
+        assert!(!parse_query_params("query=x&fuzzy=no").unwrap().fuzzy);
     }
 }

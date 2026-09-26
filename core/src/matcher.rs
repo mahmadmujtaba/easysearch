@@ -67,6 +67,12 @@ pub struct Query {
     /// (`now - mtime <= secs`; a future mtime still matches).
     #[serde(default)]
     pub modified_within_secs: Option<i64>,
+    /// Fuzzy ("fzf-style") matching: a term matches when its characters appear
+    /// in order somewhere in the target, so `mtn` finds `meeting-notes.md`.
+    /// Applies to include terms only — `!term` exclusions keep their ordinary
+    /// substring/glob meaning.
+    #[serde(default)]
+    pub fuzzy: bool,
     pub limit: usize,
 }
 
@@ -86,6 +92,7 @@ impl Default for Query {
             min_size: None,
             max_size: None,
             modified_within_secs: None,
+            fuzzy: false,
             limit: 1000,
         }
     }
@@ -158,6 +165,11 @@ pub fn matches_category(cat: &Category, path: &Path, meta: &crate::overlay::Meta
 pub enum Term {
     Glob(GlobMatcher),
     Regex(Regex),
+    /// Subsequence match with a quality score (see [`fuzzy_score`]).
+    Fuzzy {
+        needle: String,
+        case_sensitive: bool,
+    },
 }
 
 impl Term {
@@ -165,6 +177,10 @@ impl Term {
         match self {
             Term::Glob(g) => g.is_match(text),
             Term::Regex(r) => r.is_match(text),
+            Term::Fuzzy {
+                needle,
+                case_sensitive,
+            } => fuzzy_score(needle, text, *case_sensitive).is_some(),
         }
     }
 }
@@ -204,7 +220,7 @@ impl CompiledQuery {
             if tok.is_empty() {
                 continue;
             }
-            let term = compile_term(tok, q.regex_mode, ci)?;
+            let term = compile_term(tok, q.regex_mode, ci, q.fuzzy && !neg)?;
             if neg {
                 excludes.push(term);
             } else {
@@ -277,13 +293,24 @@ impl CompiledQuery {
     }
 }
 
-fn compile_term(tok: &str, regex_mode: bool, case_insensitive: bool) -> Result<Term, String> {
+fn compile_term(
+    tok: &str,
+    regex_mode: bool,
+    case_insensitive: bool,
+    fuzzy: bool,
+) -> Result<Term, String> {
     if regex_mode {
         RegexBuilder::new(tok)
             .case_insensitive(case_insensitive)
             .build()
             .map(Term::Regex)
             .map_err(|e| format!("invalid regex {tok:?}: {e}"))
+    } else if fuzzy {
+        // Case folding happens inside `fuzzy_score`.
+        Ok(Term::Fuzzy {
+            needle: tok.to_string(),
+            case_sensitive: !case_insensitive,
+        })
     } else {
         // Everything-style: a term without glob metacharacters is a substring
         // match ("draft" matches "draft.pdf"), so wrap it in `*...*`.
@@ -300,6 +327,74 @@ fn compile_term(tok: &str, regex_mode: bool, case_insensitive: bool) -> Result<T
             .map(|g| Term::Glob(g.compile_matcher()))
             .map_err(|e| format!("invalid pattern {tok:?}: {e}"))
     }
+}
+
+/// Score a fuzzy (subsequence) match of `needle` in `haystack`, or `None` when
+/// the needle's characters do not all appear in order.
+///
+/// This is the ranking used for the *Relevance* sort when fuzzy mode is on, and
+/// the predicate behind [`Term::Fuzzy`]. Higher is better; the scale is a
+/// transparent heuristic (the same spirit as `docs/scope.md` §10's relevance):
+///
+/// * `+16` for every matched character, `+6` more when it continues a run;
+/// * `+8` when the match starts a word (string start, after `/ . _ - space (`),
+///   or at a lower→upper transition);
+/// * a gap penalty of up to `-12`, so compact matches beat scattered ones;
+/// * a small length preference, so `a/b.md` beats `a/very/long/b.md`.
+///
+/// Case is compared ASCII-insensitively unless `case_sensitive`.
+pub fn fuzzy_score(needle: &str, haystack: &str, case_sensitive: bool) -> Option<i32> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hay: Vec<char> = haystack.chars().collect();
+    let mut score: i32 = 0;
+    let mut cursor = 0usize;
+    let mut prev: Option<usize> = None;
+
+    for nc in needle.chars() {
+        let mut found = None;
+        while cursor < hay.len() {
+            let c = hay[cursor];
+            let hit = if case_sensitive {
+                c == nc
+            } else {
+                c.eq_ignore_ascii_case(&nc)
+            };
+            cursor += 1;
+            if hit {
+                found = Some(cursor - 1);
+                break;
+            }
+        }
+        let idx = found?; // a missing character means "not a match at all"
+
+        score += 16;
+        match prev {
+            Some(p) if idx == p + 1 => score += 6,
+            Some(p) => score -= ((idx - p - 1) as i32).min(12),
+            None => {}
+        }
+        if is_word_start(&hay, idx) {
+            score += 8;
+        }
+        prev = Some(idx);
+    }
+
+    // Prefer matches in shorter names (bounded so it never dominates).
+    score -= ((hay.len() / 16) as i32).min(16);
+    Some(score)
+}
+
+/// True if position `i` begins a word: the string start, a character after a
+/// separator, or a lower→upper (camelCase) transition.
+fn is_word_start(hay: &[char], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let prev = hay[i - 1];
+    matches!(prev, '/' | '\\' | '.' | '_' | '-' | ' ' | '(' | '[' | ',')
+        || (prev.is_ascii_lowercase() && hay[i].is_ascii_uppercase())
 }
 
 /// True if any path component starts with `.` (hidden file/dir).
@@ -512,6 +607,7 @@ mod tests {
         assert_eq!(q.min_size, None);
         assert_eq!(q.max_size, None);
         assert_eq!(q.modified_within_secs, None);
+        assert!(!q.fuzzy, "fuzzy must default to off for old payloads");
 
         // The new fields survive a full round-trip.
         let original = Query {
@@ -528,5 +624,86 @@ mod tests {
         assert_eq!(round.min_size, Some(10));
         assert_eq!(round.max_size, Some(20));
         assert_eq!(round.modified_within_secs, Some(60));
+    }
+
+    #[test]
+    fn fuzzy_matches_subsequences_in_order() {
+        // Characters may be spread out, but must appear in order.
+        assert!(fuzzy_score("mtn", "meeting-notes.md", false).is_some());
+        assert!(fuzzy_score("MTN", "meeting-notes.md", false).is_some());
+        assert!(fuzzy_score("rpt", "report.pdf", false).is_some());
+        // Out-of-order does not match: "c" then "b" is not a subsequence of "abc".
+        assert!(fuzzy_score("bc", "abc", false).is_some());
+        assert!(fuzzy_score("cb", "abc", false).is_none());
+        assert!(fuzzy_score("zzz", "meeting-notes.md", false).is_none());
+        assert_eq!(fuzzy_score("", "anything", false), Some(0));
+        // Case sensitivity is honored when asked for.
+        assert!(fuzzy_score("MTN", "meeting-notes.md", true).is_none());
+        assert!(fuzzy_score("met", "meeting-notes.md", true).is_some());
+    }
+
+    #[test]
+    fn fuzzy_ranks_compacter_and_word_start_matches_higher() {
+        // A contiguous match beats one scattered across filler characters.
+        // (Separators like `-` intentionally count as word starts, so a
+        // hyphenated spelling scores *well* — fzf behaves the same way.)
+        let tight = fuzzy_score("note", "notes.txt", false).unwrap();
+        let loose = fuzzy_score("note", "nqoqtqex.txt", false).unwrap();
+        assert!(tight > loose, "{tight} should beat {loose}");
+        // …and shorter names get a small preference.
+        let short = fuzzy_score("a", "a.txt", false).unwrap();
+        let long = fuzzy_score("a", "/a/much/longer/path/name.txt", false).unwrap();
+        assert!(short > long, "{short} should beat {long}");
+        // A word-start hit outscores the same letters buried mid-word.
+        let start = fuzzy_score("rep", "report.txt", false).unwrap();
+        let mid = fuzzy_score("rep", "xrep.txt", false).unwrap();
+        assert!(start > mid, "{start} should beat {mid}");
+    }
+
+    #[test]
+    fn fuzzy_mode_filters_by_subsequence() {
+        let cq = CompiledQuery::compile(&Query {
+            name: "mtn".into(),
+            fuzzy: true,
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(cq.name_matches(Path::new("/x/meeting-notes.md")));
+        assert!(!cq.name_matches(Path::new("/x/readme.txt")));
+
+        // Several terms are still ANDed.
+        let cq = CompiledQuery::compile(&Query {
+            name: "mtn notes".into(),
+            fuzzy: true,
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(cq.name_matches(Path::new("/x/meeting-notes.md")));
+        assert!(!cq.name_matches(Path::new("/x/agenda.md")));
+
+        // Without fuzzy the same term is an ordinary substring, which does not
+        // match here — that is the difference the toggle buys.
+        let plain = CompiledQuery::compile(&Query {
+            name: "mtn".into(),
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(!plain.name_matches(Path::new("/x/meeting-notes.md")));
+    }
+
+    #[test]
+    fn fuzzy_exclusions_stay_literal() {
+        // `!tmp` keeps its substring meaning even in fuzzy mode, so it only
+        // drops names that really contain "tmp".
+        let cq = CompiledQuery::compile(&Query {
+            name: "mtn !tmp".into(),
+            fuzzy: true,
+            ..Query::default()
+        })
+        .unwrap();
+        assert!(cq.name_matches(Path::new("/x/meeting-notes.md")));
+        assert!(!cq.name_matches(Path::new("/x/meeting-tmp-notes.md")));
+        // A scattered "t-m-p" is not an exclusion under substring semantics.
+        assert!(cq.name_matches(Path::new("/x/meeting-time-notes.md")));
     }
 }

@@ -4,6 +4,30 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-09-26
+
+### Added
+
+- **Fuzzy (fzf-style) searching (Phase 2).** With the **Fuzzy** toolbar button
+  (or **Search ▸ Fuzzy matching**, or **Settings ▸ Search**) a term matches when
+  its characters appear *in order* anywhere in the target, so `mtn` finds
+  `meeting-notes.md` and `qr` finds `quarterly-report-2026.pdf`. It is a filter
+  *and* a ranking: the Relevance column and the Relevance sort switch to a
+  transparent subsequence score (word-start and contiguous-run bonuses, a gap
+  penalty, a small length preference), so the tightest, earliest match sorts
+  first. `!term` exclusions deliberately keep their literal substring meaning.
+- `Query.fuzzy` in the engine, `--fuzzy` in the CLI, and `fuzzy` in both HTTP
+  API forms (`?fuzzy=1` and the `Query` field).
+  `everything_core::matcher::fuzzy_score` is public for callers that want the
+  score itself.
+
+### Notes
+
+- Fuzzy is a **global mode** (like *Include folders*), not per-tab like Regex.
+  Matching is a subsequence test, so it cannot be pushed into the SQL index; the
+  SQLite backend still applies every coarse filter in SQL and runs the
+  subsequence test in Rust over the survivors.
+
 ## [0.16.0] - 2026-09-26
 
 ### Added
