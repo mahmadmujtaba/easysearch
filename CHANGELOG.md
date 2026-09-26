@@ -4,6 +4,26 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] - 2026-09-27
+
+### Added
+
+- **Remove duplicates to the Trash.** The duplicate-finder window now lets you
+  tick the copies you no longer want — or use **Select all but one per group** /
+  a group's **Keep newest**, which keeps the most recently modified copy and
+  ticks the rest — and **Move N to Trash…** after a confirmation that lists
+  exactly what will move (a whole group being ticked warns first). Removal
+  follows the **freedesktop Trash specification** (`core/src/trash.rs`): the file
+  moves under `~/.local/share/Trash/files/` with a `.trashinfo` recording its
+  original (percent-encoded) path and deletion time, name collisions get a
+  numeric suffix instead of overwriting, and a trash on another filesystem falls
+  back to copy-then-remove. Nothing is ever deleted permanently, and **Move to
+  Trash…** is also on a result row's context menu for any selection.
+
+### Fixed
+
+- Nothing in this release.
+
 ## [0.40.0] - 2026-09-27
 
 ### Added

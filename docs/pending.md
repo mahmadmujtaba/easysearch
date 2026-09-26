@@ -1,6 +1,6 @@
 # Pending work
 
-Outstanding items at **v0.40.0** (2026-09-27), in rough priority order. Everything
+Outstanding items at **v0.41.0** (2026-09-27), in rough priority order. Everything
 here is either *unverified*, *deliberately deferred*, or a *known rough edge* —
 it is not a wishlist.
 
@@ -108,7 +108,7 @@ of that reference are **not** implemented, so they are absent rather than faked:
 
 | Reference element | Status |
 | --- | --- |
-| `Duplicate Finder` toolbar button | **Built in v0.14.0** — right-click a selection ▸ *Find duplicates in results* (also *in selection*) |
+| `Duplicate Finder` toolbar button | **Built in v0.14.0** — right-click a selection ▸ *Find duplicates in results* (also *in selection*); **move duplicates to the Trash** (recoverable) was added in v0.41.0 |
 | `Fuzzy` toolbar button | **Built in v0.17.0** — fzf-style subsequence matching, with a matching Relevance score |
 | `Tags` tab, tag chips, bulk `Tag` action | **Built in v0.40.0** — a local tag store (`~/.config/easysearch/tags.json`), right-click ▸ **Tags…** (with bulk tagging of the selection), `#chip`s in result rows and the preview, a sidebar **TAGS** section with per-tag counts, filtering by tag, and a **Tag** quick action |
 | `Rename` / `Delete` quick actions | Not built (destructive; can be added) |

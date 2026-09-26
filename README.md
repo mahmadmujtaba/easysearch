@@ -23,6 +23,8 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
 - **Lives in the tray**: closing the window keeps EasySearch running in the
   background — the engine keeps indexing — and clicking the tray icon shows or
   hides the window again. Only **Quit** stops the app.
+- **Duplicate finder**: group files with identical contents, then move the spare
+  copies to the desktop **Trash** (recoverable) — never a permanent delete.
 - **Fully offline**: the app makes **no network connections at all** — no
   updater, no telemetry, no remote API. Everything stays local; install and
   upgrade with your package manager (`.deb`/`.rpm`).

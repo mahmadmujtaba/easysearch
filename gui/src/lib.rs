@@ -1052,6 +1052,13 @@ struct App {
     dup_progress: Option<(usize, usize)>,
     dups: Option<DupReport>,
     show_dups: bool,
+    // --- trash -----------------------------------------------------------
+    /// Files checked in the duplicates window, awaiting a move to the trash.
+    dup_checked: HashSet<PathBuf>,
+    /// Files awaiting confirmation before a move to the trash.
+    trash_confirm: Vec<PathBuf>,
+    /// Outcome of the last move-to-trash, shown briefly.
+    trash_msg: Option<String>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1306,6 +1313,9 @@ impl App {
             dup_progress: None,
             dups: None,
             show_dups: false,
+            dup_checked: HashSet::new(),
+            trash_confirm: Vec::new(),
+            trash_msg: None,
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -2747,6 +2757,15 @@ fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) ->
     }
 }
 
+/// The most recently modified path in `paths` (ties broken by name). Used as
+/// the copy to *keep* when auto-selecting the rest for the trash.
+fn newest_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+        .cloned()
+}
+
 /// A duplicate scan request (the newest one wins).
 struct DupRequest {
     generation: u64,
@@ -2787,6 +2806,11 @@ enum RowCmd {
     ClearTagFilter,
     /// Add a directory to `config.exclude_dirs` and reindex without it.
     ExcludeFromIndex(PathBuf),
+    /// Ask for confirmation, then move a row (or the selection) to the trash.
+    TrashToConfirm {
+        path: PathBuf,
+        selection: bool,
+    },
     AddToSelection(PathBuf),
     RemoveFromSelection(PathBuf),
     SelectAll,
@@ -3129,6 +3153,7 @@ impl eframe::App for App {
                         self.elapsed_ms = r.elapsed_ms;
                         self.error = None;
                         self.pending = false;
+                        self.trash_msg = None;
                         if let Some(sort) = self.sort {
                             let needle = self.last_sent.clone();
                             sort_results(&mut self.all_results, sort, &needle, self.prefs.fuzzy);
@@ -3288,6 +3313,7 @@ impl eframe::App for App {
             || self.show_dups
             || self.show_tags
             || self.show_excludes
+            || !self.trash_confirm.is_empty()
             || self.show_ignore;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
@@ -3538,6 +3564,7 @@ impl eframe::App for App {
         self.duplicates_window(ctx);
         self.tags_dialog(ctx);
         self.excludes_dialog(ctx);
+        self.trash_confirm_dialog(ctx);
         self.ignore_dialog(ctx);
     }
 
@@ -4606,6 +4633,13 @@ impl App {
                             self.set_tag_filter(None);
                         }
                     }
+                    if let Some(msg) = &self.trash_msg {
+                        ui.label(
+                            egui::RichText::new(format!("• {msg}"))
+                                .size(11.5)
+                                .color(t.dim),
+                        );
+                    }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Density.
@@ -5545,10 +5579,23 @@ impl App {
                                 )
                                 .clicked()
                             {
-                                self.pending_cmds
-                                    .push(RowCmd::ExcludeFromIndex(r.path.clone()));
+                                self.pending_cmds.push(RowCmd::ExcludeFromIndex(r.path.clone()));
                                 ui.close_menu();
                             }
+                        }
+                        ui.separator();
+                        if ui
+                            .button("Move to Trash…")
+                            .on_hover_text(
+                                "Recoverable: the file goes to the desktop Trash, not gone forever.",
+                            )
+                            .clicked()
+                        {
+                            self.pending_cmds.push(RowCmd::TrashToConfirm {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
                         }
                         ui.separator();
                         if in_sel {
@@ -6669,6 +6716,16 @@ impl App {
             RowCmd::ExcludeFromIndex(p) => {
                 self.exclude_dir_now(&p);
             }
+            RowCmd::TrashToConfirm { path, selection } => {
+                let mut v: Vec<PathBuf> = if selection {
+                    self.checked.iter().cloned().collect()
+                } else {
+                    vec![path]
+                };
+                v.sort();
+                v.dedup();
+                self.trash_confirm = v;
+            }
             RowCmd::AddToSelection(p) => {
                 self.checked.insert(p);
             }
@@ -6706,11 +6763,130 @@ impl App {
         self.dup_gen += 1;
         self.dup_progress = Some((0, 0));
         self.dups = None;
+        self.dup_checked.clear();
+        self.trash_msg = None;
         self.show_dups = true;
         let _ = self.dup_tx.send(DupRequest {
             generation: self.dup_gen,
             paths,
         });
+    }
+
+    /// Move `paths` to the freedesktop trash, then drop them from every list.
+    ///
+    /// Nothing is deleted permanently: each file is recorded in
+    /// `~/.local/share/Trash` with its original path, so it can be restored.
+    /// Only paths that were actually moved are removed from the results.
+    fn trash_paths(&mut self, paths: &[PathBuf]) {
+        let mut moved: Vec<PathBuf> = Vec::new();
+        let mut failed = 0usize;
+        for p in paths {
+            match easysearch_core::trash::move_to_trash(p) {
+                Ok(_) => moved.push(p.clone()),
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("trash: {e}");
+                }
+            }
+        }
+        if !moved.is_empty() {
+            let gone: HashSet<PathBuf> = moved.iter().cloned().collect();
+            self.results.retain(|r| !gone.contains(&r.path));
+            self.all_results.retain(|r| !gone.contains(&r.path));
+            self.checked.retain(|p| !gone.contains(p));
+            self.dup_checked.retain(|p| !gone.contains(p));
+            if let Some(report) = &mut self.dups {
+                for g in &mut report.groups {
+                    g.paths.retain(|p| !gone.contains(p));
+                }
+                report.groups.retain(|g| g.paths.len() > 1);
+            }
+            if self.selected >= self.results.len() {
+                self.selected = self.results.len().saturating_sub(1);
+            }
+            self.preview = None;
+        }
+        self.trash_msg = Some(match (moved.len(), failed) {
+            (0, f) => format!("Could not move {f} file(s) to the Trash."),
+            (m, 0) => format!("Moved {m} file(s) to the Trash."),
+            (m, f) => format!("Moved {m} file(s) to the Trash; {f} failed."),
+        });
+    }
+
+    /// Confirm a move to the trash before doing it — recoverable, but a change
+    /// on disk all the same.
+    fn trash_confirm_dialog(&mut self, ctx: &egui::Context) {
+        if self.trash_confirm.is_empty() {
+            return;
+        }
+        let t = self.theme();
+        let n = self.trash_confirm.len();
+        let mut open = true;
+        let mut cancel = false;
+        let mut confirm = false;
+        egui::Window::new("Move to Trash?")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(470.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Move {n} file{} to the Trash?",
+                        if n == 1 { "" } else { "s" }
+                    ))
+                    .strong()
+                    .size(13.0)
+                    .color(t.text),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Nothing is deleted permanently — they can be restored from the desktop \
+                         Trash.",
+                    )
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical()
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for p in self.trash_confirm.iter().take(200) {
+                            ui.label(
+                                egui::RichText::new(p.display().to_string())
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(t.faint),
+                            );
+                        }
+                        if n > 200 {
+                            ui.label(
+                                egui::RichText::new(format!("…and {} more", n - 200))
+                                    .size(11.0)
+                                    .color(t.faint),
+                            );
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui
+                        .button("Move to Trash")
+                        .on_hover_text("Recoverable from the desktop Trash.")
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                });
+            });
+        if cancel || !open {
+            self.trash_confirm.clear();
+        } else if confirm {
+            let paths = std::mem::take(&mut self.trash_confirm);
+            self.trash_paths(&paths);
+        }
     }
 
     /// The duplicate-scan window: files with identical contents, grouped.
@@ -6780,6 +6956,33 @@ impl App {
                 }
                 ui.add_space(6.0);
 
+                // Bulk helpers: the safe default is to keep one copy per group.
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Select all but one per group")
+                        .on_hover_text("Keep the most recently modified copy of each group.")
+                        .clicked()
+                    {
+                        for g in &report.groups {
+                            let keep = newest_path(&g.paths);
+                            for p in &g.paths {
+                                if Some(p) != keep.as_ref() {
+                                    self.dup_checked.insert(p.clone());
+                                }
+                            }
+                        }
+                    }
+                    if ui.button("Clear selection").clicked() {
+                        self.dup_checked.clear();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("{} selected", self.dup_checked.len()))
+                            .size(11.5)
+                            .color(t.dim),
+                    );
+                });
+                ui.add_space(6.0);
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -6815,12 +7018,41 @@ impl App {
                                                     .join("\n"),
                                             );
                                         }
+                                        if ui.small_button("Select all").clicked() {
+                                            for p in &g.paths {
+                                                self.dup_checked.insert(p.clone());
+                                            }
+                                        }
+                                        if ui
+                                            .small_button("Keep newest")
+                                            .on_hover_text(
+                                                "Check every copy except the newest one.",
+                                            )
+                                            .clicked()
+                                        {
+                                            let keep = newest_path(&g.paths);
+                                            for p in &g.paths {
+                                                if Some(p) != keep.as_ref() {
+                                                    self.dup_checked.insert(p.clone());
+                                                } else {
+                                                    self.dup_checked.remove(p);
+                                                }
+                                            }
+                                        }
                                     },
                                 );
                             });
                             for p in &g.paths {
                                 ui.horizontal(|ui| {
                                     ui.add_space(14.0);
+                                    let mut on = self.dup_checked.contains(p);
+                                    if ui.add(egui::Checkbox::without_text(&mut on)).changed() {
+                                        if on {
+                                            self.dup_checked.insert(p.clone());
+                                        } else {
+                                            self.dup_checked.remove(p);
+                                        }
+                                    }
                                     let name = p
                                         .file_name()
                                         .map(|n| n.to_string_lossy().into_owned())
@@ -6850,6 +7082,46 @@ impl App {
                             ui.separator();
                         }
                     });
+
+                // Footer: the trash action, plus a warning when a whole group
+                // is checked (that would remove every remaining copy).
+                let n_dup = self.dup_checked.len();
+                let whole_group = report.groups.iter().any(|g| {
+                    !g.paths.is_empty() && g.paths.iter().all(|p| self.dup_checked.contains(p))
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if let Some(msg) = &self.trash_msg {
+                        ui.label(egui::RichText::new(msg).size(11.5).color(t.dim));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                n_dup > 0,
+                                egui::Button::new(egui::RichText::new(format!(
+                                    "Move {n_dup} to Trash…"
+                                ))),
+                            )
+                            .on_hover_text(
+                                "Recoverable: the files go to the desktop Trash, not gone forever.",
+                            )
+                            .clicked()
+                        {
+                            self.trash_confirm = self.dup_checked.iter().cloned().collect();
+                        }
+                    });
+                });
+                if whole_group {
+                    ui.label(
+                        egui::RichText::new(
+                            "⚠ A whole group is checked — every remaining copy would be trashed.",
+                        )
+                        .size(11.0)
+                        .color(t.warn),
+                    );
+                }
             });
 
         if let Some(p) = reveal {

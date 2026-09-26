@@ -188,11 +188,19 @@ candidate files it is comparing — and results appear grouped, largest waste
 first:
 
 ```
-3 copies · 14.6 MiB each · 29.2 MiB wasted        [Select in results] [Copy paths]
-   Solution Design Document - DMT V1.7.pdf   …/Workspace/SAB/SDD      [Reveal]
-   Solution Design Document - DMT V1.7.pdf   …/OneDrive/Attachments   [Reveal]
-   Solution Design Document - DMT V1.7.pdf   …/Downloads              [Reveal]
+3 copies · 14.6 MiB each · 29.2 MiB wasted   [Keep newest] [Select all] [Select in results] [Copy paths]
+   ☐ Solution Design Document - DMT V1.7.pdf   …/Workspace/SAB/SDD      [Reveal]
+   ☐ Solution Design Document - DMT V1.7.pdf   …/OneDrive/Attachments   [Reveal]
+   ☐ Solution Design Document - DMT V1.7.pdf   …/Downloads              [Reveal]
 ```
+
+**Removing duplicates — to the Trash, never permanently.** Tick the copies you
+no longer want (or use **Select all but one per group** / a group's **Keep
+newest**, which keeps the most recently modified copy and ticks the rest) and
+press **Move N to Trash…**. A confirmation lists exactly what will move; the
+files then go to the desktop **Trash** (`~/.local/share/Trash`) with their
+original path recorded, so any file manager can restore them. A whole group
+being ticked raises a warning first, since that would remove every copy.
 
 How it decides, and what it deliberately skips:
 
@@ -207,8 +215,9 @@ How it decides, and what it deliberately skips:
    **“scan capped”**.
 
 Progress is cancellable-by-replacement: starting a new scan discards the old
-one's result. Nothing is ever deleted for you — the window only selects, copies
-and reveals.
+one's result. The window can select, copy and reveal results — and **move
+checked files to the Trash** (recoverable). The same **Move to Trash…** is on a
+result row's right-click menu, for any selection.
 
 ## Tags
 

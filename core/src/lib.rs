@@ -26,6 +26,7 @@ pub mod proto;
 pub mod roots;
 pub mod sqlite_index;
 pub mod tags;
+pub mod trash;
 pub mod walker;
 pub mod watcher;
 
