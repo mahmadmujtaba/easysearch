@@ -4,6 +4,18 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.1] - 2026-09-26
+
+### Fixed
+
+- **The release job could not create a release.** `gh` needs the repository
+  remote, and `--generate-notes` needs the commit and tag history, but the job
+  only downloaded the build artifact — so `gh release create` died with
+  `fatal: not a git repository (or any of the parent directories): .git`. It now
+  checks the repository out first (`fetch-depth: 0`). Nothing was published for
+  `v0.29.0` because of this; its `.deb`, `.rpm` and `SHA256SUMS` are still on
+  that run's artifact.
+
 ## [0.29.0] - 2026-09-26
 
 ### Added

@@ -119,6 +119,13 @@ jobs:
       # Needed to create the release and upload its assets.
       contents: write
     steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          # `gh` needs the repository remote, and `--generate-notes` needs the
+          # commit and tag history to work out what changed since the last tag.
+          fetch-depth: 0
+
       - name: Download the packages
         uses: actions/download-artifact@v7
         with:
