@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, mpsc, mpsc::Receiver};
 use std::thread::JoinHandle;
 
@@ -27,32 +27,41 @@ pub fn needs_extraction(path: &Path) -> bool {
 /// Queue of paths awaiting background text extraction.
 ///
 /// `pending` mirrors the channel length so the UI can show progress without
-/// touching the receiver (which lives on the extraction thread).
+/// touching the receiver (which lives on the extraction thread). Sends are
+/// dropped while the content index is switched off, so nothing is extracted and
+/// the worker thread stays parked.
 pub struct ExtractQueue {
     tx: mpsc::Sender<PathBuf>,
     pub pending: AtomicUsize,
+    /// Shared with the [`ContentIndex`] so one switch controls both.
+    enabled: Arc<AtomicBool>,
 }
 
 impl ExtractQueue {
-    pub fn new() -> (ExtractQueue, Receiver<PathBuf>) {
+    pub fn new(enabled: Arc<AtomicBool>) -> (ExtractQueue, Receiver<PathBuf>) {
         let (tx, rx) = mpsc::channel();
         (
             ExtractQueue {
                 tx,
                 pending: AtomicUsize::new(0),
+                enabled,
             },
             rx,
         )
     }
 
     pub fn send(&self, path: PathBuf) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         self.pending.fetch_add(1, Ordering::Relaxed);
         let _ = self.tx.send(path);
     }
 }
 
 pub struct ContentIndex {
-    enabled: bool,
+    /// Live switch: flipping it off drops the cache and stops extraction.
+    enabled: Arc<AtomicBool>,
     pub max_file_bytes: u64,
     total_cap: u64,
     cache: RwLock<HashMap<PathBuf, String>>,
@@ -62,7 +71,7 @@ pub struct ContentIndex {
 }
 
 impl ContentIndex {
-    pub fn new(enabled: bool, max_file_bytes: u64, total_cap: u64) -> ContentIndex {
+    pub fn new(enabled: Arc<AtomicBool>, max_file_bytes: u64, total_cap: u64) -> ContentIndex {
         ContentIndex {
             enabled,
             max_file_bytes,
@@ -74,24 +83,45 @@ impl ContentIndex {
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Turn the cache on or off. Switching off frees everything it holds, so an
+    /// idle cache costs nothing (see the footprint budget in `docs/scope.md` §9).
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+        if !on {
+            self.clear();
+        }
+    }
+
+    /// Drop every cached document and reclaim its memory.
+    pub fn clear(&self) {
+        self.order.lock().unwrap().clear();
+        self.cache.write().unwrap().clear();
+        self.total_bytes.store(0, Ordering::Relaxed);
     }
 
     pub fn contains(&self, path: &Path) -> bool {
-        self.cache
-            .read()
-            .map(|g| g.contains_key(path))
-            .unwrap_or(false)
+        self.enabled()
+            && self
+                .cache
+                .read()
+                .map(|g| g.contains_key(path))
+                .unwrap_or(false)
     }
 
     /// Run `f` over the cached text for `path`, if present.
     pub fn get_with<R>(&self, path: &Path, f: impl FnOnce(&str) -> R) -> Option<R> {
+        if !self.enabled() {
+            return None;
+        }
         let g = self.cache.read().ok()?;
         g.get(path).map(|t| f(t))
     }
 
     pub fn insert(&self, path: PathBuf, text: String) {
-        if !self.enabled {
+        if !self.enabled() {
             return;
         }
         let bytes = text.len() as u64;
@@ -487,6 +517,49 @@ mod tests {
         }
         zip.finish().unwrap();
         path
+    }
+
+    #[test]
+    fn disabling_the_content_index_frees_the_cache() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let cache = ContentIndex::new(Arc::clone(&enabled), 1024 * 1024, 1024 * 1024);
+        let a = PathBuf::from("/x/a.txt");
+
+        cache.insert(a.clone(), "hello".to_string());
+        assert!(cache.enabled());
+        assert!(cache.contains(&a));
+        assert_eq!(cache.get_with(&a, |t| t.len()), Some(5));
+        assert_eq!(cache.stats(), (1, 5));
+
+        // Off means *empty*, not merely "stops growing": the budget promises
+        // zero bytes while it is off.
+        cache.set_enabled(false);
+        assert!(!cache.enabled());
+        assert!(!cache.contains(&a));
+        assert_eq!(cache.get_with(&a, |t| t.len()), None);
+        assert_eq!(cache.stats(), (0, 0));
+        cache.insert(PathBuf::from("/x/b.txt"), "world".to_string());
+        assert_eq!(cache.stats(), (0, 0), "inserts must be ignored while off");
+
+        // …and it works again once switched back on.
+        cache.set_enabled(true);
+        cache.insert(a.clone(), "again".to_string());
+        assert_eq!(cache.get_with(&a, |t| t.len()), Some(5));
+    }
+
+    #[test]
+    fn the_queue_drops_sends_while_the_cache_is_off() {
+        let enabled = Arc::new(AtomicBool::new(false));
+        let (queue, rx) = ExtractQueue::new(Arc::clone(&enabled));
+
+        queue.send(PathBuf::from("/x/a.txt"));
+        assert_eq!(queue.pending.load(Ordering::Relaxed), 0);
+        assert!(rx.try_recv().is_err(), "nothing should have been queued");
+
+        enabled.store(true, Ordering::Relaxed);
+        queue.send(PathBuf::from("/x/b.txt"));
+        assert_eq!(queue.pending.load(Ordering::Relaxed), 1);
+        assert_eq!(rx.try_recv().ok(), Some(PathBuf::from("/x/b.txt")));
     }
 
     #[test]

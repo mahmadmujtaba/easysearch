@@ -1,4 +1,4 @@
-# Everything for Linux — Scope
+# EasySearch — Scope
 
 **Status:** Draft for review · **Date:** 2026-08-20 · **Target platform:** Debian 13 (trixie) / Linux, x86_64 (cross-platform design)
 
@@ -86,7 +86,7 @@ repeated content queries, and is kept fresh by the same event pipeline.
 │   └── queries  ── SQL pushdown (dir/ext/size/mtime/hidden) + one shared predicate          │
 │                     ∪ pending overlay deltas                                                 │
 │                                                                                             │
-│   app/  (one binary: everything-linux) ── starts or attaches to the daemon, runs the GUI     │
+│   app/  (one binary: easysearch) ── starts or attaches to the daemon, runs the GUI     │
 │   daemon/ (tiny_http)  OWNS the index ── localhost HTTP/JSON, keeps the database current     │
 │   cli/  (clap)         in-process or --remote ── scripted search / status                   │
 │   gui/  (eframe/egui)  the UI ── reads via the daemon when one is running                   │
@@ -96,7 +96,7 @@ repeated content queries, and is kept fresh by the same event pipeline.
 - **One owner of the index.** The daemon is the only writer of the SQLite database and
   keeps it current from kernel events; the GUI, CLI and any other client only read. WAL
   mode means readers never block the writer.
-- **The default path does use IPC** — deliberately. `everything-linux` makes sure a daemon
+- **The default path does use IPC** — deliberately. `easysearch` makes sure a daemon
   is listening (re-executing itself with `--daemon`) and talks to it over localhost
   HTTP/JSON. If a daemon cannot be started, the GUI falls back to an in-process engine, so
   a single process is still a supported configuration (one writer either way).
@@ -247,10 +247,10 @@ One query box, three effective combinations:
 ## 6. Search Roots & Exclusions
 
 - **Default roots:** `$HOME` of the user who runs the program (user decision 2026-08-20).
-  Additional roots configurable in `~/.config/everything-linux/config.json`.
+  Additional roots configurable in `~/.config/easysearch/config.json`.
 - **Ignore files:** `.gitignore` / `.ignore` files in the searched tree are honored
   (gitignore syntax; `config.respect_ignore_files`, default on), plus a global ignore
-  file at `~/.config/everything-linux/ignore`. The shipped `.gitignore` excludes
+  file at `~/.config/easysearch/ignore`. The shipped `.gitignore` excludes
   `node_modules`, `target`, build dirs, caches, editor settings, and VCS internals
   (copy it to `~/.gitignore` to apply to the default root).
 - **Never indexed (pseudo-FS / noise):** `/proc`, `/sys`, `/dev`, `/run`, `/tmp`.
@@ -286,17 +286,17 @@ One query box, three effective combinations:
 
 ## 8. Daemon HTTP API (localhost only) — implemented in `daemon/`
 
-`everything-daemon` owns the engine as a **separate process** and serves it over
+`easysearch-daemon` owns the engine as a **separate process** and serves it over
 `tiny_http`, bound to `127.0.0.1:5858` by default. Read-only; no auth, loopback
 only. Full reference: **`docs/api.md`**.
 
 Splitting the engine out of the GUI means the index keeps running — and every
 client keeps working — even when no GUI is running at all:
 
-- `everything-gui` attaches to a daemon (`--daemon ADDR`, `EVERYTHING_DAEMON`, or
+- `easysearch-gui` attaches to a daemon (`--daemon ADDR`, `EASYSEARCH_DAEMON`, or
 auto-detected on the default address) and falls back to an in-process engine when
 none is running, so it can never become unusable.
-- `everything` (CLI) indexes in-process by default and supports `--remote ADDR`.
+- `easysearch-cli` (CLI) indexes in-process by default and supports `--remote ADDR`.
 - Any other client can use plain HTTP + JSON (`curl`, scripts, any language).
 
 | Endpoint | Purpose |
@@ -318,7 +318,7 @@ small writes (so short SSE frames are never flushed).
 |---|---|
 | Binary size (stripped, `lto`+`strip`) | **< 10 MB** per binary |
 | Idle RSS, headless engine | **≈ 15 MiB** with the disk-backed index |
-| Index storage | **on disk** — SQLite in `$XDG_CACHE_HOME/everything-linux/db/` (WAL; page cache reclaimable) |
+| Index storage | **on disk** — SQLite in `$XDG_CACHE_HOME/easysearch/db/` (WAL; page cache reclaimable) |
 | Resident index structures | ≈ 4 MB hash table + small change overlay |
 | Backend idle CPU | **≈ 0 %** (event-driven; no polling loops) |
 | Cold index, 1M files | < 30 s; searchable from first second |
@@ -328,7 +328,7 @@ small writes (so short SSE frames are never flushed).
 | Content index (when **enabled**) | + extracted text only (≤ 256 MB cap, LRU); **0 MB / 0 CPU when off** |
 
 **Memory architecture (v0.13):** the index lives in a SQLite database
-(`~/.cache/everything-linux/db/index.db`, WAL mode) owned by the daemon; only a small
+(`~/.cache/easysearch/db/index.db`, WAL mode) owned by the daemon; only a small
 in-memory overlay of recent changes is always resident, and it is folded into the database
 in one transaction before each query. `storage = "mmap"` in `config.json` switches back to
 the original memory-mapped file (`index-v1.bin`), and `persist_index = false` keeps nothing
@@ -349,7 +349,7 @@ the measurement method.
 ## 10. GUI (egui) Specification
 
 **Display backends: Wayland-first, X11 second.** The frontend registers the
-`io.github.everythinglinux.EverythingForLinux` app id with the compositor (it matches the
+`io.github.easysearch.EasySearch` app id with the compositor (it matches the
 installed desktop entry, so the launcher and window icon line up). winit's selection is
 built-in and already Wayland-first: `WAYLAND_DISPLAY` set → native Wayland (preferred,
 since an X11 display can exist under Wayland via XWayland), only `DISPLAY` set → X11
@@ -385,12 +385,12 @@ Layout, top to bottom (the “FileSearch Pro” reference in `ui-screenshots/mai
 - **Theming:** follows the desktop's light/dark scheme live (KDE `kdeglobals`, GTK
   settings, or the XDG portal) and uses the system UI/mono fonts. Empty state suggests
   what to search or reports indexing progress.
-- CLI mirror (`everything search "*.pdf"`) prints matched paths for scripting.
+- CLI mirror (`easysearch-cli search "*.pdf"`) prints matched paths for scripting.
 
 ## 11. Project Layout (Cargo workspace)
 
 ```
-everything-for-linux/
+easysearch/
 ├── docs/                      ← scope.md (this), ui.md, config.md, api.md,
 │                                sqlite.md, packaging.md, pending.md
 ├── README.md                  ← install, usage, configuration, footprint

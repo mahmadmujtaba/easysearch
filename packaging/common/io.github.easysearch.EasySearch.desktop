@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Everything for Linux
+Name=EasySearch
 GenericName=File Search
 Comment=Instant file and content search across your filesystem
-Exec=everything-linux
-Icon=io.github.everythinglinux.EverythingForLinux
+Exec=easysearch
+Icon=io.github.easysearch.EasySearch
 Terminal=false
 Categories=Utility;FileTools;
 Keywords=search;find;files;content;grep;everything;locate;realtime;
 StartupNotify=true
-StartupWMClass=io.github.everythinglinux.EverythingForLinux
+StartupWMClass=io.github.easysearch.EasySearch

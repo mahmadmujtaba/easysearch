@@ -1,12 +1,12 @@
 # Configuration
 
-Everything for Linux reads one optional JSON file:
+EasySearch reads one optional JSON file:
 
 ```
-~/.config/everything-linux/config.json
+~/.config/easysearch/config.json
 ```
 
-(`$XDG_CONFIG_HOME/everything-linux/config.json` if `XDG_CONFIG_HOME` is set.)
+(`$XDG_CONFIG_HOME/easysearch/config.json` if `XDG_CONFIG_HOME` is set.)
 
 The file is **optional**: if it is missing or unparseable, the defaults below are
 used (an invalid file prints a warning and is ignored rather than crashing). All
@@ -48,7 +48,7 @@ app manages itself.
 | `exclude_removable` | `true` | Skip removable media (USB sticks, card readers), detected via `/sys/block/*/removable`. |
 | `exclude_network` | `true` | Skip network mounts (`nfs`, `cifs`/`smb`, `sshfs`, `gvfsd-fuse`, `9p`, …). |
 | `exclude_fstypes` | `[]` | *Extra* filesystem types to skip, on top of the built-in list (pseudo filesystems, container overlays, network FS). Union, not replacement. |
-| `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files inside the searched tree, plus the global ignore file at `~/.config/everything-linux/ignore`. This is what keeps `node_modules/`, `target/` and the like out of the index. |
+| `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files inside the searched tree, plus the global ignore file at `~/.config/easysearch/ignore`. This is what keeps `node_modules/`, `target/` and the like out of the index. |
 | `follow_symlinks` | `false` | Follow symbolic links into their targets while walking, so the contents of a symlinked folder are indexed too. Off by default (it can duplicate subtrees); cycles are detected and skipped. Both this and `respect_ignore_files` can be toggled live from the GUI or `POST /v1/config`. |
 
 ## Where the index is stored
@@ -58,7 +58,7 @@ app manages itself.
 | `storage` | `"sqlite"` | `"sqlite"` keeps the index in a SQLite database (WAL mode) — the daemon is the only writer, and queries are answered from it. `"mmap"` uses the original memory-mapped binary index instead, which is faster for bare name queries but has no query language. See [`sqlite.md`](sqlite.md) for the trade-offs. |
 | `db_dir` | `null` | Where the database lives. `null` means a `db/` folder beside the mmap index — so setting `disk_index_dir` moves the database too. |
 | `persist_index` | `true` | `false` keeps **nothing** on disk: no database, no mmap file. Everything lives in RAM and is rebuilt on every start (useful for throwaway/portable use; a big `$HOME` costs real memory). |
-| `disk_index_dir` | `null` | Where the mmap index lives (`index-v1.bin`). `null` means `$XDG_CACHE_HOME/everything-linux` (i.e. `~/.cache/everything-linux`). Only used when `storage` is `"mmap"`. |
+| `disk_index_dir` | `null` | Where the mmap index lives (`index-v1.bin`). `null` means `$XDG_CACHE_HOME/easysearch` (i.e. `~/.cache/easysearch`). Only used when `storage` is `"mmap"`. |
 | `overlay_compaction_threshold` | `8192` | mmap backend only: when the in-memory change overlay holds more than this many entries, a background compaction folds it into the file. The SQLite backend uses its own threshold (`REFRESH_AFTER_DIRTY`, 20 000). |
 
 ## Content search
@@ -69,7 +69,7 @@ repeated queries:
 
 | Key | Default | Effect |
 |---|---|---|
-| `content_index_enabled` | `false` | `true` starts a background extractor that caches text from indexed files, making repeated content queries nearly free. Off means **zero** extra memory and zero background CPU. (Note: there is no UI switch for this yet — set it in this file and restart.) |
+| `content_index_enabled` | `false` | Background content cache: extracted document text (docx/odt/pdf) kept in RAM (LRU, ≤ `content_index_total_cap_bytes`) to speed up repeated content searches. **Live-toggleable** — **Settings ▸ Indexing ▸ Background content index**, or `POST /v1/config` — and switching it off frees the cache, so it costs nothing while off. |
 | `content_index_max_file_bytes` | `8388608` (8 MB) | Files larger than this are not cached (they are still searched live). |
 | `content_index_total_cap_bytes` | `268435456` (256 MB) | Total size of the in-RAM cache; LRU-evicted beyond this. |
 
@@ -82,12 +82,12 @@ repeated queries:
 
 ## Ignore file
 
-`~/.config/everything-linux/ignore` — extra paths to exclude, in `.gitignore`
+`~/.config/easysearch/ignore` — extra paths to exclude, in `.gitignore`
 syntax (this is the "don't index these folders" file). The repository ships a
 starting point:
 
 ```sh
-cp .gitignore ~/.config/everything-linux/ignore
+cp .gitignore ~/.config/easysearch/ignore
 ```
 
 There is a GUI for this (no hand-editing required): **Tools ▸ Ignore files…**
@@ -100,9 +100,9 @@ so it takes effect without restarting anything.
 
 | Path | Contents |
 |---|---|
-| `~/.config/everything-linux/config.json` | this file |
-| `~/.config/everything-linux/gui.json` | GUI state: theme, zoom, open tabs, saved searches, search history (managed by the app) |
-| `~/.config/everything-linux/ignore` | global ignore patterns |
-| `~/.cache/everything-linux/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
-| `~/.cache/everything-linux/index-v1.bin` | the mmap index, when `storage = "mmap"` |
-| `~/.cache/everything-linux/daemon.log` | the daemon's log when started by the combined binary |
+| `~/.config/easysearch/config.json` | this file |
+| `~/.config/easysearch/gui.json` | GUI state: theme, zoom, open tabs, saved searches, search history (managed by the app) |
+| `~/.config/easysearch/ignore` | global ignore patterns |
+| `~/.cache/easysearch/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
+| `~/.cache/easysearch/index-v1.bin` | the mmap index, when `storage = "mmap"` |
+| `~/.cache/easysearch/daemon.log` | the daemon's log when started by the combined binary |

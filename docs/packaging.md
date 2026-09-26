@@ -1,12 +1,12 @@
 # Packaging
 
-Everything for Linux builds three distribution formats from one set of assets:
+EasySearch builds three distribution formats from one set of assets:
 
 | Format | Command | Output | Needs |
 | --- | --- | --- | --- |
-| Debian | `make deb` | `dist/everything-linux_<version>_<arch>.deb` | `dpkg-deb` (any Debian/Ubuntu) |
-| RPM | `make rpm` | `~/rpmbuild/RPMS/*/everything-linux-<version>-*.rpm`, copied to `dist/` | `rpmbuild` |
-| Flatpak | `make flatpak` | `dist/io.github.everythinglinux.EverythingForLinux.flatpak` | `flatpak-builder` + the freedesktop SDK |
+| Debian | `make deb` | `dist/easysearch_<version>_<arch>.deb` | `dpkg-deb` (any Debian/Ubuntu) |
+| RPM | `make rpm` | `~/rpmbuild/RPMS/*/easysearch-<version>-*.rpm`, copied to `dist/` | `rpmbuild` |
+| Flatpak | `make flatpak` | `dist/io.github.easysearch.EasySearch.flatpak` | `flatpak-builder` + the freedesktop SDK |
 
 `make packages` builds whichever of the three this machine has tools for, and
 says so for the ones it skips. `make validate-packaging` checks the desktop
@@ -19,16 +19,16 @@ Nothing here needs `sudo`.
 All three formats install the same payload:
 
 ```
-/usr/bin/everything-linux                  the app: GUI + search daemon in one file
-/usr/bin/everything                        scriptable CLI
-/usr/bin/everything-daemon                 headless daemon (HTTP/JSON API)
-/usr/share/applications/io.github.everythinglinux.EverythingForLinux.desktop
-/usr/share/metainfo/io.github.everythinglinux.EverythingForLinux.metainfo.xml
-/usr/share/icons/hicolor/{scalable,64x64,128x128,256x256,512x512}/apps/io.github.everythinglinux.EverythingForLinux.{svg,png}
-/usr/share/doc/everything-linux/{copyright,README.md}      (deb/rpm only)
+/usr/bin/easysearch                  the app: GUI + search daemon in one file
+/usr/bin/easysearch-cli                        scriptable CLI
+/usr/bin/easysearch-daemon                 headless daemon (HTTP/JSON API)
+/usr/share/applications/io.github.easysearch.EasySearch.desktop
+/usr/share/metainfo/io.github.easysearch.EasySearch.metainfo.xml
+/usr/share/icons/hicolor/{scalable,64x64,128x128,256x256,512x512}/apps/io.github.easysearch.EasySearch.{svg,png}
+/usr/share/doc/easysearch/{copyright,README.md}      (deb/rpm only)
 ```
 
-`everything-gui` is a development convenience that duplicates `everything-linux`
+`easysearch-gui` is a development convenience that duplicates `easysearch`
 (which already runs the GUI *and* the daemon) and would add another ~17 MB, so
 it is deliberately not packaged. `make install` still installs it locally.
 
@@ -55,11 +55,11 @@ scripts/
 
 These are placeholders and should be changed to your own identifiers:
 
-1. **Application id.** `io.github.everythinglinux.EverythingForLinux` is used in
+1. **Application id.** `io.github.easysearch.EasySearch` is used in
    the desktop entry file name, the metainfo `<id>` and `<launchable>`, the
    Flatpak `app-id`, and in `APP_ID` in the `Makefile`.
 2. **Maintainer.** `scripts/package-deb.sh` defaults the deb maintainer to
-   `Everything for Linux <everything-linux@localhost>`; override it with
+   `EasySearch <easysearch@localhost>`; override it with
    `MAINTAINER='Your Name <you@example.com>' make deb`, or edit the default.
 3. **Homepage.** There is no `<url type="homepage">` in the metainfo yet, so
    `appstreamcli` prints a `url-homepage-missing` warning (the validator had
@@ -83,11 +83,11 @@ explicitly:
   loader asks for and is distribution-independent.
 
 If you add a dependency that is loaded the same way, add it in **both**
-`scripts/package-deb.sh` (`GUI_DEPENDS`) and `packaging/rpm/everything-linux.spec.in`.
+`scripts/package-deb.sh` (`GUI_DEPENDS`) and `packaging/rpm/easysearch.spec.in`.
 
 ## Flatpak
 
-The manifest is `packaging/flatpak/io.github.everythinglinux.EverythingForLinux.yml`.
+The manifest is `packaging/flatpak/io.github.easysearch.EasySearch.yml`.
 The sandbox builds fully offline against vendored crates, so every crates.io
 dependency is declared in `packaging/flatpak/cargo-sources.json` — generated
 from `Cargo.lock` by `scripts/gen-cargo-sources.py` (the same job as upstream's

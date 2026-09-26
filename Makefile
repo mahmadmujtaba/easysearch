@@ -1,6 +1,6 @@
-# Everything for Linux — Makefile
+# EasySearch — Makefile
 #
-#   make            build + test + release (everything)
+#   make            build + test + release (easysearch-cli)
 #   make build      dev build (fast)
 #   make dev        alias for build
 #   make release    production build (LTO + strip)   [alias: prod]
@@ -8,7 +8,7 @@
 #   make check      type-check without producing binaries
 #   make clippy     lint
 #   make fmt        format sources
-#   make run        build + run Everything for Linux (one binary: GUI + daemon)
+#   make run        build + run EasySearch (one binary: GUI + daemon)
 #   make run-dev    same, dev profile
 #   make run-gui    run just the GUI binary (dev tool)
 #   make daemon     run just the search daemon (HTTP/JSON API)
@@ -32,7 +32,7 @@ INSTALLDIR := $(HOME)/.local/bin
 # Reverse-DNS application id, shared by the desktop entry, the AppStream
 # metainfo file and the Flatpak manifest. Change it in one place here and in
 # packaging/common/, packaging/icons/ and packaging/flatpak/.
-APP_ID     := io.github.everythinglinux.EverythingForLinux
+APP_ID     := io.github.easysearch.EasySearch
 
 .PHONY: all build dev release prod test test-release check clippy fmt \
         run run-dev run-gui daemon daemon-dev dist install uninstall clean help \
@@ -69,25 +69,25 @@ clippy:
 fmt:
 	$(CARGO_BIN) fmt --all
 
-## Build and launch Everything for Linux. This one binary is both the GUI and
+## Build and launch EasySearch. This one binary is both the GUI and
 ## the search daemon: it starts a daemon (re-executing itself) and attaches.
 run: release
-	./$(BIN_DIR)/everything-linux
+	./$(BIN_DIR)/easysearch
 
 ## Same as `run`, dev profile.
 run-dev: build
-	./target/debug/everything-linux
+	./target/debug/easysearch
 
 ## Build and launch just the GUI binary (a development convenience).
 run-gui: release
-	./$(BIN_DIR)/everything-gui
+	./$(BIN_DIR)/easysearch-gui
 
 ## Copy the single shareable binary to dist/.
 dist: release
 	mkdir -p dist
-	install -m 0755 $(BIN_DIR)/everything-linux dist/everything-linux
-	@echo "Shareable binary: dist/everything-linux"
-	@ls -lh dist/everything-linux
+	install -m 0755 $(BIN_DIR)/easysearch dist/easysearch
+	@echo "Shareable binary: dist/easysearch"
+	@ls -lh dist/easysearch
 
 ## Build a Debian package (needs the release binaries, no root required).
 deb: release
@@ -128,23 +128,23 @@ validate-packaging:
 
 ## Build and launch the search daemon (GUI and CLI then attach to it).
 daemon: release
-	./$(BIN_DIR)/everything-daemon --addr 127.0.0.1:5858
+	./$(BIN_DIR)/easysearch-daemon --addr 127.0.0.1:5858
 
 ## Build and launch the daemon (dev profile).
 daemon-dev: build
-	./target/debug/everything-daemon --addr 127.0.0.1:5858
+	./target/debug/easysearch-daemon --addr 127.0.0.1:5858
 
 ## Install release binaries into ~/.local/bin.
 install: release
 	mkdir -p $(INSTALLDIR)
-	install -m 0755 $(BIN_DIR)/everything-linux $(INSTALLDIR)/everything-linux
-	install -m 0755 $(BIN_DIR)/everything $(INSTALLDIR)/everything
-	install -m 0755 $(BIN_DIR)/everything-gui $(INSTALLDIR)/everything-gui
-	install -m 0755 $(BIN_DIR)/everything-daemon $(INSTALLDIR)/everything-daemon
-	@echo "Installed into $(INSTALLDIR): everything-linux, everything, everything-gui, everything-daemon"
+	install -m 0755 $(BIN_DIR)/easysearch $(INSTALLDIR)/easysearch
+	install -m 0755 $(BIN_DIR)/easysearch-cli $(INSTALLDIR)/easysearch-cli
+	install -m 0755 $(BIN_DIR)/easysearch-gui $(INSTALLDIR)/easysearch-gui
+	install -m 0755 $(BIN_DIR)/easysearch-daemon $(INSTALLDIR)/easysearch-daemon
+	@echo "Installed into $(INSTALLDIR): easysearch, easysearch-cli, easysearch-gui, easysearch-daemon"
 
 uninstall:
-	rm -f $(INSTALLDIR)/everything-linux $(INSTALLDIR)/everything $(INSTALLDIR)/everything-gui $(INSTALLDIR)/everything-daemon
+	rm -f $(INSTALLDIR)/easysearch $(INSTALLDIR)/easysearch-cli $(INSTALLDIR)/easysearch-gui $(INSTALLDIR)/easysearch-daemon
 
 clean:
 	$(CARGO_BIN) clean

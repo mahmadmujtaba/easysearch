@@ -1,18 +1,18 @@
-//! `everything` — headless search CLI.
+//! `easysearch-cli` — headless search CLI.
 //!
 //! By default it indexes in-process (no daemon needed). With `--remote ADDR` it
-//! instead queries a running `everything-daemon`, so the CLI keeps working even
+//! instead queries a running `easysearch-daemon`, so the CLI keeps working even
 //! when no GUI is involved.
 
 use clap::{Parser, Subcommand};
-use everything_core::update::{CurlFetcher, Stage, UpdateConfig, Updater};
-use everything_core::{Backend, Config, Query, State};
+use easysearch_core::update::{CurlFetcher, Stage, UpdateConfig, Updater};
+use easysearch_core::{Backend, Config, Query, State};
 use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
 #[command(
-    name = "everything",
+    name = "easysearch-cli",
     version,
     about = "Realtime file and content search for Linux (Everything-style)"
 )]
@@ -162,7 +162,7 @@ fn main() {
                 include_hidden: hidden,
                 full_path: path,
                 content,
-                category: everything_core::Category::All,
+                category: easysearch_core::Category::All,
                 include_dirs: true,
                 under,
                 extensions,
@@ -224,10 +224,10 @@ fn main() {
             }
             println!("skipped dirs:   {}", s.skipped);
             match &s.content_index {
-                everything_core::ContentIndexStatus::Disabled => {
+                easysearch_core::ContentIndexStatus::Disabled => {
                     println!("content index:  disabled")
                 }
-                everything_core::ContentIndexStatus::Enabled {
+                easysearch_core::ContentIndexStatus::Enabled {
                     entries,
                     bytes,
                     pending,
@@ -261,7 +261,7 @@ fn main() {
     }
 }
 
-/// `everything self-update`: check a signed HTTPS manifest and, with consent,
+/// `easysearch-cli self-update`: check a signed HTTPS manifest and, with consent,
 /// replace the installed binaries in place. See `docs/updates.md`.
 #[allow(clippy::too_many_arguments)]
 fn self_update(
@@ -274,7 +274,7 @@ fn self_update(
     remote: Option<String>,
 ) {
     if UpdateConfig::disabled() {
-        eprintln!("updates are disabled (EVERYTHING_NO_UPDATE is set)");
+        eprintln!("updates are disabled (EASYSEARCH_NO_UPDATE is set)");
         return;
     }
 
@@ -286,7 +286,7 @@ fn self_update(
         config.public_key_hex = Some(key);
     }
     if let Some(dir) = dir {
-        config.install_names = everything_core::update::installed_binaries(&dir);
+        config.install_names = easysearch_core::update::installed_binaries(&dir);
         config.install_dir = Some(dir);
     }
 
@@ -386,8 +386,8 @@ fn confirm(prompt: &str) -> bool {
 
 /// Ask a daemon (the one on `--remote`, else the default address) to stop.
 fn stop_daemon(remote: Option<&str>) -> bool {
-    let addr = remote.unwrap_or(everything_core::api::DEFAULT_ADDR);
-    everything_core::remote::request(addr, "POST", "/v1/shutdown", Some(b"{}")).is_ok()
+    let addr = remote.unwrap_or(easysearch_core::api::DEFAULT_ADDR);
+    easysearch_core::remote::request(addr, "POST", "/v1/shutdown", Some(b"{}")).is_ok()
 }
 
 /// Run `parse` on a flag value, printing a clear error and exiting non-zero on

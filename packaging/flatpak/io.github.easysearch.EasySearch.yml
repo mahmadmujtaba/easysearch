@@ -1,4 +1,4 @@
-# Flatpak manifest for Everything for Linux.
+# Flatpak manifest for EasySearch.
 #
 # Build with:
 #
@@ -12,7 +12,7 @@
 # Note: the sandbox only sees the directories granted in finish-args. To search
 # more of the disk, add e.g. "--filesystem=host:ro" to finish-args below.
 
-app-id: io.github.everythinglinux.EverythingForLinux
+app-id: io.github.easysearch.EasySearch
 
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
@@ -20,7 +20,7 @@ sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 
-command: everything-linux
+command: easysearch
 
 finish-args:
   # Windowing / rendering
@@ -37,26 +37,26 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/everything-linux/cargo
+    CARGO_HOME: /run/build/easysearch/cargo
     CARGO_NET_OFFLINE: 'true'
 
 modules:
-  - name: everything-linux
+  - name: easysearch
     buildsystem: simple
 
     build-commands:
       - cargo build --release --workspace --locked --offline
-      # everything-linux is the GUI *and* the daemon; the separate everything-gui
+      # easysearch is the GUI *and* the daemon; the separate easysearch-gui
       # binary is a development convenience and is not shipped.
-      - install -Dpm0755 target/release/everything-linux  /app/bin/everything-linux
-      - install -Dpm0755 target/release/everything        /app/bin/everything
-      - install -Dpm0755 target/release/everything-daemon /app/bin/everything-daemon
-      - install -Dpm0644 packaging/common/io.github.everythinglinux.EverythingForLinux.desktop
-        /app/share/applications/io.github.everythinglinux.EverythingForLinux.desktop
-      - install -Dpm0644 packaging/common/io.github.everythinglinux.EverythingForLinux.metainfo.xml
-        /app/share/metainfo/io.github.everythinglinux.EverythingForLinux.metainfo.xml
-      - install -Dpm0644 packaging/icons/hicolor/scalable/apps/io.github.everythinglinux.EverythingForLinux.svg
-        /app/share/icons/hicolor/scalable/apps/io.github.everythinglinux.EverythingForLinux.svg
+      - install -Dpm0755 target/release/easysearch  /app/bin/easysearch
+      - install -Dpm0755 target/release/easysearch-cli        /app/bin/easysearch-cli
+      - install -Dpm0755 target/release/easysearch-daemon /app/bin/easysearch-daemon
+      - install -Dpm0644 packaging/common/io.github.easysearch.EasySearch.desktop
+        /app/share/applications/io.github.easysearch.EasySearch.desktop
+      - install -Dpm0644 packaging/common/io.github.easysearch.EasySearch.metainfo.xml
+        /app/share/metainfo/io.github.easysearch.EasySearch.metainfo.xml
+      - install -Dpm0644 packaging/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.easysearch.EasySearch.svg
 
     sources:
       # The project itself (committed sources + the vendored arrayref patch).

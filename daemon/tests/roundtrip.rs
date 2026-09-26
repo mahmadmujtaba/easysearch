@@ -2,10 +2,10 @@
 //! HTTP client (the same path the GUI uses), plus raw requests to pin the wire
 //! format that other clients depend on.
 
-use everything_core::api::{Health, StatusReport};
-use everything_core::remote::request;
-use everything_core::{Backend, Config, Engine, Query, State};
-use everything_daemon::Daemon;
+use easysearch_core::api::{Health, StatusReport};
+use easysearch_core::remote::request;
+use easysearch_core::{Backend, Config, Engine, Query, State};
+use easysearch_daemon::Daemon;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +17,7 @@ struct TestDir(PathBuf);
 impl TestDir {
     fn new(tag: &str) -> TestDir {
         let dir =
-            std::env::temp_dir().join(format!("everything-daemon-{tag}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("easysearch-daemon-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TestDir(dir)
@@ -153,6 +153,31 @@ fn ignore_setting_round_trips_over_http() {
 }
 
 #[test]
+fn content_index_switch_round_trips_over_http() {
+    let dir = TestDir::new("cindex");
+    let root = dir.0.clone();
+    std::fs::write(root.join("keep.txt"), "x").unwrap();
+
+    let addr = start_daemon(&root);
+    assert!(wait_live_http(&addr, Duration::from_secs(30)));
+
+    let enabled = || {
+        let body = request(&addr, "GET", "/v1/status", None).unwrap();
+        let report: StatusReport = serde_json::from_slice(&body).unwrap();
+        !matches!(
+            report.status.content_index,
+            easysearch_core::ContentIndexStatus::Disabled
+        )
+    };
+
+    assert!(!enabled(), "the background content cache is off by default");
+    Backend::remote(&addr).set_content_index(true);
+    assert!(enabled(), "the switch should have taken effect");
+    Backend::remote(&addr).set_content_index(false);
+    assert!(!enabled(), "the switch should be reversible");
+}
+
+#[test]
 fn rest_api_shapes_are_stable() {
     let dir = TestDir::new("rest");
     let root = dir.0.clone();
@@ -164,7 +189,7 @@ fn rest_api_shapes_are_stable() {
     let body = request(&addr, "GET", "/v1/health", None).unwrap();
     let health: Health = serde_json::from_slice(&body).unwrap();
     assert!(health.ok);
-    assert_eq!(health.api, everything_core::api::API_VERSION);
+    assert_eq!(health.api, easysearch_core::api::API_VERSION);
 
     // Status
     assert!(

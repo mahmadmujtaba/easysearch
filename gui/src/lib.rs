@@ -1,6 +1,6 @@
-//! `everything-gui` library — native egui frontend over the core engine.
+//! `easysearch-gui` library — native egui frontend over the core engine.
 //!
-//! Exposed as a library so the combined single-binary app (`everything-linux`)
+//! Exposed as a library so the combined single-binary app (`easysearch`)
 //! can drive the same UI; [`run`] takes an already-chosen [`Backend`].
 //!
 //! Layout follows the "FileSearch Pro" reference: a menu bar and a labelled
@@ -10,13 +10,13 @@
 //! preview/details panel — over a view tab strip, recent searches and a live
 //! status bar. Tokyo Night palette; Wayland-first windowing.
 
-use eframe::egui;
-use egui_extras::{Column, TableBuilder};
-use everything_core::api::DEFAULT_ADDR;
-use everything_core::update::{CurlFetcher, InstallReport, Stage, UpdateConfig, Updater};
-use everything_core::{
+use easysearch_core::api::DEFAULT_ADDR;
+use easysearch_core::update::{CurlFetcher, InstallReport, Stage, UpdateConfig, Updater};
+use easysearch_core::{
     Backend, Category, ContentIndexStatus, Query, ResultRow, SearchResponse, State, Status,
 };
+use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ const HISTORY_CAP: usize = 20;
 /// Reverse-DNS application id. Kept in sync with the packaging assets in
 /// `packaging/` (desktop entry, AppStream metainfo, Flatpak manifest) so the
 /// window, the launcher entry and the icon all agree.
-const APP_ID: &str = "io.github.everythinglinux.EverythingForLinux";
+const APP_ID: &str = "io.github.easysearch.EasySearch";
 /// Selectable UI zoom levels (1.0 = 100%).
 const ZOOM_LEVELS: &[f32] = &[1.0, 1.1, 1.25];
 
@@ -536,7 +536,7 @@ fn gtk_settings_dark_from(text: &str) -> Option<bool> {
 pub fn run(backend: Arc<Backend>) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Everything for Linux")
+            .with_title("EasySearch")
             // Must match the installed desktop entry / icon name so Wayland
             // compositors associate the window with it (and show the icon).
             .with_app_id(APP_ID)
@@ -545,35 +545,36 @@ pub fn run(backend: Arc<Backend>) -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Everything for Linux",
+        "EasySearch",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, backend)))),
     )
 }
 
-/// Choose the search backend for the standalone `everything-gui` binary.
+/// Choose the search backend for the standalone `easysearch-gui` binary.
 ///
-/// `--daemon <addr>` (or `EVERYTHING_DAEMON=<addr>`) uses that daemon;
+/// `--daemon <addr>` (or `EASYSEARCH_DAEMON=<addr>`) uses that daemon;
 /// otherwise a daemon already listening on [`DEFAULT_ADDR`] is used when
 /// reachable; otherwise the engine runs in-process, so the GUI always works.
 pub fn select_backend() -> Arc<Backend> {
     if let Some(addr) = daemon_from_env_or_args() {
-        eprintln!("everything-gui: using daemon at {addr}");
+        eprintln!("easysearch-gui: using daemon at {addr}");
         return Arc::new(Backend::remote(addr));
     }
-    if everything_core::remote::probe(DEFAULT_ADDR, Duration::from_millis(300)) {
-        eprintln!("everything-gui: using daemon at {DEFAULT_ADDR}");
+    if easysearch_core::remote::probe(DEFAULT_ADDR, Duration::from_millis(300)) {
+        eprintln!("easysearch-gui: using daemon at {DEFAULT_ADDR}");
         return Arc::new(Backend::remote(DEFAULT_ADDR));
     }
-    eprintln!("everything-gui: no daemon on {DEFAULT_ADDR} — using the in-process engine");
-    Arc::new(Backend::local(everything_core::Config::load()))
+    eprintln!("easysearch-gui: no daemon on {DEFAULT_ADDR} — using the in-process engine");
+    Arc::new(Backend::local(easysearch_core::Config::load()))
 }
 
 fn daemon_from_env_or_args() -> Option<String> {
-    if let Ok(addr) = std::env::var("EVERYTHING_DAEMON")
-        && !addr.trim().is_empty() {
-            return Some(addr);
-        }
+    if let Ok(addr) = std::env::var("EASYSEARCH_DAEMON")
+        && !addr.trim().is_empty()
+    {
+        return Some(addr);
+    }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if let Some(rest) = arg.strip_prefix("--daemon=") {
@@ -586,7 +587,7 @@ fn daemon_from_env_or_args() -> Option<String> {
     None
 }
 
-/// Persistent GUI preferences (`~/.config/everything-linux/gui.json`).
+/// Persistent GUI preferences (`~/.config/easysearch/gui.json`).
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct GuiPrefs {
@@ -653,7 +654,7 @@ impl GuiPrefs {
                     .map(|h| PathBuf::from(h).join(".config"))
                     .unwrap_or_else(|| PathBuf::from("."))
             });
-        base.join("everything-linux").join("gui.json")
+        base.join("easysearch").join("gui.json")
     }
 
     fn load() -> GuiPrefs {
@@ -1060,7 +1061,7 @@ impl App {
             .expect("failed to spawn search thread");
 
         let prefs = GuiPrefs::load();
-        // Control socket: lets `everything-linux --toggle` drive this window
+        // Control socket: lets `easysearch --toggle` drive this window
         // (the portable way to bind a global hotkey — see gui/src/ipc.rs).
         let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Command>();
         ipc::spawn_listener(ipc_tx);
@@ -1073,7 +1074,7 @@ impl App {
         let backend_label = backend.label();
         let history_shared = Arc::new(Mutex::new(prefs.history.clone()));
         let (tray_rx, tray_handle) =
-            match tray::spawn_tray("Everything for Linux", Arc::clone(&history_shared)) {
+            match tray::spawn_tray("EasySearch", Arc::clone(&history_shared)) {
                 Ok((rx, handle)) => (Some(rx), Some(handle)),
                 Err(e) => {
                     eprintln!("system tray unavailable: {e}");
@@ -1627,26 +1628,28 @@ impl App {
         let mut text = String::new();
         let mut image = None;
         let mut binary = false;
-        if !row.is_dir && row.size < 4 * 1024 * 1024
-            && let Ok(bytes) = std::fs::read(&row.path) {
-                if is_image_file(&row.path) {
-                    if let Ok(decoded) = image::load_from_memory(&bytes) {
-                        let thumb = decoded.thumbnail(280, 280);
-                        let rgba = thumb.to_rgba8();
-                        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-                        let color = egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
-                        image = Some(ctx.load_texture(
-                            "preview-thumb",
-                            color,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                    }
-                } else {
-                    let slice = &bytes[..bytes.len().min(64 * 1024)];
-                    binary = !is_probably_text(slice);
-                    text = String::from_utf8_lossy(slice).into_owned();
+        if !row.is_dir
+            && row.size < 4 * 1024 * 1024
+            && let Ok(bytes) = std::fs::read(&row.path)
+        {
+            if is_image_file(&row.path) {
+                if let Ok(decoded) = image::load_from_memory(&bytes) {
+                    let thumb = decoded.thumbnail(280, 280);
+                    let rgba = thumb.to_rgba8();
+                    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                    let color = egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
+                    image = Some(ctx.load_texture(
+                        "preview-thumb",
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    ));
                 }
+            } else {
+                let slice = &bytes[..bytes.len().min(64 * 1024)];
+                binary = !is_probably_text(slice);
+                text = String::from_utf8_lossy(slice).into_owned();
             }
+        }
         self.preview = Some(Preview {
             path: row.path.clone(),
             is_dir: row.is_dir,
@@ -2428,7 +2431,7 @@ enum UpdateUi {
     Idle,
     Checking,
     UpToDate,
-    Available(Box<everything_core::Available>),
+    Available(Box<easysearch_core::Available>),
     /// Installing; `Some((stage, done, total))` once progress has arrived.
     Installing(Option<(Stage, u64, u64)>),
     Ready(Box<InstallReport>),
@@ -2438,7 +2441,7 @@ enum UpdateUi {
 /// Messages from the background update worker.
 enum UpdateMsg {
     UpToDate,
-    Available(Box<everything_core::Available>),
+    Available(Box<easysearch_core::Available>),
     Progress(Stage, u64, u64),
     Installed(Box<InstallReport>),
     Error(String),
@@ -2447,7 +2450,7 @@ enum UpdateMsg {
 /// What the background update worker should do.
 enum UpdateTask {
     Check,
-    Install(everything_core::Available),
+    Install(easysearch_core::Available),
 }
 
 /// An action chosen from a result row's context menu. Collected while the table
@@ -2988,16 +2991,16 @@ impl eframe::App for App {
                 self.select(self.selected.saturating_sub(20), ctx);
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Enter))
-                && let Some(row) = self.results.get(self.selected) {
-                    App::open(&row.path);
-                }
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-            && !self.query.is_empty() {
-                self.query.clear();
-                self.history_idx = None;
-                self.send_query();
+                && let Some(row) = self.results.get(self.selected)
+            {
+                App::open(&row.path);
             }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.query.is_empty() {
+            self.query.clear();
+            self.history_idx = None;
+            self.send_query();
+        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
         }
@@ -3112,12 +3115,14 @@ impl eframe::App for App {
         // Close button: default = quit the app. With "close to tray" enabled
         // (opt-in setting) the window hides instead; only Quit then exits.
         if ctx.input(|i| i.viewport().close_requested())
-            && self.prefs.close_to_tray && !self.tray_quit {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.window_visible = false;
-            }
-            // else: let the close proceed and the app exit.
+            && self.prefs.close_to_tray
+            && !self.tray_quit
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.window_visible = false;
+        }
+        // else: let the close proceed and the app exit.
 
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -3174,11 +3179,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("Everything for Linux")
-                            .size(20.0)
-                            .strong(),
-                    );
+                    ui.label(egui::RichText::new("EasySearch").size(20.0).strong());
                     ui.label(
                         egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
                             .color(self.fg_dim()),
@@ -3335,12 +3336,40 @@ impl App {
                     self.engine.set_follow_symlinks(follow);
                     self.status.follow_symlinks = follow;
                 }
+                let mut content_index = matches!(
+                    self.status.content_index,
+                    ContentIndexStatus::Enabled { .. }
+                );
+                if ui
+                    .checkbox(&mut content_index, "Background content index")
+                    .on_hover_text(
+                        "Cache extracted document text in RAM to speed up repeated content \
+                         searches. Off: content queries read files live, always fresh.",
+                    )
+                    .changed()
+                {
+                    self.engine.set_content_index(content_index);
+                    // Mirror it so the checkbox holds still until the fresh
+                    // status (a remote daemon's is polled) arrives.
+                    if !content_index {
+                        self.status.content_index = ContentIndexStatus::Disabled;
+                    } else if !matches!(
+                        self.status.content_index,
+                        ContentIndexStatus::Enabled { .. }
+                    ) {
+                        self.status.content_index = ContentIndexStatus::Enabled {
+                            entries: 0,
+                            bytes: 0,
+                            pending: 0,
+                        };
+                    }
+                }
                 if ui.button("Edit ignore files…").clicked() {
                     self.open_ignore_dialog();
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Configuration").strong());
-                let config_path = everything_core::Config::default_path();
+                let config_path = easysearch_core::Config::default_path();
                 ui.label(
                     egui::RichText::new(config_path.display().to_string())
                         .small()
@@ -4465,7 +4494,7 @@ impl App {
         )
         .on_hover_text(
             "The optional background content cache is configured in \
-             ~/.config/everything-linux/config.json (content_index_enabled) and \
+             ~/.config/easysearch/config.json (content_index_enabled) and \
              takes effect on restart.",
         );
     }
@@ -4795,9 +4824,10 @@ impl App {
                         self.selected = i;
                     }
                     if let Some(p) = toggle
-                        && !self.checked.remove(&p) {
-                            self.checked.insert(p);
-                        }
+                        && !self.checked.remove(&p)
+                    {
+                        self.checked.insert(p);
+                    }
                     // The menu acts on the whole selection when this row is part
                     // of it, otherwise on the row alone.
                     let n_sel = self.checked.len();
@@ -5288,7 +5318,7 @@ impl App {
         self.spawn_update_worker(UpdateTask::Check);
     }
 
-    fn start_update_install(&mut self, available: everything_core::Available) {
+    fn start_update_install(&mut self, available: easysearch_core::Available) {
         if self.update_rx.is_some() {
             return;
         }
@@ -5375,7 +5405,7 @@ impl App {
         let mut open = true;
         let mut close = false;
         let mut do_check = false;
-        let mut do_install: Option<everything_core::Available> = None;
+        let mut do_install: Option<easysearch_core::Available> = None;
         let mut do_restart = false;
         egui::Window::new("Software update")
             .collapsible(false)
@@ -5526,7 +5556,7 @@ impl App {
     }
 
     fn load_ignore_text(&mut self) {
-        let path = everything_core::walker::global_ignore_file();
+        let path = easysearch_core::walker::global_ignore_file();
         self.ignore_text = std::fs::read_to_string(&path).unwrap_or_default();
     }
 
@@ -5537,7 +5567,7 @@ impl App {
             return;
         }
         let t = self.theme();
-        let path = everything_core::walker::global_ignore_file();
+        let path = easysearch_core::walker::global_ignore_file();
         let mut open = true;
         let mut close = false;
         let mut save = false;
@@ -6663,7 +6693,7 @@ fn relevance_score(path: &Path, needle: &str, fuzzy: bool) -> u8 {
 /// normalised against the best a term of that length could score, so terms of
 /// different lengths stay comparable.
 fn fuzzy_relevance(path: &Path, terms: &[String]) -> u8 {
-    use everything_core::matcher::fuzzy_score;
+    use easysearch_core::matcher::fuzzy_score;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -6700,8 +6730,8 @@ fn matched_terms<'a>(path: &Path, needle: &'a str, fuzzy: bool) -> Vec<&'a str> 
                 return false;
             }
             if fuzzy {
-                everything_core::matcher::fuzzy_score(bare, &name, false).is_some()
-                    || everything_core::matcher::fuzzy_score(bare, &full, false).is_some()
+                easysearch_core::matcher::fuzzy_score(bare, &name, false).is_some()
+                    || easysearch_core::matcher::fuzzy_score(bare, &full, false).is_some()
             } else {
                 let bare = bare.to_lowercase();
                 name_lc.contains(&bare) || full_lc.contains(&bare)

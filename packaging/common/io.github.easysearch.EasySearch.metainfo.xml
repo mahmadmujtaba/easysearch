@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.everythinglinux.EverythingForLinux</id>
+  <id>io.github.easysearch.EasySearch</id>
 
-  <name>Everything for Linux</name>
+  <name>EasySearch</name>
   <summary>Instant file and content search across your filesystem</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 
-  <developer id="io.github.everythinglinux">
-    <name>Everything for Linux</name>
+  <developer id="io.github.easysearch">
+    <name>EasySearch</name>
   </developer>
 
   <description>
     <p>
-      Everything for Linux searches file names and file contents as you type,
+      EasySearch searches file names and file contents as you type,
       across your whole filesystem, and keeps its index up to date in realtime
       as files are created, renamed, changed and deleted.
     </p>
@@ -29,11 +29,11 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.everythinglinux.EverythingForLinux.desktop</launchable>
+  <launchable type="desktop-id">io.github.easysearch.EasySearch.desktop</launchable>
 
   <provides>
-    <binary>everything-linux</binary>
-    <binary>everything</binary>
+    <binary>easysearch</binary>
+    <binary>easysearch</binary>
   </provides>
 
   <categories>

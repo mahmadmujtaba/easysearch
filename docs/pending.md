@@ -34,37 +34,46 @@ Both scripts fail fast with install instructions when their tool is missing, so
 
 ## 2. Placeholders to replace before publishing
 
-1. **Application id** — `io.github.everythinglinux.EverythingForLinux` is
-   invented. It lives in **10 files**, and two of them are *filenames* that must
-   be renamed too:
+1. **Application id — settled.** The project was renamed to **EasySearch** in
+   v0.23.0, and the app id is now
+   `io.github.easysearch.EasySearch`. It is consistent across the whole tree
+   (the Wayland app id in `gui/src/lib.rs`, the `Makefile`'s `APP_ID`, the
+   desktop entry, metainfo, Flatpak manifest and RPM spec, and the
+   `packaging/common/…EasySearch.*` / `packaging/icons/…EasySearch.svg`
+   filenames). If you change it again, those are the places, and two of them are
+   *filenames*:
 
-   | File | Occurrences |
+   | File | What changes |
    | --- | --- |
-   | `packaging/common/…EverythingForLinux.desktop` *(filename + 2 refs)* | 2 |
-   | `packaging/common/…EverythingForLinux.metainfo.xml` *(filename + id, launchable, developer)* | 3 |
-   | `packaging/flatpak/…EverythingForLinux.yml` *(filename + app-id + install paths)* | 7 |
-   | `packaging/icons/hicolor/scalable/apps/…EverythingForLinux.svg` *(filename)* | — |
-   | `Makefile` (`APP_ID`) | 1 |
-   | `gui/src/lib.rs` (`APP_ID`, used as the Wayland app id) | 1 |
-   | `packaging/rpm/everything-linux.spec.in` (`%global app_id`) | 1 |
-   | `scripts/package-deb.sh`, `scripts/package-flatpak.sh` | 1 + 2 |
-   | `README.md`, `docs/packaging.md` | 1 + 6 |
+   | `packaging/common/…EasySearch.desktop` *(filename + 2 refs)* | id |
+   | `packaging/common/…EasySearch.metainfo.xml` *(filename + id, launchable, developer)* | id |
+   | `packaging/flatpak/…EasySearch.yml` *(filename + app-id + install paths)* | id |
+   | `packaging/icons/hicolor/scalable/apps/…EasySearch.svg` *(filename)* | filename |
+   | `Makefile` (`APP_ID`), `gui/src/lib.rs` (`APP_ID`) | id |
+   | `packaging/rpm/easysearch.spec.in` (`%global app_id`) | id |
+   | `scripts/package-{deb,flatpak}.sh` | id |
+   | `README.md`, `docs/packaging.md` | prose |
 
-   Note: the app id was changed *from* `everything-linux` in v0.11.0, so any KDE
-   window rule or shortcut that matched the old class may need re-doing.
+   Note the id is also the Wayland `app_id`, so a KDE window rule or shortcut
+   that matched the previous class needs re-doing.
 
-2. **Deb maintainer** — defaults to
-   `Everything for Linux <everything-linux@localhost>`. Override per build:
+2. **Repository URL.** `packaging/rpm/easysearch.spec.in` and
+   `core/src/update.rs` still point at placeholder GitHub paths
+   (`github.com/easysearch/easysearch`). Replace them with the real host once the
+   repository exists — the updater's `DEFAULT_MANIFEST_URL` is the same URL.
+
+3. **Deb maintainer** — defaults to
+   `EasySearch <easysearch@localhost>`. Override per build:
    `MAINTAINER='You <you@example.com>' make deb`, or change the default in
    `scripts/package-deb.sh`.
 
-3. **Homepage URL** — there is deliberately no `<url type="homepage">` in the
+4. **Homepage URL** — there is deliberately no `<url type="homepage">` in the
    metainfo. `appstreamcli` caught that a placeholder URL 404s, and a dead link
    in a launcher is worse than a warning. Add your real URL and the
    `url-homepage-missing` warning disappears.
 
-4. **`LICENSE` copyright holder** — currently the neutral
-   "2026 Everything for Linux contributors". Put your name in it.
+5. **`LICENSE` copyright holder** — currently the neutral
+   "2026 EasySearch contributors". Put your name in it.
 
 ---
 
@@ -81,16 +90,10 @@ Both scripts fail fast with install instructions when their tool is missing, so
   the rest of the disk.
 - **Empty files have no preview.** A 0-byte text file shows “No text preview
   for this file.” rather than an empty document.
-- **The optional content index has no switch.** `content_index_enabled` exists
-  and works, but is only read from `~/.config/everything-linux/config.json` —
-  there is no CLI flag and no GUI toggle (the sidebar shows its state read-only).
-  Note that file does **not** exist on this machine yet, so the app is running
-  entirely on defaults. (The *ignore-files* setting is no longer in this
-  category: v0.16.0 gave it a GUI editor and a live `POST /v1/ignore` toggle.)
-- **`everything-gui` is still built but no longer packaged.** If you add a
+- **`easysearch-gui` is still built but no longer packaged.** If you add a
   binary or a `dlopen`ed library, update three places in step:
   `GUI_DEPENDS` in `scripts/package-deb.sh`, the `Requires:` sonames in
-  `packaging/rpm/everything-linux.spec.in`, and the install list in the Flatpak
+  `packaging/rpm/easysearch.spec.in`, and the install list in the Flatpak
   manifest.
 - **Clippy is clean.** The 20-odd pre-existing style warnings (collapsible `if`s,
   needless `map_or`, single-pattern `match`es, `Default` reassignment in tests)
@@ -130,7 +133,7 @@ folded into it in batched transactions before each query, and a large delta
 backlog triggers a full rebuild. Design and measurements are in
 [`sqlite.md`](sqlite.md).
 
-`storage = "mmap"` in `~/.config/everything-linux/config.json` falls back to the
+`storage = "mmap"` in `~/.config/easysearch/config.json` falls back to the
 original memory-mapped index.
 
 ## 6. Measured footprint (for reference)
@@ -140,8 +143,8 @@ Taken on this machine: KDE/Plasma on Wayland, release build, ~85 000 files,
 
 | Process | RSS | Peak RSS |
 | --- | --- | --- |
-| `everything-linux` (GUI) | **92 MiB** | 94 MiB |
-| `everything-linux --daemon` | **51 MiB** | 65 MiB |
+| `easysearch` (GUI) | **92 MiB** | 94 MiB |
+| `easysearch --daemon` | **51 MiB** | 65 MiB |
 | Total resident | **~143 MiB** | — |
 
 For comparison, the budget in [`scope.md` §9](scope.md#9-resource-footprint-budget-non-negotiable-targets)
@@ -163,7 +166,7 @@ deliverable; these are gated on request:
 
 **Phase 2 — polish**
 - ~~Bundled docx extractor (drop the `docx2txt` dependency)~~ — **done in v0.18.0** (in-process `zip` + `quick-xml` OOXML reader)
-- ~~Global hotkey~~ — **done in v0.19.0** (control socket: `everything-linux --toggle/--show/--hide/--search/--quit`, bound as a desktop custom shortcut)
+- ~~Global hotkey~~ — **done in v0.19.0** (control socket: `easysearch --toggle/--show/--hide/--search/--quit`, bound as a desktop custom shortcut)
 - ~~Substring / fuzzy filename ranking (fzf-style)~~ — **done in v0.17.0** (`Query.fuzzy`, `--fuzzy`, `?fuzzy=1`, the Fuzzy toolbar button, and the fuzzy Relevance ranking)
 - ~~`.gitignore` handling UI~~ — **done in v0.16.0** (Tools ▸ Ignore files…, live via `POST /v1/ignore`)
 
@@ -202,10 +205,10 @@ manual run against real `openssl`-signed artifacts); see
 not yet built:
 
 - **No release host is configured.** `DEFAULT_MANIFEST_URL` is a placeholder
-  GitHub path. Point it (or `EVERYTHING_UPDATE_URL`) at the real host.
+  GitHub path. Point it (or `EASYSEARCH_UPDATE_URL`) at the real host.
 - **No public release has been signed yet.** The keypair exists and its public
   half is compiled into the binary; the private half lives at
-  `~/.config/everything-linux/release-signing-key.pem` (never committed). Back it
+  `~/.config/easysearch/release-signing-key.pem` (never committed). Back it
   up — losing it means future updates are refused by existing installs.
 - **Manual release step.** Nothing runs `scripts/release-sign.sh`
   automatically; wire it into CI when there is one.

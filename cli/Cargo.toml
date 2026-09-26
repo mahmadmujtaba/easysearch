@@ -1,14 +1,14 @@
 [package]
-name = "everything"
+name = "easysearch-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Realtime file and content search for Linux (CLI)"
 
 [[bin]]
-name = "everything"
+name = "easysearch-cli"
 path = "src/main.rs"
 
 [dependencies]
-everything-core = { path = "../core" }
+easysearch-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }

@@ -1,21 +1,21 @@
 [package]
-name = "everything-app"
+name = "easysearch-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Everything for Linux as one file: the GUI and the search engine daemon in a single binary"
+description = "EasySearch as one file: the GUI and the search engine daemon in a single binary"
 
 [lib]
-name = "everything_app"
+name = "easysearch_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "everything-linux"
+name = "easysearch"
 path = "src/main.rs"
 
 [dependencies]
-everything-core = { path = "../core" }
-everything-gui = { path = "../gui" }
-everything-daemon = { path = "../daemon" }
+easysearch-core = { path = "../core" }
+easysearch-gui = { path = "../gui" }
+easysearch-daemon = { path = "../daemon" }
 serde_json = "1"
 libc = "0.2"

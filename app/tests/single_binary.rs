@@ -1,4 +1,4 @@
-//! The single `everything-linux` binary must be able to act as both GUI and
+//! The single `easysearch` binary must be able to act as both GUI and
 //! daemon. This exercises the daemon half plus the auto-start path the GUI uses
 //! (`ensure_daemon_with`), without needing a display.
 //!
@@ -13,7 +13,7 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new(tag: &str) -> TestDir {
-        let dir = std::env::temp_dir().join(format!("everything-app-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("easysearch-app-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TestDir(dir)
@@ -37,14 +37,14 @@ fn free_addr() -> String {
 fn addr_flag_is_parsed() {
     let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
-        everything_app::addr_from_args(&args(&["--daemon", "--addr", "127.0.0.1:1234"])),
+        easysearch_app::addr_from_args(&args(&["--daemon", "--addr", "127.0.0.1:1234"])),
         Some("127.0.0.1:1234".to_string())
     );
     assert_eq!(
-        everything_app::addr_from_args(&args(&["--addr=0.0.0.0:9"])),
+        easysearch_app::addr_from_args(&args(&["--addr=0.0.0.0:9"])),
         Some("0.0.0.0:9".to_string())
     );
-    assert_eq!(everything_app::addr_from_args(&args(&["--daemon"])), None);
+    assert_eq!(easysearch_app::addr_from_args(&args(&["--daemon"])), None);
 }
 
 #[test]
@@ -57,9 +57,9 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     // Isolated config + cache for the child, so it only indexes our tiny root
     // (and never touches the developer's home or real cache).
     let cfg = dir.0.join("cfg");
-    std::fs::create_dir_all(cfg.join("everything-linux")).unwrap();
+    std::fs::create_dir_all(cfg.join("easysearch")).unwrap();
     std::fs::write(
-        cfg.join("everything-linux").join("config.json"),
+        cfg.join("easysearch").join("config.json"),
         format!(r#"{{"roots":["{}"]}}"#, root.display()),
     )
     .unwrap();
@@ -75,19 +75,19 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     ];
 
     let addr = free_addr();
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_everything-linux"));
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_easysearch"));
 
     // The binary should run itself as a daemon.
-    let mut child = everything_app::spawn_daemon_with_env(&addr, &exe, &envs)
+    let mut child = easysearch_app::spawn_daemon_with_env(&addr, &exe, &envs)
         .expect("spawning the daemon half of the binary failed");
-    let up = everything_app::wait_for_daemon(&addr, Duration::from_secs(30));
+    let up = easysearch_app::wait_for_daemon(&addr, Duration::from_secs(30));
 
     // Poll until the fixture is indexed and searchable.
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut found = false;
     while Instant::now() < deadline {
         if let Ok(body) =
-            everything_core::remote::request(&addr, "GET", "/v1/search?query=needle*&limit=5", None)
+            easysearch_core::remote::request(&addr, "GET", "/v1/search?query=needle*&limit=5", None)
             && String::from_utf8_lossy(&body).contains("needle.txt")
         {
             found = true;
@@ -97,7 +97,7 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     }
 
     // With a daemon already listening, ensure must not start a second one.
-    let second = everything_app::ensure_daemon_with(&addr, &exe);
+    let second = easysearch_app::ensure_daemon_with(&addr, &exe);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -105,7 +105,7 @@ fn single_binary_starts_a_daemon_and_serves_search() {
     assert!(up, "daemon never became reachable on {addr}");
     assert!(found, "daemon never returned the fixture file");
     assert!(
-        matches!(second, everything_app::Ensured::AlreadyUp),
+        matches!(second, easysearch_app::Ensured::AlreadyUp),
         "expected AlreadyUp, got {second:?}"
     );
 }

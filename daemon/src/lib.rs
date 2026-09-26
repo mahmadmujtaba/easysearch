@@ -1,4 +1,4 @@
-//! `everything-daemon` — owns the search engine and serves it over a
+//! `easysearch-daemon` — owns the search engine and serves it over a
 //! localhost HTTP/JSON API, so the GUI (and any other client: scripts, another
 //! language, curl) is just a consumer. See `docs/api.md`.
 //!
@@ -11,7 +11,7 @@
 //!                  &ext=pdf,md&min_size=..&max_size=..&modified_within=..
 //! POST /v1/count    → Query (JSON) → {"count":n}   (count only, no rows)
 //! POST /v1/rebuild  → {"ok":true}
-//! POST /v1/ignore   → {"respect":bool,"follow_symlinks":bool,"rebuild":bool} → {"ok":true}
+//! POST /v1/ignore   → {"respect":bool,"follow_symlinks":bool,"content_index":bool,"rebuild":bool} → {"ok":true}
 //! POST /v1/config   → alias of /v1/ignore (live index settings)
 //! POST /v1/shutdown → {"ok":true}, then the daemon stops (and exits)
 //! GET  /v1/watch?timeout=25  → long-poll: same payload as /v1/status,
@@ -26,11 +26,11 @@
 //! server-sent events — is not defeated by `tiny_http`'s chunk encoder, which
 //! buffers small writes so short SSE frames are never flushed.
 
-use everything_core::api::{
+use easysearch_core::api::{
     API_VERSION, CountDto, ErrorDto, Health, SearchResponseDto, StatusReport, category_from_str,
 };
-use everything_core::remote::percent_decode;
-use everything_core::{Engine, Query};
+use easysearch_core::remote::percent_decode;
+use easysearch_core::{Engine, Query};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -150,6 +150,7 @@ impl Daemon {
                             .or_else(|| value.get("respect_ignore_files"))
                             .and_then(|v| v.as_bool());
                         let follow = value.get("follow_symlinks").and_then(|v| v.as_bool());
+                        let content_index = value.get("content_index").and_then(|v| v.as_bool());
                         let rebuild = value
                             .get("rebuild")
                             .and_then(|v| v.as_bool())
@@ -159,6 +160,9 @@ impl Daemon {
                         }
                         if let Some(on) = follow {
                             self.engine.set_follow_symlinks(on, false);
+                        }
+                        if let Some(on) = content_index {
+                            self.engine.set_content_index(on);
                         }
                         if (respect.is_some() || follow.is_some()) && rebuild {
                             self.engine.rebuild();
@@ -243,7 +247,7 @@ fn header(name: &str, value: &str) -> Header {
 
 /// Bind `addr` and serve requests until the process exits.
 ///
-/// Shared by the `everything-daemon` binary and the combined single-binary app
+/// Shared by the `easysearch-daemon` binary and the combined single-binary app
 /// (which re-executes itself in daemon mode).
 pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
     let server = Server::http(addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
@@ -253,7 +257,7 @@ pub fn run_forever(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
         .map(|a| a.to_string())
         .unwrap_or_else(|| addr.to_string());
     eprintln!(
-        "everything-daemon {} — listening on http://{bound}",
+        "easysearch-daemon {} — listening on http://{bound}",
         env!("CARGO_PKG_VERSION")
     );
     Daemon::new(engine).serve_forever(Arc::new(server));
@@ -347,7 +351,7 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use everything_core::Category;
+    use easysearch_core::Category;
 
     #[test]
     fn parses_get_query_params() {

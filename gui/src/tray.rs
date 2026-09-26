@@ -32,7 +32,7 @@ pub struct AppTray {
 
 impl Tray for AppTray {
     fn id(&self) -> String {
-        "everything-linux-tray".into()
+        "easysearch-tray".into()
     }
 
     fn title(&self) -> String {

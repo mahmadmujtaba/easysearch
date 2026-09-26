@@ -3,7 +3,7 @@
 #
 #     make rpm            # or: scripts/package-rpm.sh
 #
-# Output: $RPMBUILD_TOP/RPMS/*/everything-linux-<version>-<release>.*.rpm
+# Output: $RPMBUILD_TOP/RPMS/*/easysearch-<version>-<release>.*.rpm
 # (default $RPMBUILD_TOP is ~/rpmbuild; the packages are also copied to dist/.)
 #
 # Building needs rpmbuild, which ships separately from rpm itself:
@@ -18,8 +18,8 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 VERSION=$(cat VERSION)
-NAME=everything-linux
-TARBALL_DIR=everything-for-linux-$VERSION
+NAME=easysearch
+TARBALL_DIR=easysearch-$VERSION
 TOP=${RPMBUILD_TOP:-$HOME/rpmbuild}
 OUT_DIR=dist
 

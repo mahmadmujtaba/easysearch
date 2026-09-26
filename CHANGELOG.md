@@ -1,8 +1,56 @@
 # Changelog
 
-All notable changes to **Everything for Linux** are documented here.
+All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.24.0] - 2026-09-26
+
+### Changed — the project is now **EasySearch**
+
+- **Renamed everywhere.** The name `Everything for Linux` (and the awkward
+  `everything-linux` binary) is gone, so the project no longer reads as a clone
+  of someone else's product name. References to *VoidTools' Everything* as the
+  thing this is a Linux equivalent of are kept — that is a description of the
+  reference app, not of this project.
+
+  | Before | After |
+  | --- | --- |
+  | `everything-linux` (single binary) | **`easysearch`** |
+  | `everything` (CLI) | **`easysearch-cli`** |
+  | `everything-gui`, `everything-daemon` | `easysearch-gui`, `easysearch-daemon` |
+  | crates `everything-{core,gui,daemon,app}` | `easysearch-{core,gui,daemon,app}` |
+  | Rust `everything_core::…` | `easysearch_core::…` |
+  | `io.github.everythinglinux.EverythingForLinux` | `io.github.easysearch.EasySearch` |
+  | `~/.config/everything-linux/`, `~/.cache/everything-linux/` | `~/.config/easysearch/`, `~/.cache/easysearch/` |
+  | `$XDG_RUNTIME_DIR/everything-linux.sock` | `$XDG_RUNTIME_DIR/easysearch.sock` |
+  | `EVERYTHING_*` environment variables | `EASYSEARCH_*` |
+
+- **This is a breaking change for anyone who had it installed** (binary names,
+  the config/cache directory, the Wayland app id, the environment variables and
+  the control socket all move). It is done *before* the first public release, so
+  there is no migration path — the old paths are simply forgotten.
+- The four packaging files whose *filenames* carry the app id
+  (`packaging/common/…desktop`, `…metainfo.xml`, `packaging/flatpak/…yml`,
+  `packaging/icons/…svg`) and the RPM spec were renamed to match.
+- `scripts/`, the `Makefile`, all seven documents and the Flatpak manifest were
+  updated together; the app id is now consistent across all of them (see
+  `docs/pending.md` §2 for what is still a placeholder — the repository URL).
+
+### Added
+
+- **A live switch for the background content index** (the last of the documented
+  "no UI switch" rough edges). **Settings ▸ Indexing ▸ Background content index**
+  toggles it, or `POST /v1/config` with `{"content_index":true|false}` for the
+  daemon; the state is reported in `/v1/status` and `Engine::set_content_index`
+  is the entry point.
+- The switch owns the memory: `ContentIndex::set_enabled(false)` clears the cache
+  and its order book, so "off" really is zero bytes rather than a cache that
+  merely stops growing — which is what `docs/scope.md` §9's budget promises.
+- `ContentIndex` and `ExtractQueue` now share one `Arc<AtomicBool>` (the queue's
+  `send` is a no-op while off), so the two can never disagree. The extractor
+  thread is created once and simply stays parked while the cache is off.
+- `ContentIndex::clear()` is public (also used internally by `set_enabled`).
 
 ## [0.22.1] - 2026-09-26
 
@@ -73,15 +121,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A global hotkey (Phase 2), in the only way that works on Wayland.** Wayland
   has no global-hotkey API and every desktop invents its own, so instead of a
   privileged hook the running window listens on
-  `$XDG_RUNTIME_DIR/everything-linux.sock` (mode `0600`) and a second invocation
+  `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`) and a second invocation
   drives it:
 
   ```sh
-  everything-linux --toggle        # show if hidden, hide if visible
-  everything-linux --show          # bring to the front
-  everything-linux --hide
-  everything-linux --search TODO   # open and search
-  everything-linux --quit          # exit (the index daemon keeps running)
+  easysearch --toggle        # show if hidden, hide if visible
+  easysearch --show          # bring to the front
+  easysearch --hide
+  easysearch --search TODO   # open and search
+  easysearch --quit          # exit (the index daemon keeps running)
   ```
 
   Bind one as a **custom shortcut** in the desktop's own settings (KDE, GNOME,
@@ -125,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first. `!term` exclusions deliberately keep their literal substring meaning.
 - `Query.fuzzy` in the engine, `--fuzzy` in the CLI, and `fuzzy` in both HTTP
   API forms (`?fuzzy=1` and the `Query` field).
-  `everything_core::matcher::fuzzy_score` is public for callers that want the
+  `easysearch_core::matcher::fuzzy_score` is public for callers that want the
   score itself.
 
 ### Notes
@@ -140,7 +188,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **An ignore-files UI (Phase 2).** **Tools ▸ Ignore files…** edits the global
-  ignore list (`~/.config/everything-linux/ignore`, `.gitignore` syntax) with
+  ignore list (`~/.config/easysearch/ignore`, `.gitignore` syntax) with
   **Save & rebuild** / **Reload** / **Rebuild index**, and **Settings ▸ Indexing**
   toggles whether `.gitignore`/`.ignore` files are honoured at all.
 - **The toggle is live.** `Engine::set_respect_ignore` updates an atomic flag and
@@ -148,7 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value as `status.respect_ignore_files`, so the GUI can change it on a remote
   daemon and read back the truth. Previously the setting could only be changed by
   hand-editing `config.json` and restarting.
-- `everything_core::walker::global_ignore_file()` exposes the ignore-file path.
+- `easysearch_core::walker::global_ignore_file()` exposes the ignore-file path.
 
 ## [0.15.1] - 2026-09-26
 
@@ -177,7 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notes, progress bar, **Install update**, **Restart now**). A quiet check runs at
   launch at most once a day, and a `⬆ v… available` badge appears beside the
   version in the status bar. Both are configurable in **Settings ▸ Updates**.
-- **CLI: `everything self-update`** (`--check`, `--yes`, `--manifest`,
+- **CLI: `easysearch-cli self-update`** (`--check`, `--yes`, `--manifest`,
   `--pubkey`, `--dir`, `--restart-daemon`).
 - **`scripts/release-sign.sh`** builds the manifest from `target/release/*`,
   signs it with `openssl`, and verifies its own signature before you ship it.
@@ -283,7 +331,7 @@ described the v0.1.0 architecture (a memory-mapped index and a three-pane UI).
 
 ### Added
 
-- **The index now lives in SQLite** (`$XDG_CACHE_HOME/everything-linux/db/index.db`).
+- **The index now lives in SQLite** (`$XDG_CACHE_HOME/easysearch/db/index.db`).
   The daemon owns the database — it is the only writer — and keeps it current
   from kernel filesystem events, folding each batch into one transaction; every
   query (GUI, CLI, HTTP API) is answered from the database. See
@@ -387,9 +435,9 @@ three-pane body and a view/status footer.
 
 ### Changed
 
-- The packages ship `everything-linux` (GUI + daemon in one binary), the CLI and
-  a headless daemon. The separate `everything-gui` binary is a development
-  convenience that duplicated `everything-linux` and added ~17 MB, so it is no
+- The packages ship `easysearch` (GUI + daemon in one binary), the CLI and
+  a headless daemon. The separate `easysearch-gui` binary is a development
+  convenience that duplicated `easysearch` and added ~17 MB, so it is no
   longer packaged (the deb is ~6.4 MB compressed / ~23 MB installed).
 
 ## [0.10.0] - 2026-09-24
@@ -428,15 +476,15 @@ three-pane body and a view/status footer.
 
 ### Added
 
-- **One file to run: `everything-linux`.** A single binary that is both the GUI
+- **One file to run: `easysearch`.** A single binary that is both the GUI
   and the search daemon. Run with no arguments it makes sure a daemon is
   listening — re-executing *itself* in `--daemon` mode, detached into its own
   session — and attaches the GUI to it, so the HTTP API keeps serving other
   clients and the index keeps running after the GUI is closed. If a daemon
   cannot be started (for example the port is taken), the GUI falls back to an
   in-process engine instead of failing. The daemon's log goes to
-  `$XDG_CACHE_HOME/everything-linux/daemon.log`.
-- `make dist` copies the shareable single binary to `dist/everything-linux`
+  `$XDG_CACHE_HOME/easysearch/daemon.log`.
+- `make dist` copies the shareable single binary to `dist/easysearch`
   (~17 MB); `make run` now launches it and `make install` installs it alongside
   the per-component binaries.
 
@@ -455,18 +503,18 @@ three-pane body and a view/status footer.
 
 ### Added
 
-- **The search engine is now its own process.** A new `everything-daemon`
+- **The search engine is now its own process.** A new `easysearch-daemon`
   binary owns the index, watcher and content cache and serves them over an
   HTTP/JSON API on `127.0.0.1:5858` (localhost only, no authentication); see
   `docs/api.md`. Endpoints: `GET /v1/health`, `GET /v1/status`,
   `POST|GET /v1/search`, `POST /v1/rebuild`, and `GET /v1/watch` (long-poll).
   Because the engine no longer lives inside the GUI, it keeps running — and other
   clients keep working — when no GUI is running at all.
-- `everything-gui` is now a client: it attaches to a daemon (`--daemon ADDR`,
-  `EVERYTHING_DAEMON`, or auto-detected on the default address) and falls back to
+- `easysearch-gui` is now a client: it attaches to a daemon (`--daemon ADDR`,
+  `EASYSEARCH_DAEMON`, or auto-detected on the default address) and falls back to
   an in-process engine when none is running, so it always works. The status bar
   shows the active backend and flags an unreachable daemon in red.
-- `everything` (CLI) gained `--remote ADDR` to query a daemon instead of
+- `easysearch-cli` (CLI) gained `--remote ADDR` to query a daemon instead of
   indexing locally.
 - `core` gained `Backend` (in-process vs. daemon behind one interface), a
   dependency-free HTTP/1.1 client (`core::remote`, std only, with chunked
@@ -584,7 +632,7 @@ three-pane body and a view/status footer.
   automatically, and the watcher covers the whole root instead of just the
   top level.
 - Partial watch coverage is now visible: the GUI status bar shows
-  `⚠ N dir(s) not realtime · periodic rebuild` and `everything status` prints an
+  `⚠ N dir(s) not realtime · periodic rebuild` and `easysearch-cli status` prints an
   `unwatchable:` line, instead of reporting a healthy session while rebuilds
   quietly mask the gap.
 
@@ -629,7 +677,7 @@ three-pane body and a view/status footer.
 
 ### Added
 
-- **Pro-Search layout** (`everything-gui`): three-pane design — category
+- **Pro-Search layout** (`easysearch-gui`): three-pane design — category
   sidebar, floating search bar, results table, and a live preview pane.
   Tokyo Night palette (`#1a1b26` bg, `#7aa2f7` accent).
 - **Sidebar categories** (engine-backed `Category` filter): Recent (7 days),
@@ -648,10 +696,10 @@ three-pane body and a view/status footer.
 
 ### Changed
 
-- **Wayland-first display**: the GUI registers the `everything-linux` app id
+- **Wayland-first display**: the GUI registers the `easysearch` app id
   with the compositor (window icon / taskbar grouping). winit already prefers
   native Wayland whenever `WAYLAND_DISPLAY` is set and falls back to X11;
-  forcing X11 is done via `env -u WAYLAND_DISPLAY everything-gui`.
+  forcing X11 is done via `env -u WAYLAND_DISPLAY easysearch-gui`.
 
 ## [0.2.0] - 2026-08-20
 
@@ -663,10 +711,10 @@ three-pane body and a view/status footer.
 - **Light & dark themes**: the app follows the system theme on first launch
   (`dark-light`), with a persisted ☀️/🌙 toggle.
 - **Search history**: queries are remembered (Enter, or when the search box
-  loses focus) and persisted to `~/.config/everything-linux/gui.json`;
+  loses focus) and persisted to `~/.config/easysearch/gui.json`;
   ↑/↓ in the empty search box cycles history, and the 🕘 button opens the
   recent-search list (with “Clear history”).
-- **Reworked GUI** (`everything-gui`): dark/light themes with accent styling,
+- **Reworked GUI** (`easysearch-gui`): dark/light themes with accent styling,
   file-type icons, a virtualized results table (name / size / modified columns
   with click-to-sort), full keyboard navigation (↑/↓/PgUp/PgDn, Enter to open,
   Esc to clear, Ctrl+F to focus search), a resizable file **preview pane**, and
@@ -695,7 +743,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - **`.docx` content search** via a preprocessor hook (`docx2txt`); degrades
   gracefully when the tool is absent.
 - **Low-memory index architecture**: the bulk of the index lives in a
-  memory-mapped file (`~/.cache/everything-linux/index-v1.bin`, kernel page
+  memory-mapped file (`~/.cache/easysearch/index-v1.bin`, kernel page
   cache, reclaimable); only a small recent-change overlay and a compact hash
   table stay resident. Background compaction folds the overlay back into the
   file. RAM-only mode available via `persist_index: false`.
@@ -703,15 +751,15 @@ Initial release — a realtime filename **and** content search engine for Linux
   revalidated in the background.
 - **Ignore files**: `.gitignore`/`.ignore` in the searched tree are honored
   (gitignore syntax), plus a global ignore at
-  `~/.config/everything-linux/ignore`. Shipped `.gitignore` excludes
+  `~/.config/easysearch/ignore`. Shipped `.gitignore` excludes
   `node_modules`, `target`, build dirs, caches, editor settings, VCS internals.
 - **Roots & exclusions**: default root is the running user's `$HOME`
   (configurable); pseudo-filesystems, network mounts, and USB/removable media
   excluded by default.
 - **Degraded mode**: if kernel watch limits are exhausted, the engine falls
   back to periodic full rebuilds and reports the state in the UI.
-- **Frontends**: native `everything-gui` (eframe/egui) and a scriptable
-  `everything` CLI; both link the `everything-core` library directly (zero IPC).
+- **Frontends**: native `easysearch-gui` (eframe/egui) and a scriptable
+  `easysearch-cli` CLI; both link the `easysearch-core` library directly (zero IPC).
 - **Zero-sudo build**: `scripts/install-deps.sh` sets up rustup + rustup's
   bundled `rust-lld` + user-local library symlinks — no C compiler required.
 - **Build shim**: `vendor/arrayref` replaces the crates.io `arrayref` crate
@@ -724,7 +772,7 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Warm start (cache present): fully searchable in ~0.6 s.
 - Idle memory: headless engine ≈ 15 MiB (was ~80 MiB with the in-RAM index);
   GUI ≈ 151 MiB incl. the Mesa GL stack (~55 MiB) and the 23 MiB mmap index.
-- Binaries: `everything` 3.3 MB, `everything-gui` 12 MB (stripped, LTO).
+- Binaries: `easysearch-cli` 3.3 MB, `easysearch-gui` 12 MB (stripped, LTO).
 
 ### Known limitations
 
@@ -735,13 +783,13 @@ Initial release — a realtime filename **and** content search engine for Linux
 - Non-UTF-8 file names are matched lossily.
 - Network filesystems and removable media are not indexed by default.
 
-[0.9.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.9.0
-[0.8.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.8.0
-[0.7.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.7.0
-[0.6.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.6.0
-[0.5.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.5.0
-[0.4.1]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.1
-[0.4.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.4.0
-[0.3.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.3.0
-[0.2.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.2.0
-[0.1.0]: https://github.com/everything-for-linux/everything-for-linux/releases/tag/v0.1.0
+[0.9.0]: https://github.com/easysearch/easysearch/releases/tag/v0.9.0
+[0.8.0]: https://github.com/easysearch/easysearch/releases/tag/v0.8.0
+[0.7.0]: https://github.com/easysearch/easysearch/releases/tag/v0.7.0
+[0.6.0]: https://github.com/easysearch/easysearch/releases/tag/v0.6.0
+[0.5.0]: https://github.com/easysearch/easysearch/releases/tag/v0.5.0
+[0.4.1]: https://github.com/easysearch/easysearch/releases/tag/v0.4.1
+[0.4.0]: https://github.com/easysearch/easysearch/releases/tag/v0.4.0
+[0.3.0]: https://github.com/easysearch/easysearch/releases/tag/v0.3.0
+[0.2.0]: https://github.com/easysearch/easysearch/releases/tag/v0.2.0
+[0.1.0]: https://github.com/easysearch/easysearch/releases/tag/v0.1.0

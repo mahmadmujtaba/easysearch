@@ -13,7 +13,7 @@ query (GUI, CLI, HTTP API) is answered from it.
 
 | Step | State |
 | --- | --- |
-| `rusqlite` (bundled SQLite) in `everything-core` | **Done** — builds here; no `pkg-config` needed |
+| `rusqlite` (bundled SQLite) in `easysearch-core` | **Done** — builds here; no `pkg-config` needed |
 | `core/src/sqlite_index.rs`: schema, create, rebuild, live deltas, `search`, `count`, `candidates`, `meta_of` | **Done** — 11 unit tests |
 | Wired into `Engine` (base store, flush, refresh, counts) | **Done** |
 | The live/realtime integration suite runs against it | **Done** — the whole `live_search` suite passes on SQLite |
@@ -23,11 +23,11 @@ Verified end to end on a real `$HOME` (100,479 entries): the first run walks and
 builds a 65 MB database; later runs serve from it immediately.
 
 ```
-$ everything search 'Cargo.toml'          # first run: builds the db
+$ easysearch-cli search 'Cargo.toml'          # first run: builds the db
 3 result(s), truncated in 18 ms (86100 files indexed)
-$ everything search '*.pdf' --min-size 10K
+$ easysearch-cli search '*.pdf' --min-size 10K
 3 result(s), truncated in 2 ms
-$ everything search 'sqlite' --content 'min_size'    # ripgrep path
+$ easysearch-cli search 'sqlite' --content 'min_size'    # ripgrep path
 1 result(s) in 113 ms
 ```
 

@@ -6,13 +6,13 @@
 //! talk to the instance that is already up:
 //!
 //! ```text
-//! everything-linux --toggle      # show/hide the window
-//! everything-linux --show        # bring it to the front
-//! everything-linux --search TODO # run a search from a shortcut
-//! everything-linux --quit        # ask it to exit
+//! easysearch --toggle      # show/hide the window
+//! easysearch --show        # bring it to the front
+//! easysearch --search TODO # run a search from a shortcut
+//! easysearch --quit        # ask it to exit
 //! ```
 //!
-//! The GUI listens on `$XDG_RUNTIME_DIR/everything-linux.sock` (mode `0600`, so
+//! The GUI listens on `$XDG_RUNTIME_DIR/easysearch.sock` (mode `0600`, so
 //! only the same user can talk to it) and each invocation is one line of text.
 //! A shortcut in the desktop's own settings is all that is needed — see
 //! `docs/ui.md`.
@@ -62,12 +62,12 @@ impl Command {
     }
 }
 
-/// `$XDG_RUNTIME_DIR/everything-linux.sock`, falling back to the temp dir.
+/// `$XDG_RUNTIME_DIR/easysearch.sock`, falling back to the temp dir.
 pub fn socket_path() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    dir.join("everything-linux.sock")
+    dir.join("easysearch.sock")
 }
 
 /// Send one command to a running instance.
@@ -103,7 +103,7 @@ fn send_to(path: &std::path::Path, command: &Command) -> std::io::Result<bool> {
 /// Bind the control socket and forward commands to `tx` until the process ends.
 ///
 /// Does nothing when another instance is already serving it, so a second GUI
-/// (or the standalone `everything-gui` binary) can never steal the socket.
+/// (or the standalone `easysearch-gui` binary) can never steal the socket.
 pub fn spawn_listener(tx: mpsc::Sender<Command>) {
     spawn_listener_at(&socket_path(), tx);
 }
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn the_socket_path_is_in_the_runtime_dir() {
         let path = socket_path();
-        assert!(path.ends_with("everything-linux.sock"));
+        assert!(path.ends_with("easysearch.sock"));
     }
 
     #[test]

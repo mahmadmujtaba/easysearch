@@ -5,7 +5,7 @@
 //! (`walk_root_apply`, for RAM-only mode and watcher-driven subtree indexing).
 //! [`WalkOptions`] carries the two user-visible knobs: honoring
 //! `.gitignore`/`.ignore` files (plus the global ignore file at
-//! `~/.config/everything-linux/ignore`) and following symbolic links.
+//! `~/.config/easysearch/ignore`) and following symbolic links.
 
 use crate::content_index::ExtractQueue;
 use crate::engine::Status;
@@ -22,7 +22,7 @@ const BATCH: usize = 512;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WalkOptions {
     /// Honor `.gitignore`/`.ignore` files in the tree, plus the global ignore
-    /// file at `~/.config/everything-linux/ignore`.
+    /// file at `~/.config/easysearch/ignore`.
     pub respect_ignore: bool,
     /// Follow symbolic links into their targets (cycles are detected by the
     /// walker and skipped).
@@ -265,12 +265,12 @@ pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, opts: WalkOptions) -> Vec
     dirs
 }
 
-/// Path of the global ignore file (`~/.config/everything-linux/ignore`),
+/// Path of the global ignore file (`~/.config/easysearch/ignore`),
 /// whether or not it exists yet. Patterns use gitignore syntax, matched
 /// relative to the working directory (or use `**/` prefixes to match anywhere).
 pub fn global_ignore_file() -> PathBuf {
     crate::config::xdg_config_dir()
-        .join("everything-linux")
+        .join("easysearch")
         .join("ignore")
 }
 

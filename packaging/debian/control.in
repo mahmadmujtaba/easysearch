@@ -7,7 +7,7 @@ Maintainer: @MAINTAINER@
 Depends: @DEPENDS@
 Installed-Size: @SIZE@
 Description: Instant file and content search for Linux
- Everything for Linux searches file names and file contents while you type,
+ EasySearch searches file names and file contents while you type,
  across your whole filesystem, and keeps its index up to date in realtime as
  files are created, renamed, changed or deleted.
  .
@@ -17,8 +17,8 @@ Description: Instant file and content search for Linux
  live rather than serving stale results.
  .
  This package installs the combined GUI + search-daemon binary
- (everything-linux), the scriptable CLI (everything) and a headless daemon
- (everything-daemon), plus a desktop entry, an AppStream metainfo file and the
+ (easysearch), the scriptable CLI (easysearch-cli) and a headless daemon
+ (easysearch-daemon), plus a desktop entry, an AppStream metainfo file and the
  application icons.
  .
  The search engine and the daemon API are bound to loopback only and are

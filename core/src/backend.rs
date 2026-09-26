@@ -1,7 +1,7 @@
 //! Search backend: the engine either in-process or behind the daemon API.
 //!
 //! One type covers both, so the GUI and CLI can switch between "link the engine
-//! directly" and "talk to `everything-daemon`" without changing their call
+//! directly" and "talk to `easysearch-daemon`" without changing their call
 //! sites. See `docs/api.md`.
 
 use crate::config::Config;
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 pub enum Backend {
     /// The engine lives in this process (zero IPC).
     Local(Arc<Engine>),
-    /// The engine lives in `everything-daemon`; queries go over HTTP.
+    /// The engine lives in `easysearch-daemon`; queries go over HTTP.
     Remote(Remote),
 }
 
@@ -109,6 +109,17 @@ impl Backend {
             Backend::Local(e) => e.set_follow_symlinks(on, true),
             Backend::Remote(r) => {
                 let _ = r.set_follow_symlinks(on);
+            }
+        }
+    }
+
+    /// Turn the optional background content cache on/off. Switching it on is
+    /// lazy, so no rebuild follows.
+    pub fn set_content_index(&self, on: bool) {
+        match self {
+            Backend::Local(e) => e.set_content_index(on),
+            Backend::Remote(r) => {
+                let _ = r.set_content_index(on);
             }
         }
     }

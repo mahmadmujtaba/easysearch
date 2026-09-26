@@ -4,9 +4,9 @@
 > tested (unit tests plus a manual end-to-end run against real `openssl`-signed
 > artifacts). **No public release host exists yet** — `DEFAULT_MANIFEST_URL` is a
 > placeholder, so a live check fails cleanly with a download error. Set the URL
-> (or `EVERYTHING_UPDATE_URL`) once you host it.
+> (or `EASYSEARCH_UPDATE_URL`) once you host it.
 
-Everything for Linux can update *itself* — over the internet, without a package
+EasySearch can update *itself* — over the internet, without a package
 manager, and without downloading or installing a `.deb`, `.rpm` or Flatpak. The
 running binary is replaced in place and the app restarts onto the new build.
 
@@ -14,7 +14,7 @@ This document is the reference for the mechanism, the trust model, and how to
 publish a signed release.
 
 - Implementation: [`core/src/update.rs`](../core/src/update.rs)
-- CLI: `everything self-update`
+- CLI: `easysearch-cli self-update`
 - GUI: **Help ▸ Check for updates…**, plus the version in the status bar
   (bottom-right) and a badge when a newer release is known.
 
@@ -83,8 +83,8 @@ manifest.json.sig
   "notes": "Focus follows the pointer; in-place updates.",
   "assets": [
     {
-      "name": "everything-linux",
-      "url": "https://github.com/…/releases/download/v0.15.0/everything-linux-x86_64",
+      "name": "easysearch",
+      "url": "https://github.com/…/releases/download/v0.15.0/easysearch-x86_64",
       "sha256": "9f2c…(64 hex chars)",
       "size": 18473344,
       "target": "x86_64-unknown-linux-gnu"
@@ -98,7 +98,7 @@ manifest.json.sig
 | `version` | New version (`v` prefix tolerated); compared as dotted numbers, with a release outranking a pre-release of the same core |
 | `released` | Informational date |
 | `notes` | Free text shown in the update window and by the CLI |
-| `assets[].name` | File name **as installed** (must match what is installed, e.g. `everything-linux`) |
+| `assets[].name` | File name **as installed** (must match what is installed, e.g. `easysearch`) |
 | `assets[].url` | HTTPS URL of the raw, already-executable binary |
 | `assets[].sha256` | Lowercase hex SHA-256 |
 | `assets[].size` | Bytes; used for progress and as a sanity check (`0` = unknown) |
@@ -106,7 +106,7 @@ manifest.json.sig
 
 Assets are **raw binaries**, not archives: the client has no extraction step and
 no unpacking attack surface. A typical release ships one asset per binary
-(`everything-linux`, `everything`, `everything-gui`, `everything-daemon`); the
+(`easysearch`, `easysearch-cli`, `easysearch-gui`, `easysearch-daemon`); the
 client installs the ones that are actually installed next to the running
 executable.
 
@@ -115,18 +115,18 @@ executable.
 The release key is a standard **Ed25519** keypair. Generate it once:
 
 ```sh
-mkdir -p ~/.config/everything-linux
+mkdir -p ~/.config/easysearch
 umask 077
 openssl genpkey -algorithm ED25519 \
-  -out ~/.config/everything-linux/release-signing-key.pem
-chmod 600 ~/.config/everything-linux/release-signing-key.pem
+  -out ~/.config/easysearch/release-signing-key.pem
+chmod 600 ~/.config/easysearch/release-signing-key.pem
 ```
 
 The public half — the raw 32 bytes at the end of the DER `SubjectPublicKeyInfo`,
 which is what the client expects — is:
 
 ```sh
-openssl pkey -in ~/.config/everything-linux/release-signing-key.pem \
+openssl pkey -in ~/.config/easysearch/release-signing-key.pem \
   -pubout -outform DER | tail -c 32 | od -An -tx1 -v | tr -d ' \n'
 ```
 
@@ -154,8 +154,8 @@ the binaries, to the release host. Point clients at the manifest with:
 
 - a stable "latest" URL (the default is
   `…/releases/latest/download/manifest.json`), or
-- `everything self-update --manifest https://…/manifest.json`, or
-- `EVERYTHING_UPDATE_URL`.
+- `easysearch-cli self-update --manifest https://…/manifest.json`, or
+- `EASYSEARCH_UPDATE_URL`.
 
 ## Using it
 
@@ -164,7 +164,7 @@ the binaries, to the release host. Point clients at the manifest with:
 - **Help ▸ Check for updates…** (or **Settings ▸ Updates ▸ Check now…**) opens the
   *Software update* window.
 - At launch, a quiet check runs **at most once a day** (disable it with
-  **Settings ▸ Updates**, or with `EVERYTHING_NO_UPDATE=1`). When a newer release
+  **Settings ▸ Updates**, or with `EASYSEARCH_NO_UPDATE=1`). When a newer release
   is found, the status-bar version is joined by a `⬆ v… available` badge.
 - **Install update** downloads, verifies, and installs; **Restart now** stops the
   search daemon and relaunches the app detached, so the new binary takes over.
@@ -172,23 +172,23 @@ the binaries, to the release host. Point clients at the manifest with:
 ### CLI
 
 ```sh
-everything self-update --check          # report only
-everything self-update                  # ask, then install
-everything self-update --yes            # install without asking
-everything self-update --restart-daemon # also stop the old daemon
-everything self-update --dir ~/.local/bin
+easysearch-cli self-update --check          # report only
+easysearch-cli self-update                  # ask, then install
+easysearch-cli self-update --yes            # install without asking
+easysearch-cli self-update --restart-daemon # also stop the old daemon
+easysearch-cli self-update --dir ~/.local/bin
 ```
 
 ## Configuration
 
 | Environment variable | Effect |
 | --- | --- |
-| `EVERYTHING_UPDATE_URL` | Manifest URL (self-hosted mirrors, testing) |
-| `EVERYTHING_UPDATE_PUBKEY` | Trusted public key (hex). Setting it means *trusting that key completely* |
-| `EVERYTHING_UPDATE_DIR` | Directory to install into |
-| `EVERYTHING_NO_UPDATE` | Any non-empty value disables checks entirely |
+| `EASYSEARCH_UPDATE_URL` | Manifest URL (self-hosted mirrors, testing) |
+| `EASYSEARCH_UPDATE_PUBKEY` | Trusted public key (hex). Setting it means *trusting that key completely* |
+| `EASYSEARCH_UPDATE_DIR` | Directory to install into |
+| `EASYSEARCH_NO_UPDATE` | Any non-empty value disables checks entirely |
 
-The GUI preference `check_updates` (`~/.config/everything-linux/gui.json`)
+The GUI preference `check_updates` (`~/.config/easysearch/gui.json`)
 controls the automatic launch-time check.
 
 ## Security notes
@@ -198,7 +198,7 @@ controls the automatic launch-time check.
   gain — a local process could already `kill` it — but it is why the endpoint is
   documented rather than hidden.
 - **Staging directory.** Downloads land in
-  `~/.cache/everything-linux/update/*.staged` and are removed after install.
+  `~/.cache/easysearch/update/*.staged` and are removed after install.
 - **Writable install directory required.** If the binaries live somewhere the
   user cannot write (for example a distro-owned `/usr/bin`), `rename()` fails and
   the update is reported as a failure with nothing changed. Use a user-local

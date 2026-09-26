@@ -36,7 +36,7 @@ use std::process::{Command, Stdio};
 /// Convention: this is a *stable* URL that always points at the newest release's
 /// manifest (a GitHub `releases/latest/download/…` asset, or any HTTPS host).
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/everything-for-linux/everything-for-linux/releases/latest/download/manifest.json";
+    "https://github.com/easysearch/easysearch/releases/latest/download/manifest.json";
 
 /// Ed25519 release public key (32 bytes, hex). Signatures produced by the
 /// matching private key are the only ones accepted.
@@ -46,21 +46,21 @@ pub const RELEASE_PUBLIC_KEY_HEX: &str =
     "5026f1bc8609fc7eb22d7cbba4caec2831532e1717ffc147a43bf5d5ed1af26b";
 
 /// Override the manifest URL (useful for self-hosted mirrors and tests).
-pub const ENV_MANIFEST_URL: &str = "EVERYTHING_UPDATE_URL";
+pub const ENV_MANIFEST_URL: &str = "EASYSEARCH_UPDATE_URL";
 /// Override the trusted public key (hex). Setting this is equivalent to
 /// trusting that key completely — only do it deliberately.
-pub const ENV_PUBLIC_KEY: &str = "EVERYTHING_UPDATE_PUBKEY";
+pub const ENV_PUBLIC_KEY: &str = "EASYSEARCH_UPDATE_PUBKEY";
 /// Override the directory the new binaries are installed into.
-pub const ENV_INSTALL_DIR: &str = "EVERYTHING_UPDATE_DIR";
+pub const ENV_INSTALL_DIR: &str = "EASYSEARCH_UPDATE_DIR";
 /// Set to a non-empty value to disable update checks entirely.
-pub const ENV_DISABLE: &str = "EVERYTHING_NO_UPDATE";
+pub const ENV_DISABLE: &str = "EASYSEARCH_NO_UPDATE";
 
 /// Binaries a normal install may contain, next to the running executable.
 pub const KNOWN_BINARIES: &[&str] = &[
-    "everything-linux",
-    "everything",
-    "everything-gui",
-    "everything-daemon",
+    "easysearch",
+    "easysearch-cli",
+    "easysearch-gui",
+    "easysearch-daemon",
 ];
 
 // ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ pub const KNOWN_BINARIES: &[&str] = &[
 /// One downloadable file: a raw, already-executable binary.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Asset {
-    /// File name **as installed** (e.g. `everything-linux`).
+    /// File name **as installed** (e.g. `easysearch`).
     pub name: String,
     /// HTTPS URL of the binary.
     pub url: String,
@@ -270,7 +270,7 @@ impl CurlFetcher {
             "--max-time".into(),
             self.timeout_secs.to_string(),
             "--user-agent".into(),
-            format!("everything-for-linux/{}", env!("CARGO_PKG_VERSION")),
+            format!("easysearch/{}", env!("CARGO_PKG_VERSION")),
         ]
     }
 }
@@ -389,7 +389,7 @@ impl Default for UpdateConfig {
 }
 
 impl UpdateConfig {
-    /// Apply the `EVERYTHING_UPDATE_*` environment overrides (used by the CLI
+    /// Apply the `EASYSEARCH_UPDATE_*` environment overrides (used by the CLI
     /// and by self-hosted installs). An empty [`ENV_MANIFEST_URL`] or
     /// [`ENV_PUBLIC_KEY`] means "leave as-is".
     pub fn with_env(mut self) -> UpdateConfig {
@@ -430,7 +430,7 @@ impl UpdateConfig {
     }
 }
 
-/// `$XDG_CACHE_HOME/everything-linux` (or `~/.cache/everything-linux`).
+/// `$XDG_CACHE_HOME/easysearch` (or `~/.cache/easysearch`).
 pub fn default_cache_dir() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -439,7 +439,7 @@ pub fn default_cache_dir() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".cache"))
                 .unwrap_or_else(|| PathBuf::from("."))
         });
-    base.join("everything-linux")
+    base.join("easysearch")
 }
 
 /// Names of the known binaries that exist in `dir`.
@@ -978,8 +978,8 @@ mod tests {
     #[test]
     fn check_reports_newer_release() {
         let scratch = Scratch::new("check");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"NEW");
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"NEW");
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         let up = Updater::new(cfg);
 
         let avail = up.check(&fetcher).unwrap().expect("a newer release");
@@ -990,15 +990,15 @@ mod tests {
     #[test]
     fn check_is_none_when_up_to_date() {
         let scratch = Scratch::new("uptodate");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.14.1", "everything-linux", b"x");
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.14.1", "easysearch", b"x");
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         assert!(Updater::new(cfg).check(&fetcher).unwrap().is_none());
     }
 
     #[test]
     fn check_refuses_a_forged_manifest() {
         let scratch = Scratch::new("forged");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "9.9.9", "everything-linux", b"NEW");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "9.9.9", "easysearch", b"NEW");
         // Attacker swaps in their own manifest but cannot re-sign it.
         let attacker = SigningKey::from_bytes(&[1u8; 32]);
         let forged = Manifest {
@@ -1012,7 +1012,7 @@ mod tests {
             .put("https://example.test/manifest.json", bytes)
             .put("https://example.test/manifest.json.sig", sig);
 
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         assert!(matches!(
             Updater::new(cfg).check(&fetcher),
             Err(UpdateError::BadSignature)
@@ -1022,8 +1022,8 @@ mod tests {
     #[test]
     fn check_requires_a_trusted_key() {
         let scratch = Scratch::new("nokey");
-        let (fetcher, _sk, _pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"NEW");
-        let mut cfg = config(scratch.path(), "", &["everything-linux"], "0.14.1");
+        let (fetcher, _sk, _pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"NEW");
+        let mut cfg = config(scratch.path(), "", &["easysearch"], "0.14.1");
         cfg.public_key_hex = Some(String::new());
         // An empty configured key must not silently fall back to the built-in
         // one: it is a malformed key and verification fails closed.
@@ -1036,8 +1036,8 @@ mod tests {
     #[test]
     fn check_refuses_insecure_manifest_url() {
         let scratch = Scratch::new("insecure");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"NEW");
-        let mut cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"NEW");
+        let mut cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         cfg.manifest_url = "http://example.test/manifest.json".to_string();
         assert!(matches!(
             Updater::new(cfg).check(&fetcher),
@@ -1050,14 +1050,14 @@ mod tests {
         let scratch = Scratch::new("install");
         let payload = b"#!/bin/sh\necho new\n".to_vec();
         let (fetcher, _sk, pk) =
-            release_fixture(scratch.path(), "0.15.0", "everything-linux", &payload);
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+            release_fixture(scratch.path(), "0.15.0", "easysearch", &payload);
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         let up = Updater::new(cfg);
 
         // An older binary already exists.
         let bin = scratch.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let dest = bin.join("everything-linux");
+        let dest = bin.join("easysearch");
         std::fs::write(&dest, b"old").unwrap();
 
         let avail = up.check(&fetcher).unwrap().unwrap();
@@ -1090,15 +1090,15 @@ mod tests {
     #[test]
     fn install_rejects_a_tampered_asset_and_leaves_the_old_binary() {
         let scratch = Scratch::new("tamper");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"GOOD");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"GOOD");
         // The served bytes differ from the manifest's hash.
-        let fetcher = fetcher.put("https://example.test/everything-linux", b"EVIL".to_vec());
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let fetcher = fetcher.put("https://example.test/easysearch", b"EVIL".to_vec());
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         let up = Updater::new(cfg);
 
         let bin = scratch.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let dest = bin.join("everything-linux");
+        let dest = bin.join("easysearch");
         std::fs::write(&dest, b"old").unwrap();
 
         let avail = up.check(&fetcher).unwrap().unwrap();
@@ -1112,9 +1112,9 @@ mod tests {
     #[test]
     fn install_refuses_when_no_asset_matches_this_install() {
         let scratch = Scratch::new("noasset");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"NEW");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"NEW");
         // We only want a binary the release does not ship.
-        let cfg = config(scratch.path(), &pk, &["everything-gui"], "0.14.1");
+        let cfg = config(scratch.path(), &pk, &["easysearch-gui"], "0.14.1");
         assert!(matches!(
             Updater::new(cfg).check(&fetcher),
             Err(UpdateError::NoAsset(_))
@@ -1124,12 +1124,12 @@ mod tests {
     #[test]
     fn missing_signature_is_a_fetch_error_not_a_pass() {
         let scratch = Scratch::new("nosig");
-        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "everything-linux", b"NEW");
+        let (fetcher, _sk, pk) = release_fixture(scratch.path(), "0.15.0", "easysearch", b"NEW");
         let mut files = fetcher.files;
         files.remove("https://example.test/manifest.json.sig");
         let fetcher = MemFetcher { files };
 
-        let cfg = config(scratch.path(), &pk, &["everything-linux"], "0.14.1");
+        let cfg = config(scratch.path(), &pk, &["easysearch"], "0.14.1");
         assert!(matches!(
             Updater::new(cfg).check(&fetcher),
             Err(UpdateError::Fetch(_))

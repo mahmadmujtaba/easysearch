@@ -25,9 +25,9 @@ Options:
   --dir <DIR>            where the built binaries are (default: target/release)
   --out <DIR>            where to write the manifest (default: dist)
   --base-url <URL>       public base URL assets are served from
-                         (default: $EVERYTHING_RELEASE_BASE_URL, else a placeholder)
-  --key <FILE>           signing key (default: $EVERYTHING_RELEASE_KEY, else
-                         ~/.config/everything-linux/release-signing-key.pem)
+                         (default: $EASYSEARCH_RELEASE_BASE_URL, else a placeholder)
+  --key <FILE>           signing key (default: $EASYSEARCH_RELEASE_KEY, else
+                         ~/.config/easysearch/release-signing-key.pem)
   -h, --help             this help
 
 The matching public key must be compiled into the client
@@ -38,8 +38,8 @@ EOF
 VERSION=""
 SRC="target/release"
 OUT="dist"
-BASE_URL="${EVERYTHING_RELEASE_BASE_URL:-https://example.invalid/everything-for-linux}"
-KEY="${EVERYTHING_RELEASE_KEY:-$HOME/.config/everything-linux/release-signing-key.pem}"
+BASE_URL="${EASYSEARCH_RELEASE_BASE_URL:-https://example.invalid/easysearch}"
+KEY="${EASYSEARCH_RELEASE_KEY:-$HOME/.config/easysearch/release-signing-key.pem}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -76,7 +76,7 @@ command -v jq >/dev/null 2>&1 || { echo "release-sign: jq is required" >&2; exit
 # --- collect assets ----------------------------------------------------------
 # The manifest's `name` is the installed file name; the uploaded file adds the
 # architecture so one release host can serve several architectures.
-BINARIES="everything-linux everything everything-gui everything-daemon"
+BINARIES="easysearch easysearch-cli easysearch-gui easysearch-daemon"
 
 mkdir -p "$OUT"
 ASSETS="$OUT/.assets.jsonl"
@@ -105,7 +105,7 @@ if [ "$found" -eq 0 ]; then
     exit 1
 fi
 
-NOTES_FILE="${EVERYTHING_RELEASE_NOTES:-}"
+NOTES_FILE="${EASYSEARCH_RELEASE_NOTES:-}"
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
     jq -n \
         --arg v "$VERSION" \

@@ -1,4 +1,4 @@
-# RPM spec for Everything for Linux.
+# RPM spec for EasySearch.
 #
 # This is a template: scripts/package-rpm.sh substitutes @VERSION@ and feeds it
 # to rpmbuild together with a source tarball of the repository. Build it with
@@ -7,16 +7,16 @@
 #
 # The build needs network access to fetch crates (or a populated cargo cache).
 
-%global app_id io.github.everythinglinux.EverythingForLinux
+%global app_id io.github.easysearch.EasySearch
 
-Name:           everything-linux
+Name:           easysearch
 Version:        @VERSION@
 Release:        1%{?dist}
 Summary:        Instant file and content search for Linux
 
 License:        MIT
-URL:            https://github.com/everythinglinux/everything-for-linux
-Source0:        everything-for-linux-%{version}.tar.gz
+URL:            https://github.com/easysearch/easysearch
+Source0:        easysearch-%{version}.tar.gz
 
 BuildRequires:  cargo
 BuildRequires:  rust >= 1.88
@@ -38,7 +38,7 @@ Requires:       libXi.so.6()(64bit)
 Requires:       libXrender.so.1()(64bit)
 
 %description
-Everything for Linux searches file names and file contents while you type,
+EasySearch searches file names and file contents while you type,
 across your whole filesystem, and keeps its index up to date in realtime as
 files are created, renamed, changed or deleted.
 
@@ -48,12 +48,12 @@ content search uses the embedded ripgrep engine and always reads files live
 rather than serving stale results.
 
 This package installs the combined GUI + search-daemon binary
-(everything-linux), the scriptable CLI (everything) and a headless daemon
-(everything-daemon), plus a desktop entry, an AppStream metainfo file and the
+(easysearch), the scriptable CLI (easysearch-cli) and a headless daemon
+(easysearch-daemon), plus a desktop entry, an AppStream metainfo file and the
 application icons.
 
 %prep
-%autosetup -n everything-for-linux-%{version}
+%autosetup -n easysearch-%{version}
 
 %build
 cargo build --release --workspace --locked
@@ -61,12 +61,12 @@ cargo build --release --workspace --locked
 %install
 rm -rf %{buildroot}
 install -d %{buildroot}%{_bindir}
-# everything-linux is the GUI *and* the daemon (it re-executes itself with
-# --daemon), so everything-gui — a development convenience that would add
+# easysearch is the GUI *and* the daemon (it re-executes itself with
+# --daemon), so easysearch-gui — a development convenience that would add
 # another ~17 MB — is deliberately not packaged.
-install -Dpm0755 target/release/everything-linux  %{buildroot}%{_bindir}/everything-linux
-install -Dpm0755 target/release/everything        %{buildroot}%{_bindir}/everything
-install -Dpm0755 target/release/everything-daemon %{buildroot}%{_bindir}/everything-daemon
+install -Dpm0755 target/release/easysearch  %{buildroot}%{_bindir}/easysearch
+install -Dpm0755 target/release/easysearch-cli        %{buildroot}%{_bindir}/easysearch-cli
+install -Dpm0755 target/release/easysearch-daemon %{buildroot}%{_bindir}/easysearch-daemon
 
 install -Dpm0644 packaging/common/%{app_id}.desktop \
     %{buildroot}%{_datadir}/applications/%{app_id}.desktop
@@ -89,13 +89,13 @@ fi
 %files
 %license LICENSE
 %doc README.md
-%{_bindir}/everything-linux
-%{_bindir}/everything
-%{_bindir}/everything-daemon
+%{_bindir}/easysearch
+%{_bindir}/easysearch-cli
+%{_bindir}/easysearch-daemon
 %{_datadir}/applications/%{app_id}.desktop
 %{_datadir}/metainfo/%{app_id}.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 
 %changelog
-* Thu Sep 24 2026 Everything for Linux contributors <everything-linux@localhost> - @VERSION@-1
+* Thu Sep 24 2026 EasySearch contributors <easysearch@localhost> - @VERSION@-1
 - Initial packaged release (.deb, .rpm and Flatpak metadata).

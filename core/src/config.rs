@@ -1,9 +1,9 @@
-//! User configuration (JSON at `~/.config/everything-linux/config.json`).
+//! User configuration (JSON at `~/.config/easysearch/config.json`).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const CONFIG_DIR: &str = "everything-linux";
+pub const CONFIG_DIR: &str = "easysearch";
 pub const CONFIG_FILE: &str = "config.json";
 
 /// `$XDG_CONFIG_HOME` or `~/.config`.
@@ -82,7 +82,7 @@ pub struct Config {
     /// Exclude network mounts (nfs, smb/cifs, sshfs, ...).
     pub exclude_network: bool,
     /// Honor `.ignore`/`.gitignore` files (and the global ignore file at
-    /// `~/.config/everything-linux/ignore`) while walking, so non-essential
+    /// `~/.config/easysearch/ignore`) while walking, so non-essential
     /// folders listed there are never indexed.
     pub respect_ignore_files: bool,
     /// Follow symbolic links into their targets while walking. Off by default:
@@ -96,9 +96,9 @@ pub struct Config {
     /// `docs/sqlite.md`) or the original memory-mapped file.
     pub storage: Storage,
     /// Directory holding the SQLite database (default:
-    /// `$XDG_CACHE_HOME/everything-linux/db`).
+    /// `$XDG_CACHE_HOME/easysearch/db`).
     pub db_dir: Option<String>,
-    /// Directory for the on-disk index (default: `$XDG_CACHE_HOME/everything-linux`).
+    /// Directory for the on-disk index (default: `$XDG_CACHE_HOME/easysearch`).
     pub disk_index_dir: Option<String>,
     /// When the in-memory change overlay exceeds this many entries, it is
     /// compacted into the on-disk index in the background.
@@ -143,13 +143,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Default location: `$XDG_CONFIG_HOME/everything-linux/config.json`.
+    /// Default location: `$XDG_CONFIG_HOME/easysearch/config.json`.
     pub fn default_path() -> PathBuf {
         let base = xdg_config_dir();
         base.join(CONFIG_DIR).join(CONFIG_FILE)
     }
 
-    /// Default location of the on-disk index: `$XDG_CACHE_HOME/everything-linux`.
+    /// Default location of the on-disk index: `$XDG_CACHE_HOME/easysearch`.
     pub fn default_disk_index_dir() -> PathBuf {
         let base = std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)

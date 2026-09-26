@@ -1,6 +1,6 @@
 # Daemon HTTP API
 
-`everything-daemon` runs the search engine as its own process and serves it over
+`easysearch-daemon` runs the search engine as its own process and serves it over
 a small HTTP/JSON API on **localhost only** (`127.0.0.1:5858` by default).
 
 Splitting the engine out of the GUI means the index keeps running — and any
@@ -8,21 +8,21 @@ other client keeps working — even when no GUI is running. Clients:
 
 | Client | How it talks to the engine |
 | --- | --- |
-| `everything-linux` | **the single-file app**: opens the GUI and starts a daemon by re-executing itself when none is listening (falling back to an in-process engine if it cannot). This is what end users run. |
-| `everything-gui` | the GUI alone (dev convenience): attaches to a daemon (`--daemon ADDR`, `EVERYTHING_DAEMON`, or auto-detected on the default address) |
-| `everything` (CLI) | in-process by default; `--remote ADDR` queries a daemon |
+| `easysearch` | **the single-file app**: opens the GUI and starts a daemon by re-executing itself when none is listening (falling back to an in-process engine if it cannot). This is what end users run. |
+| `easysearch-gui` | the GUI alone (dev convenience): attaches to a daemon (`--daemon ADDR`, `EASYSEARCH_DAEMON`, or auto-detected on the default address) |
+| `easysearch-cli` (CLI) | in-process by default; `--remote ADDR` queries a daemon |
 | anything else | plain HTTP + JSON (`curl`, scripts, another language) |
 
 ### Sharing the single binary
 
 ```sh
-make dist          # → dist/everything-linux  (one self-contained file)
+make dist          # → dist/easysearch  (one self-contained file)
 ```
 
 The GUI and the daemon are the same executable: running it starts a daemon (the
 same file, re-executed with `--daemon`, detached into its own session) and
 attaches the GUI to it. The daemon's log goes to
-`$XDG_CACHE_HOME/everything-linux/daemon.log`. It needs only the usual desktop
+`$XDG_CACHE_HOME/easysearch/daemon.log`. It needs only the usual desktop
 libraries (OpenGL/EGL and the windowing stack) that any graphical Linux
 installation already has.
 
@@ -38,7 +38,7 @@ installation already has.
 
 ```sh
 make daemon                              # release build, 127.0.0.1:5858
-./target/release/everything-daemon --addr 127.0.0.1:5858 --quiet
+./target/release/easysearch-daemon --addr 127.0.0.1:5858 --quiet
 ```
 
 ## Endpoints
@@ -51,7 +51,7 @@ make daemon                              # release build, 127.0.0.1:5858
 | `GET` | `/v1/search` | same, with query parameters (see below) |
 | `POST` | `/v1/count` | body: a `Query` object → `{"count":n}` (counts only, no rows) |
 | `POST` | `/v1/rebuild` | rebuild the on-disk index in the background → `{ok:true}` |
-| `POST` | `/v1/ignore` | body `{"respect":bool,"follow_symlinks":bool,"rebuild":bool}` — every field is optional; only what is present changes. Sets whether `.gitignore`/`.ignore` files are honored and/or whether symlinks are followed, then rebuilds → `{ok:true}`. `POST /v1/config` is an alias. Both values are reported in `/v1/status` as `status.respect_ignore_files` and `status.follow_symlinks`. |
+| `POST` | `/v1/ignore` | body `{"respect":bool,"follow_symlinks":bool,"content_index":bool,"rebuild":bool}` — every field is optional; only what is present changes. Sets whether `.gitignore`/`.ignore` files are honored, whether symlinks are followed, and whether the background content cache is on, then rebuilds when a walk setting changed → `{ok:true}`. `POST /v1/config` is an alias. All three are reported in `/v1/status` (`status.respect_ignore_files`, `status.follow_symlinks`, `status.content_index`). |
 | `POST` | `/v1/shutdown` | ask the daemon to stop and exit → `{ok:true}` (used to restart onto a freshly installed binary) |
 | `GET` | `/v1/watch` | long-poll: the `/v1/status` payload, returned when it changes or after `?timeout=<secs>` (default 25, max 120) |
 
@@ -170,8 +170,8 @@ curl -s 'http://127.0.0.1:5858/v1/search?query=*.log&limit=50' | jq -r '.results
 while true; do curl -s 'http://127.0.0.1:5858/v1/watch?timeout=25' | jq -c '.status.state'; done
 
 # CLI against the daemon
-everything --remote 127.0.0.1:5858 search 'invoice 2026' --limit 20
-everything --remote 127.0.0.1:5858 status
+easysearch-cli --remote 127.0.0.1:5858 search 'invoice 2026' --limit 20
+easysearch-cli --remote 127.0.0.1:5858 status
 ```
 
 ## Why long-polling instead of SSE/WebSocket

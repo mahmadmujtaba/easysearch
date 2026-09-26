@@ -4,7 +4,7 @@
 #     make flatpak                  # or: scripts/package-flatpak.sh
 #     INSTALL=1 make flatpak        # also install it for the current user
 #
-# Output: dist/io.github.everythinglinux.EverythingForLinux.flatpak
+# Output: dist/io.github.easysearch.EasySearch.flatpak
 #
 # Prerequisites:
 #     flatpak-builder (flatpak-builder package) and, once,
@@ -16,7 +16,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-APP_ID=io.github.everythinglinux.EverythingForLinux
+APP_ID=io.github.easysearch.EasySearch
 MANIFEST=packaging/flatpak/$APP_ID.yml
 BUILD_DIR=build-flatpak
 REPO_DIR=$PWD/dist/flatpak-repo

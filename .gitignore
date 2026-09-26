@@ -1,4 +1,4 @@
-# Everything for Linux — non-essential folders skipped when indexing/searching.
+# EasySearch — non-essential folders skipped when indexing/searching.
 #
 # Standard gitignore syntax (patterns apply to every directory below this one).
 # The engine honors `.gitignore` (and `.ignore`) files in the searched tree.

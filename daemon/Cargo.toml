@@ -1,20 +1,20 @@
 [package]
-name = "everything-daemon"
+name = "easysearch-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Realtime search daemon: owns the index and serves a localhost HTTP/JSON API"
 
 [lib]
-name = "everything_daemon"
+name = "easysearch_daemon"
 path = "src/lib.rs"
 
 [[bin]]
-name = "everything-daemon"
+name = "easysearch-daemon"
 path = "src/main.rs"
 
 [dependencies]
-everything-core = { path = "../core" }
+easysearch-core = { path = "../core" }
 tiny_http = "0.12"
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

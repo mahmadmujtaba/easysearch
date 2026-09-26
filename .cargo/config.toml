@@ -3,7 +3,7 @@
 # so no C compiler / pkg-config is required. If your setup differs, re-run
 # scripts/install-deps.sh to regenerate this file.
 [target.x86_64-unknown-linux-gnu]
-linker = "/home/ahmad/Workspace/Personal/everything-for-linux/scripts/rust-lld-wrapper.sh"
+linker = "/home/ahmad/Workspace/Personal/easysearch/scripts/rust-lld-wrapper.sh"
 rustflags = [
   "-C", "link-arg=/usr/lib/x86_64-linux-gnu/crt1.o",
   "-C", "link-arg=/usr/lib/x86_64-linux-gnu/crti.o",

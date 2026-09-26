@@ -130,6 +130,8 @@ pub struct Engine {
 impl Engine {
     pub fn new(config: Config) -> Engine {
         let roots = Arc::new(RootSet::discover(&config));
+        // Live switch for the optional content cache (see `set_content_index`).
+        let content_enabled = Arc::new(AtomicBool::new(config.content_index_enabled));
         let status = Arc::new(RwLock::new(Status {
             state: State::Starting,
             degraded: false,
@@ -144,18 +146,17 @@ impl Engine {
             follow_symlinks: config.follow_symlinks,
         }));
         let cache = Arc::new(ContentIndex::new(
-            config.content_index_enabled,
+            Arc::clone(&content_enabled),
             config.content_index_max_file_bytes,
             config.content_index_total_cap_bytes,
         ));
         let pending = Arc::new(AtomicUsize::new(0));
-        let queue = if config.content_index_enabled {
-            let (q, rx) = ExtractQueue::new();
-            spawn_extractor(Arc::clone(&cache), rx, Arc::clone(&pending));
-            Some(Arc::new(q))
-        } else {
-            None
-        };
+        // Created regardless of the switch (which can be flipped live, see
+        // `set_content_index`): while it is off nothing is queued and the
+        // extractor thread stays parked, so an idle cache still costs nothing.
+        let (extract_queue, extract_rx) = ExtractQueue::new(Arc::clone(&content_enabled));
+        spawn_extractor(Arc::clone(&cache), extract_rx, Arc::clone(&pending));
+        let queue = Some(Arc::new(extract_queue));
 
         let base = Arc::new(RwLock::new(None));
         let index_path = if config.persist_index {
@@ -285,6 +286,20 @@ impl Engine {
     /// Current value of the follow-symlinks setting.
     pub fn follow_symlinks(&self) -> bool {
         self.follow_symlinks.load(Ordering::Relaxed)
+    }
+
+    /// Turn the optional background content cache on or off.
+    ///
+    /// Switching it on is lazy (documents are cached as they are searched) and
+    /// switching it off frees everything it held, so it costs nothing while off.
+    /// No rebuild is needed either way, hence no `rebuild` parameter.
+    pub fn set_content_index(&self, on: bool) {
+        self.cache.set_enabled(on);
+    }
+
+    /// Whether the background content cache is on.
+    pub fn content_index_enabled(&self) -> bool {
+        self.cache.enabled()
     }
 
     /// The walk settings in force right now (read fresh for every walk).

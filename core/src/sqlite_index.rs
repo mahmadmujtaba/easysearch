@@ -10,7 +10,7 @@
 //! Design notes:
 //!
 //! * **One writer.** The daemon owns the database and applies kernel events to
-//!   it; readers (the GUI, `everything`) only ever `SELECT`. WAL mode is on, so
+//!   it; readers (the GUI, `easysearch-cli`) only ever `SELECT`. WAL mode is on, so
 //!   readers never block the writer and vice versa.
 //! * **Batched writes.** Realtime updates arrive as batches and are committed in
 //!   a single transaction — never one `fsync` per filesystem event.

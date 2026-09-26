@@ -1,4 +1,4 @@
-//! everything-core — realtime filename + content search engine.
+//! easysearch-core — realtime filename + content search engine.
 //!
 //! Design (see `docs/scope.md`):
 //! - a disk-backed, memory-mapped base index (kernel page cache, low RSS)

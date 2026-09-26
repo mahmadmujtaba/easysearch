@@ -19,7 +19,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the background poller refreshes status.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// A client for `everything-daemon`. Status is refreshed by a background poller
+/// A client for `easysearch-daemon`. Status is refreshed by a background poller
 /// so the UI can read it every frame without issuing a request per frame.
 pub struct Remote {
     addr: String,
@@ -103,6 +103,12 @@ impl Remote {
     /// Turn symlink following on/off in the daemon (rebuilding its index).
     pub fn set_follow_symlinks(&self, on: bool) -> Result<(), String> {
         let body = format!("{{\"follow_symlinks\":{on},\"rebuild\":true}}");
+        request(&self.addr, "POST", "/v1/config", Some(body.as_bytes())).map(|_| ())
+    }
+
+    /// Turn the daemon's background content cache on/off (no rebuild needed).
+    pub fn set_content_index(&self, on: bool) -> Result<(), String> {
+        let body = format!("{{\"content_index\":{on}}}");
         request(&self.addr, "POST", "/v1/config", Some(body.as_bytes())).map(|_| ())
     }
 

@@ -1,4 +1,4 @@
-//! Everything for Linux as **one file**: the GUI and the engine daemon in a
+//! EasySearch as **one file**: the GUI and the engine daemon in a
 //! single executable.
 //!
 //! Run with no arguments it opens the GUI and makes sure a search daemon is
@@ -10,9 +10,9 @@
 //! Fallback: if a daemon cannot be started (e.g. the port is taken by something
 //! unrelated), the GUI runs the engine in-process instead of failing.
 
-use everything_core::api::{API_VERSION, DEFAULT_ADDR, Health};
-use everything_core::{Backend, Config, Engine, remote};
-use everything_gui::ipc as gui_ipc;
+use easysearch_core::api::{API_VERSION, DEFAULT_ADDR, Health};
+use easysearch_core::{Backend, Config, Engine, remote};
+use easysearch_gui::ipc as gui_ipc;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -164,7 +164,7 @@ pub fn spawn_daemon_with_env(
     cmd.spawn()
 }
 
-/// Where the auto-started daemon writes its log (`$XDG_CACHE_HOME/everything-linux`).
+/// Where the auto-started daemon writes its log (`$XDG_CACHE_HOME/easysearch`).
 pub fn daemon_log_path() -> Option<PathBuf> {
     let dir = Config::default_disk_index_dir();
     std::fs::create_dir_all(&dir).ok()?;
@@ -184,12 +184,12 @@ pub fn run_daemon(addr: &str, quiet: bool) -> Result<(), String> {
             .spawn(move || {
                 if watcher.wait_live(Duration::from_secs(600)) {
                     let (files, dirs) = watcher.counts();
-                    eprintln!("everything-daemon: index live — {files} files, {dirs} folders");
+                    eprintln!("easysearch-daemon: index live — {files} files, {dirs} folders");
                 }
             })
             .ok();
     }
-    everything_daemon::run_forever(engine, addr)
+    easysearch_daemon::run_forever(engine, addr)
 }
 
 /// Open the GUI, starting a daemon first when possible.
@@ -199,27 +199,27 @@ pub fn run_daemon(addr: &str, quiet: bool) -> Result<(), String> {
 pub fn run_gui(addr: &str) -> Result<(), String> {
     let backend = match ensure_daemon(addr) {
         Ensured::AlreadyUp => {
-            eprintln!("everything-linux: using the daemon already running on {addr}");
+            eprintln!("easysearch: using the daemon already running on {addr}");
             Backend::remote(addr)
         }
         Ensured::Started(_child) => {
-            eprintln!("everything-linux: started a search daemon on {addr}");
+            eprintln!("easysearch: started a search daemon on {addr}");
             if let Some(h) = health(addr)
                 && h.api != API_VERSION
             {
                 eprintln!(
-                    "everything-linux: warning: daemon API {} differs from expected {API_VERSION}",
+                    "easysearch: warning: daemon API {} differs from expected {API_VERSION}",
                     h.api
                 );
             }
             Backend::remote(addr)
         }
         Ensured::Failed(why) => {
-            eprintln!("everything-linux: {why} — running the engine in-process instead");
+            eprintln!("easysearch: {why} — running the engine in-process instead");
             Backend::local(Config::load())
         }
     };
-    everything_gui::run(std::sync::Arc::new(backend)).map_err(|e| e.to_string())
+    easysearch_gui::run(std::sync::Arc::new(backend)).map_err(|e| e.to_string())
 }
 
 /// Default daemon address (re-exported for the binary's help text).
@@ -232,7 +232,7 @@ pub const DEFAULT: &str = DEFAULT_ADDR;
 /// GUI, so one shortcut both launches the app and toggles its window.
 ///
 /// This is how a global hotkey is bound on Wayland (which has no global-hotkey
-/// API): the desktop runs `everything-linux --toggle` and it reaches the
+/// API): the desktop runs `easysearch --toggle` and it reaches the
 /// instance that is already up. See `docs/ui.md`.
 pub fn control_command(args: &[String]) -> Option<i32> {
     let mut command: Option<gui_ipc::Command> = None;
@@ -271,13 +271,13 @@ pub fn control_command(args: &[String]) -> Option<i32> {
         Ok(false) if toggle => None,
         Ok(false) => {
             eprintln!(
-                "everything-linux: nothing is running to {}. (Start the app first.)",
+                "easysearch: nothing is running to {}. (Start the app first.)",
                 command.encode()
             );
             Some(0)
         }
         Err(e) => {
-            eprintln!("everything-linux: cannot reach the running instance: {e}");
+            eprintln!("easysearch: cannot reach the running instance: {e}");
             Some(1)
         }
     }

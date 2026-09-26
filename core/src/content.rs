@@ -181,7 +181,11 @@ mod tests {
         std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
         let paths = vec![path.clone()];
         // A disabled cache keeps the test on the live-read path.
-        let cache = ContentIndex::new(false, 1024 * 1024, 1024 * 1024);
+        let cache = ContentIndex::new(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            1024 * 1024,
+            1024 * 1024,
+        );
 
         // Line by line (the default): a pattern containing a newline never
         // matches, because no single line contains one.

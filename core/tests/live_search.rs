@@ -3,7 +3,7 @@
 //! These verify the core promise of the project: a file created / edited /
 //! deleted on disk shows up in the *next query* within ~1 s.
 
-use everything_core::{Config, Engine, Query};
+use easysearch_core::{Config, Engine, Query};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -16,7 +16,7 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new(tag: &str) -> TestDir {
-        let dir = std::env::temp_dir().join(format!("everything-it-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("easysearch-it-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TestDir(dir)

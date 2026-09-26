@@ -74,7 +74,7 @@ predicate whether the app is counting or listing:
 ## Ignoring files and following symlinks
 
 Indexing honours `.gitignore` and `.ignore` files found in the tree, plus a
-global list at `~/.config/everything-linux/ignore`. Both are managed without
+global list at `~/.config/easysearch/ignore`. Both are managed without
 hand-editing:
 
 - **Tools ▸ Ignore files…** opens an editor for the global list (`.gitignore`
@@ -83,11 +83,19 @@ syntax; `**/node_modules/` matches at any depth) with **Save & rebuild**,
   - **Honor `.gitignore` / `.ignore` files** — off means index everything.
   - **Follow symbolic links** — index the targets of symlinked folders too
     (off by default; cycles are detected and skipped).
-- **Settings ▸ Indexing** offers the same two switches and a link to the editor.
+- **Settings ▸ Indexing** offers the same two switches and a link to the editor,
+  plus **Background content index** (see below).
 
 Both switches are **live**: they are pushed to the running engine (or, over
 `POST /v1/config`, to the daemon) and followed by a rebuild, so they take effect
 immediately rather than at the next restart.
+
+**Background content index** (`Settings ▸ Indexing`) caches the text it extracts
+from `.docx`/`.odt`/`.pdf` files so repeated content searches are nearly free.
+It is off by default, and it only ever holds *extracted document text* (plain
+text files are read live). It is live too: turning it on starts caching lazily as
+you search, and turning it off drops what is cached, so it costs nothing while
+off — the sidebar's `cache …` indicator in the status bar shows its state.
 
 ## Results
 
@@ -227,24 +235,24 @@ so the app ships a portable mechanism instead of a privileged one: the running
 window listens on a small socket and the command line drives it.
 
 ```sh
-everything-linux --toggle        # show the window if hidden, hide it if visible
-everything-linux --show          # bring it to the front
-everything-linux --hide
-everything-linux --search TODO   # open it and run a search
-everything-linux --quit          # ask it to exit (the index daemon keeps running)
+easysearch --toggle        # show the window if hidden, hide it if visible
+easysearch --show          # bring it to the front
+easysearch --hide
+easysearch --search TODO   # open it and run a search
+easysearch --quit          # ask it to exit (the index daemon keeps running)
 ```
 
 Bind one of those as a **custom shortcut** in your desktop:
 
 - **KDE Plasma:** System Settings ▸ Shortcuts ▸ Custom ▸ *Edit* ▸ *New* ▸
-  *Global Shortcut* ▸ *Command or Script* — `everything-linux --toggle`.
+  *Global Shortcut* ▸ *Command or Script* — `easysearch --toggle`.
 - **GNOME:** Settings ▸ Keyboard ▸ Custom Shortcuts ▸ `+` —
-  `everything-linux --toggle`.
-- **Sway / i3 / Hyprland:** `bindsym $mod+space exec everything-linux --toggle`.
+  `easysearch --toggle`.
+- **Sway / i3 / Hyprland:** `bindsym $mod+space exec easysearch --toggle`.
 
 The first `--toggle` with nothing running **starts** the app, so one key launches
 it and then hides/shows it. The socket lives at
-`$XDG_RUNTIME_DIR/everything-linux.sock` with mode `0600`, so only your own user
+`$XDG_RUNTIME_DIR/easysearch.sock` with mode `0600`, so only your own user
 can reach it.
 
 ## Theming and fonts

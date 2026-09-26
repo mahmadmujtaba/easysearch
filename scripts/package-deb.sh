@@ -4,19 +4,19 @@
 #     make deb            # or: scripts/package-deb.sh
 #
 # Needs no root: dpkg-deb fixes up ownership with --root-owner-group.
-# Output: dist/everything-linux_<version>_<arch>.deb
+# Output: dist/easysearch_<version>_<arch>.deb
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-PKG=everything-linux
-APP_ID=io.github.everythinglinux.EverythingForLinux
+PKG=easysearch
+APP_ID=io.github.easysearch.EasySearch
 VERSION=$(cat VERSION)
 ARCH=${ARCH:-$(dpkg --print-architecture)}
 BIN_DIR=${BIN_DIR:-target/release}
 OUT_DIR=${OUT_DIR:-dist}
-MAINTAINER=${MAINTAINER:-"Everything for Linux <everything-linux@localhost>"}
+MAINTAINER=${MAINTAINER:-"EasySearch <easysearch@localhost>"}
 
 # winit/glutin load these with dlopen() at runtime, so dpkg-shlibdeps cannot see
 # them. These are the Debian/Ubuntu packages that ship the exact sonames the
@@ -28,7 +28,7 @@ err() {
     exit 1
 }
 
-for b in everything-linux everything everything-daemon; do
+for b in easysearch easysearch-cli easysearch-daemon; do
     [ -x "$BIN_DIR/$b" ] || err "$BIN_DIR/$b is missing — run 'make release' first"
 done
 
@@ -44,12 +44,12 @@ install -d \
     "$PKGROOT/usr/share/icons/hicolor/scalable/apps" \
     "$PKGROOT/usr/share/doc/$PKG"
 
-# everything-linux already is the GUI *and* the daemon (it re-executes itself
-# with --daemon), so the separate everything-gui binary — a development
+# easysearch already is the GUI *and* the daemon (it re-executes itself
+# with --daemon), so the separate easysearch-gui binary — a development
 # convenience that would add another ~17 MB — is deliberately not shipped.
-install -m 0755 "$BIN_DIR/everything-linux" "$PKGROOT/usr/bin/"
-install -m 0755 "$BIN_DIR/everything" "$PKGROOT/usr/bin/"
-install -m 0755 "$BIN_DIR/everything-daemon" "$PKGROOT/usr/bin/"
+install -m 0755 "$BIN_DIR/easysearch" "$PKGROOT/usr/bin/"
+install -m 0755 "$BIN_DIR/easysearch-cli" "$PKGROOT/usr/bin/"
+install -m 0755 "$BIN_DIR/easysearch-daemon" "$PKGROOT/usr/bin/"
 
 install -m 0644 "packaging/common/$APP_ID.desktop" \
     "$PKGROOT/usr/share/applications/$APP_ID.desktop"
@@ -100,7 +100,7 @@ Architecture: $ARCH
 Description: dependency probe
 EOF
     SHLIB_DEPS=$(cd "$STAGE/shl" &&
-        dpkg-shlibdeps -O -e "$ROOT/$BIN_DIR/everything-linux" 2>/dev/null |
+        dpkg-shlibdeps -O -e "$ROOT/$BIN_DIR/easysearch" 2>/dev/null |
         sed -n 's/^shlibs:Depends=//p') || SHLIB_DEPS=
 fi
 

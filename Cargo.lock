@@ -1201,6 +1201,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "easysearch-app"
+version = "0.24.0"
+dependencies = [
+ "easysearch-core",
+ "easysearch-daemon",
+ "easysearch-gui",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
+name = "easysearch-cli"
+version = "0.24.0"
+dependencies = [
+ "clap",
+ "easysearch-core",
+]
+
+[[package]]
+name = "easysearch-core"
+version = "0.24.0"
+dependencies = [
+ "ed25519-dalek",
+ "globset",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "libc",
+ "memmap2",
+ "notify",
+ "pdf-extract",
+ "quick-xml 0.41.0",
+ "rayon",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "zip",
+]
+
+[[package]]
+name = "easysearch-daemon"
+version = "0.24.0"
+dependencies = [
+ "clap",
+ "easysearch-core",
+ "serde_json",
+ "tiny_http",
+]
+
+[[package]]
+name = "easysearch-gui"
+version = "0.24.0"
+dependencies = [
+ "dark-light",
+ "easysearch-core",
+ "eframe",
+ "egui_extras",
+ "image",
+ "ksni",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "ecb"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1541,74 +1609,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
-]
-
-[[package]]
-name = "everything"
-version = "0.22.1"
-dependencies = [
- "clap",
- "everything-core",
-]
-
-[[package]]
-name = "everything-app"
-version = "0.22.1"
-dependencies = [
- "everything-core",
- "everything-daemon",
- "everything-gui",
- "libc",
- "serde_json",
-]
-
-[[package]]
-name = "everything-core"
-version = "0.22.1"
-dependencies = [
- "ed25519-dalek",
- "globset",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "libc",
- "memmap2",
- "notify",
- "pdf-extract",
- "quick-xml 0.41.0",
- "rayon",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "zip",
-]
-
-[[package]]
-name = "everything-daemon"
-version = "0.22.1"
-dependencies = [
- "clap",
- "everything-core",
- "serde_json",
- "tiny_http",
-]
-
-[[package]]
-name = "everything-gui"
-version = "0.22.1"
-dependencies = [
- "dark-light",
- "eframe",
- "egui_extras",
- "everything-core",
- "image",
- "ksni",
- "serde",
- "serde_json",
- "sha2 0.11.0",
 ]
 
 [[package]]

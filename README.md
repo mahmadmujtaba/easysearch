@@ -1,4 +1,4 @@
-# Everything for Linux
+# EasySearch
 
 Realtime filename **and** content search across your filesystem — a Linux
 equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
@@ -21,9 +21,9 @@ equivalent of VoidTools' *Everything* for Windows. Written in **Rust** with a
 
 | Binary | Purpose |
 |---|---|
-| `everything` (CLI) | scriptable search + status |
-| `everything-gui` | native desktop app (search box, toggles, results list) |
-| `everything-core` (lib) | the engine: index, watcher, matcher, content search |
+| `easysearch-cli` (CLI) | scriptable search + status |
+| `easysearch-gui` | native desktop app (search box, toggles, results list) |
+| `easysearch-core` (lib) | the engine: index, watcher, matcher, content search |
 
 ## Build (zero-sudo)
 
@@ -36,7 +36,7 @@ bundled `rust-lld` (no C compiler required):
 cargo build --release
 ```
 
-Binaries land in `target/release/everything` and `target/release/everything-gui`.
+Binaries land in `target/release/easysearch-cli` and `target/release/easysearch-gui`.
 
 > Optional, only for **.docx content search**: nothing. Word, OpenDocument and
 > PDF content is extracted in-process (v0.18.0–v0.20.0); no external tool is
@@ -47,9 +47,9 @@ Binaries land in `target/release/everything` and `target/release/everything-gui`
 Distribution packages are built from the same assets as the app:
 
 ```sh
-make deb        # dist/everything-linux_<version>_<arch>.deb      (dpkg-deb)
+make deb        # dist/easysearch_<version>_<arch>.deb      (dpkg-deb)
 make rpm        # ~/rpmbuild/RPMS/... then copied to dist/          (rpmbuild)
-make flatpak    # dist/io.github.everythinglinux.EverythingForLinux.flatpak
+make flatpak    # dist/io.github.easysearch.EasySearch.flatpak
 make packages   # all of the above that this machine has tools for
 make validate-packaging   # desktop entry + AppStream metadata
 ```
@@ -69,8 +69,8 @@ The GUI checks quietly at launch (**Help ▸ Check for updates…** to do it now
 can install and restart onto the new build; the CLI can do the same:
 
 ```sh
-./target/release/everything self-update --check
-./target/release/everything self-update
+./target/release/easysearch-cli self-update --check
+./target/release/easysearch-cli self-update
 ```
 
 A release publishes a `manifest.json` signed with Ed25519 plus a SHA-256 per
@@ -87,25 +87,25 @@ To publish a release, see [`docs/updates.md`](docs/updates.md) and
 
 ```sh
 # GUI + daemon in one binary (this is what end users run)
-make run                          # or: ./target/release/everything-linux
+make run                          # or: ./target/release/easysearch
 
 # CLI
-./target/release/everything search "*.pdf"              # glob patterns
-./target/release/everything search "report 2026 !draft" # AND terms + exclude
-./target/release/everything search --regex 'report[_-]\d{4}\.pdf$'
-./target/release/everything search --content "TODO"     # search inside files
-./target/release/everything search mtn --fuzzy          # fzf-style match
-./target/release/everything search '' --content 'a\nb' --multiline  # spans lines
-./target/release/everything search '*' --ext pdf,docx --min-size 1M
-./target/release/everything search '*.log' --modified-within 7d
-./target/release/everything search '*' --under /srv/data
-./target/release/everything status                      # index state, counts
-./target/release/everything self-update --check         # is a newer release out?
-./target/release/everything self-update                 # install it in place
+./target/release/easysearch-cli search "*.pdf"              # glob patterns
+./target/release/easysearch-cli search "report 2026 !draft" # AND terms + exclude
+./target/release/easysearch-cli search --regex 'report[_-]\d{4}\.pdf$'
+./target/release/easysearch-cli search --content "TODO"     # search inside files
+./target/release/easysearch-cli search mtn --fuzzy          # fzf-style match
+./target/release/easysearch-cli search '' --content 'a\nb' --multiline  # spans lines
+./target/release/easysearch-cli search '*' --ext pdf,docx --min-size 1M
+./target/release/easysearch-cli search '*.log' --modified-within 7d
+./target/release/easysearch-cli search '*' --under /srv/data
+./target/release/easysearch-cli status                      # index state, counts
+./target/release/easysearch-cli self-update --check         # is a newer release out?
+./target/release/easysearch-cli self-update                 # install it in place
 
 # Control a running window (bind these to desktop shortcuts — no privileged API)
-./target/release/everything-linux --toggle              # show the window / hide it
-./target/release/everything-linux --search TODO         # open and search
+./target/release/easysearch --toggle              # show the window / hide it
+./target/release/easysearch --search TODO         # open and search
 ```
 
 The GUI follows the “FileSearch Pro” reference layout (see
@@ -135,7 +135,7 @@ Query semantics (Everything-style):
 
 ## Configuration
 
-`~/.config/everything-linux/config.json` (optional; defaults shown):
+`~/.config/easysearch/config.json` (optional; defaults shown):
 
 ```json
 {
@@ -162,16 +162,17 @@ Query semantics (Everything-style):
 - **storage**: `"sqlite"` (default) keeps the index in a SQLite database;
   `"mmap"` uses the original memory-mapped file. See [`docs/sqlite.md`](docs/sqlite.md).
 - **db_dir**: where the SQLite database lives (default
-  `~/.cache/everything-linux/db`).
+  `~/.cache/easysearch/db`).
 - **persist_index**: `true` (default) keeps an index on disk with only recent
   changes in RAM; `false` keeps everything in RAM (no database, no mmap file).
 - **disk_index_dir**: where the mmap index lives (default
-  `~/.cache/everything-linux`); the database defaults to a `db/` folder inside it.
+  `~/.cache/easysearch`); the database defaults to a `db/` folder inside it.
 - **overlay_compaction_threshold**: how many pending changes trigger a
   background compaction (mmap backend).
 - **content_index_enabled**: `true` enables the background content cache
-  (bounded, LRU; keeps repeated content queries fast).
-- A global ignore file at `~/.config/everything-linux/ignore` adds extra
+  (bounded, LRU; keeps repeated content searches fast). It can also be toggled
+  while running, in **Settings ▸ Indexing**, or over `POST /v1/config`.
+- A global ignore file at `~/.config/easysearch/ignore` adds extra
   exclusions.
 
 Every key, with its default and effect, is documented in [`docs/config.md`](docs/config.md).
@@ -188,14 +189,14 @@ searched tree is honored.
 The GUI is **Wayland-first**: winit connects to a native Wayland session
 whenever `WAYLAND_DISPLAY` is set (it prefers Wayland because an X11 display
 can exist under Wayland via XWayland) and automatically falls back to **X11**
-when only `DISPLAY` is present. The app id `everything-linux` is registered
+when only `DISPLAY` is present. The app id `easysearch` is registered
 with the Wayland compositor for window icon / taskbar grouping.
 
 To force a backend:
 
 ```sh
-everything-gui                            # auto: Wayland, else X11
-export -n WAYLAND_DISPLAY; everything-gui # force X11 (or: env -u WAYLAND_DISPLAY)
+easysearch-gui                            # auto: Wayland, else X11
+export -n WAYLAND_DISPLAY; easysearch-gui # force X11 (or: env -u WAYLAND_DISPLAY)
 ```
 
 ## System tray
@@ -221,7 +222,7 @@ sudo sysctl fs.inotify.max_user_watches=1048576   # persists until reboot
 
 ## Where the index lives (and why RAM stays low)
 
-The index is a **SQLite database** in `~/.cache/everything-linux/db/`
+The index is a **SQLite database** in `~/.cache/easysearch/db/`
 (`index.db`, WAL mode), owned by the daemon — the only writer:
 
 - The bulk of the index is on disk; only a small **change overlay** of recent
