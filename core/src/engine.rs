@@ -607,7 +607,7 @@ impl Engine {
         };
 
         let (results, truncated) = if want_content {
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""))?;
+            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
             let candidates: Vec<PathBuf> = if cq.has_name_filter {
                 self.collect(&name_filter, cap)
                     .into_iter()
@@ -679,7 +679,7 @@ impl Engine {
         };
 
         let (results, truncated) = if want_content {
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""))?;
+            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
             let candidates = db.candidates(cq, cap)?;
             let matched = search_contents(
                 &candidates,

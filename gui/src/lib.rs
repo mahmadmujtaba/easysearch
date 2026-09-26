@@ -619,6 +619,8 @@ struct GuiPrefs {
     update_checked_at: u64,
     /// Fuzzy (fzf-style) filename matching. A global mode (not per-tab).
     fuzzy: bool,
+    /// Let the content pattern span lines (content search only). Slower.
+    multiline: bool,
 }
 
 impl Default for GuiPrefs {
@@ -638,6 +640,7 @@ impl Default for GuiPrefs {
             check_updates: true,
             update_checked_at: 0,
             fuzzy: false,
+            multiline: false,
         }
     }
 }
@@ -1505,6 +1508,7 @@ impl App {
             max_size,
             modified_within_secs: self.modified.secs(),
             fuzzy: self.prefs.fuzzy,
+            multiline: self.prefs.multiline,
             limit: self.limit,
         };
         let _ = self.query_tx.send(UiMsg::Search {
@@ -2826,6 +2830,7 @@ impl eframe::App for App {
                 max_size: self.size.bounds().1,
                 modified_within_secs: self.modified.secs(),
                 fuzzy: self.prefs.fuzzy,
+                multiline: self.prefs.multiline,
                 limit: 1,
             };
             self.counts_key = self.last_sent.clone();
@@ -3441,6 +3446,11 @@ impl App {
                             | ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
                             | ui.checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
                                 .changed()
+                            | ui.checkbox(
+                                &mut self.prefs.multiline,
+                                "Multiline content (regex spans lines)",
+                            )
+                            .changed()
                             | ui.checkbox(&mut self.case_sensitive, "Case-sensitive")
                                 .changed()
                             | ui.checkbox(&mut self.hidden, "Hidden files").changed()
@@ -4028,6 +4038,18 @@ impl App {
                         changed = true;
                     }
                     if ui.checkbox(&mut self.hidden, "Hidden").changed() {
+                        changed = true;
+                    }
+                    // Content-only: let the pattern span lines.
+                    if self.content_mode
+                        && ui
+                            .checkbox(&mut self.prefs.multiline, "Multiline")
+                            .on_hover_text(
+                                "Let the content pattern span lines (e.g. foo\\nbar). Much slower.",
+                            )
+                            .changed()
+                    {
+                        self.prefs.save();
                         changed = true;
                     }
 

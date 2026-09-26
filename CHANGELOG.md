@@ -4,6 +4,17 @@ All notable changes to **Everything for Linux** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-09-26
+
+### Added
+
+- **Multiline content regex (Phase 3).** A content pattern can now span lines —
+  `--content 'foo\nbar' --multiline` finds a file where `foo` ends one line and
+  `bar` begins the next. Off by default, because it makes the searcher buffer
+  whole files instead of scanning line by line, which is much slower. Available
+  as `Query.multiline`, `--multiline` in the CLI, `?multiline=1` on the HTTP API,
+  and the **Multiline** chip in the filter bar (shown in content mode).
+
 ## [0.20.0] - 2026-09-26
 
 ### Added

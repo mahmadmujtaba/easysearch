@@ -175,8 +175,9 @@ filter bar). They are enforced by the same predicate whether the query is a `sea
   **embedded ripgrep engine** (`grep-searcher`), constrained to:
   - the current filename-filtered result set (content **and** name → intersection), and
   - the user's scope root (default: whole FS minus exclusions, §6).
-- Regex in content mode uses ripgrep's regex engine (same syntax as `rg`; multiline via
-  `-U`-style flags in a later phase).
+- Regex in content mode uses ripgrep's regex engine (same syntax as `rg`). A
+  pattern can span lines with **Multiline** (`--multiline`, `?multiline=1`), which
+  is off by default because it is much slower.
 - **Realtime guarantee for content:** results are always computed from live disk state at
   query time. Editing a file then re-running the query immediately shows the change.
 - `.docx` / `.odt` / `.pdf` content: text is extracted **in-process**, so Office
@@ -416,7 +417,7 @@ everything-for-linux/
 |---|---|
 | **1 — MVP** (cold walk + live index + name/content search + GUI/CLI + config) | **Done** — shipped in v0.1.0 |
 | **2 — Polish** | **Done**: daemon + HTTP API, tray icon, settings dialog, tabs and session persistence, saved searches, light/dark following, packaging (.deb/.rpm/Flatpak metadata), `.gitignore` management UI (v0.16.0), fuzzy ranking (v0.17.0), bundled docx extractor (v0.18.0), global hotkey via the control socket (v0.19.0) |
-| **3 — Stretch** | **Partly done**: **PDF / ODT extraction (v0.20.0)**. **Outstanding**: `fanotify` watcher, multiline content regex, Windows/macOS builds |
+| **3 — Stretch** | **Partly done**: **PDF / ODT extraction (v0.20.0)**, **multiline content regex (v0.21.0)**. **Outstanding**: `fanotify` watcher, Windows/macOS builds |
 | **4 — SQLite index** | **Done** — v0.13.0. See [`sqlite.md`](sqlite.md) |
 | **5 — Packaging** | **Partly done**: `.deb` builds and verifies; RPM and Flatpak are written but have never been built (tools unavailable here). See [`packaging.md`](packaging.md) |
 

@@ -38,6 +38,7 @@ Query syntax (Everything-compatible):
 | `!draft` | **excludes** matches |
 | `^src/` | path prefix (with the *Full path* scope) |
 | `report[_-]\d{4}` | a regex, when `Regex` is on |
+| `foo\nbar` *(Multiline)* | a content regex that spans lines (much slower) |
 
 **Scope** (the picker next to the search box) decides *what* the query is matched
 against: **Filenames** (default), **Full path**, or **Contents** (inside files,
@@ -67,6 +68,7 @@ predicate whether the app is counting or listing:
 | **Path** | `under` — only paths inside a directory |
 | **Ext:** | only these extensions (implies files-only) |
 | **Case** / **Hidden** | case-sensitive matching; include dot-files |
+| **Multiline** *(content mode)* | let the content pattern span lines (`foo\nbar`); much slower |
 | **✕ Clear Filters** | resets all of the above (enabled only when something is set) |
 
 ## Ignoring files

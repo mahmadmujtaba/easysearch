@@ -94,6 +94,8 @@ make run                          # or: ./target/release/everything-linux
 ./target/release/everything search "report 2026 !draft" # AND terms + exclude
 ./target/release/everything search --regex 'report[_-]\d{4}\.pdf$'
 ./target/release/everything search --content "TODO"     # search inside files
+./target/release/everything search mtn --fuzzy          # fzf-style match
+./target/release/everything search '' --content 'a\nb' --multiline  # spans lines
 ./target/release/everything search '*' --ext pdf,docx --min-size 1M
 ./target/release/everything search '*.log' --modified-within 7d
 ./target/release/everything search '*' --under /srv/data
@@ -126,7 +128,8 @@ Query semantics (Everything-style):
 - `--fuzzy` (or the **Fuzzy** toolbar button) matches the term's characters *in
   order* anywhere, so `mtn` finds `meeting-notes.md`; it also drives the
   Relevance ranking. `!term` exclusions stay literal
-- `--regex` treats each term as a regex (filenames and content)
+- `--regex` treats each term as a regex (filenames and content); `--multiline`
+  lets the content pattern span lines (`foo\nbar`), which is slower
 - case-insensitive by default (`--case` to change)
 - hidden files/dirs are indexed but hidden from results (`--hidden` to include)
 

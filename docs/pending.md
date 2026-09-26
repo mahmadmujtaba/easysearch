@@ -167,8 +167,8 @@ deliverable; these are gated on request:
 
 **Phase 3 — stretch**
 - `fanotify` watcher (no per-directory watch limits; needs privileges)
-- Multiline content regex
 - ~~PDF / ODT text extraction~~ — **done in v0.20.0** (ODT via the same `zip` + `quick-xml` package reader; PDF via `pdf-extract`, text layer only, guarded with `catch_unwind`)
+- ~~Multiline content regex~~ — **done in v0.21.0** (`--multiline`, `?multiline=1`, the filter-bar "Multiline" chip; off by default because it is much slower)
 - Windows / macOS builds
 
 ---

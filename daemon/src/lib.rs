@@ -281,6 +281,7 @@ fn parse_query_params(params: &str) -> Result<Query, String> {
             }
             "hidden" => q.include_hidden = truthy(&value),
             "fuzzy" => q.fuzzy = truthy(&value),
+            "multiline" => q.multiline = truthy(&value),
             "path" | "full_path" => q.full_path = truthy(&value),
             "dirs" | "include_dirs" => q.include_dirs = truthy(&value),
             "under" => {
@@ -388,5 +389,23 @@ mod tests {
         assert!(parse_query_params("query=x&fuzzy=1").unwrap().fuzzy);
         assert!(parse_query_params("query=x&fuzzy=true").unwrap().fuzzy);
         assert!(!parse_query_params("query=x&fuzzy=no").unwrap().fuzzy);
+    }
+
+    #[test]
+    fn parses_the_multiline_flag() {
+        assert!(
+            !parse_query_params("query=x").unwrap().multiline,
+            "off by default"
+        );
+        assert!(
+            parse_query_params("query=x&content=a&multiline=1")
+                .unwrap()
+                .multiline
+        );
+        assert!(
+            !parse_query_params("query=x&multiline=false")
+                .unwrap()
+                .multiline
+        );
     }
 }

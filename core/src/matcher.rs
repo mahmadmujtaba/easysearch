@@ -73,6 +73,10 @@ pub struct Query {
     /// substring/glob meaning.
     #[serde(default)]
     pub fuzzy: bool,
+    /// Content pattern may span lines (`foo\nbar`), instead of being matched
+    /// against one line at a time. Much slower, so it is opt-in.
+    #[serde(default)]
+    pub multiline: bool,
     pub limit: usize,
 }
 
@@ -93,6 +97,7 @@ impl Default for Query {
             max_size: None,
             modified_within_secs: None,
             fuzzy: false,
+            multiline: false,
             limit: 1000,
         }
     }
@@ -203,6 +208,8 @@ pub struct CompiledQuery {
     pub max_size: Option<u64>,
     pub modified_within_secs: Option<i64>,
     pub limit: usize,
+    /// The content pattern may span lines (see [`Query::multiline`]).
+    pub multiline: bool,
     /// True if any name term/exclusion was given.
     pub has_name_filter: bool,
 }
@@ -263,6 +270,7 @@ impl CompiledQuery {
             max_size: q.max_size,
             modified_within_secs: q.modified_within_secs,
             limit: q.limit.max(1),
+            multiline: q.multiline,
             has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
         })
     }

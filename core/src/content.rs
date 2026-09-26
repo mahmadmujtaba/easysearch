@@ -5,7 +5,7 @@
 //! external tool); a file that cannot be extracted is skipped, never fatal.
 
 use crate::content_index::{ContentIndex, ExtractQueue};
-use grep_regex::RegexMatcher;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 use regex::Regex;
@@ -20,14 +20,29 @@ const MAX_EXTRACTED_TEXT_BYTES: u64 = 64 * 1024 * 1024;
 pub struct ContentPattern {
     matcher: RegexMatcher,
     plain: Regex,
+    /// The pattern may span lines (needs the searcher's multiline mode).
+    multiline: bool,
 }
 
 impl ContentPattern {
-    pub fn new(pattern: &str) -> Result<ContentPattern, String> {
-        let matcher =
-            RegexMatcher::new(pattern).map_err(|e| format!("invalid content pattern: {e}"))?;
+    pub fn new(pattern: &str, multiline: bool) -> Result<ContentPattern, String> {
+        // `multi_line` here is the *matcher's* ability to match across lines;
+        // the searcher must be told the same thing (see `search_contents`).
+        let matcher = RegexMatcherBuilder::new()
+            .multi_line(multiline)
+            .build(pattern)
+            .map_err(|e| format!("invalid content pattern: {e}"))?;
         let plain = Regex::new(pattern).map_err(|e| format!("invalid content pattern: {e}"))?;
-        Ok(ContentPattern { matcher, plain })
+        Ok(ContentPattern {
+            matcher,
+            plain,
+            multiline,
+        })
+    }
+
+    /// Whether the pattern may span lines.
+    pub fn multiline(&self) -> bool {
+        self.multiline
     }
 
     fn matches_cached(&self, text: &str) -> bool {
@@ -70,6 +85,7 @@ pub fn search_contents(
             || {
                 SearcherBuilder::new()
                     .binary_detection(BinaryDetection::quit(b'\x00'))
+                    .multi_line(pattern.multiline())
                     .build()
             },
             |searcher, p| search_one(searcher, pattern, p, queue).then(|| (*p).clone()),
@@ -142,5 +158,54 @@ impl Sink for AnyMatchSink {
     fn matched(&mut self, _searcher: &Searcher, _mat: &SinkMatch) -> Result<bool, Self::Error> {
         self.found = true;
         Ok(false) // stop searching this file
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content_index::ContentIndex;
+
+    #[test]
+    fn multiline_patterns_only_span_lines_when_enabled() {
+        let dir = std::env::temp_dir().join(format!(
+            "evfl-multiline-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let paths = vec![path.clone()];
+        // A disabled cache keeps the test on the live-read path.
+        let cache = ContentIndex::new(false, 1024 * 1024, 1024 * 1024);
+
+        // Line by line (the default): a pattern containing a newline never
+        // matches, because no single line contains one.
+        let single = ContentPattern::new("alpha\\nbeta", false).unwrap();
+        assert!(
+            search_contents(&paths, &single, 10, &cache, None).is_empty(),
+            "a newline pattern must not match in single-line mode"
+        );
+
+        // Multiline: the same pattern matches across the line boundary.
+        let multi = ContentPattern::new("alpha\\nbeta", true).unwrap();
+        assert!(multi.multiline());
+        assert_eq!(
+            search_contents(&paths, &multi, 10, &cache, None),
+            vec![path.clone()]
+        );
+
+        // A single-line pattern still works in multiline mode.
+        let plain = ContentPattern::new("gamma", true).unwrap();
+        assert_eq!(
+            search_contents(&paths, &plain, 10, &cache, None),
+            vec![path]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
