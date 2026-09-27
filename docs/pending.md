@@ -21,13 +21,16 @@ missing, so `make packages` degrades cleanly. Details:
 
 ## Before publishing
 
-1. **Deb maintainer** — defaults to `EasySearch <easysearch@localhost>`; override
-   with `MAINTAINER='You <you@example.com>' make deb`, or change the default in
-   `scripts/package-deb.sh`.
-2. **`LICENSE` copyright holder** — currently the neutral "2026 EasySearch
-   contributors". Put a real name in it.
-3. The AppStream metainfo carries a `<release>` entry that is edited by hand each
+1. **App id** — `io.github.easysearch.EasySearch` names the desktop file, the
+   metainfo `<id>`/`<launchable>`, the Flatpak `app-id` and `APP_ID` in the
+   `Makefile`. Settle it before publishing: changing it later moves the desktop
+   entry and icon with it (the on-disk data lives under a fixed
+   `~/.config/easysearch`, so it is not affected).
+2. The AppStream metainfo carries a `<release>` entry that is edited by hand each
    release; keep it in step with `VERSION` (or wire it into the tag build).
+3. **Packages are unsigned.** CI builds them without a signing key, so there is
+   no `Release`/`InRelease` and no repository — the `.deb`/`.rpm` are downloaded
+   from the release page and installed by hand.
 
 ## Known rough edges
 

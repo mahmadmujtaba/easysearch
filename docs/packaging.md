@@ -69,11 +69,13 @@ also embeds a 512 px transparent render (`core/assets/logo.png`) for its window
 icon, tray pixmap and About dialog. The two are kept in step by hand. `make deb`
 additionally renders PNG icons from the SVG.
 
-Placeholders to change before publishing: the app id
-`io.github.easysearch.EasySearch` (the desktop file name, the metainfo
-`<id>`/`<launchable>`, the Flatpak `app-id`, and `APP_ID` in the `Makefile`), the
-deb maintainer (`MAINTAINER='You <you@example.com>' make deb`), and `VERSION`
-(read by `Cargo.toml`, the deb, the spec and the Flatpak build).
+The maintainer is **EasySearch maintainers <ahmad.mujtaba11@gmail.com>** — the deb
+`Maintainer`, the rpm `Packager` and the rpm changelog entry; override a single
+build with `MAINTAINER='Name <mail>' make deb`. The app id
+`io.github.easysearch.EasySearch` names the desktop file, the metainfo
+`<id>`/`<launchable>`, the Flatpak `app-id` and `APP_ID` in the `Makefile`;
+settle it before publishing. `VERSION` is read by `Cargo.toml`, the deb, the spec
+and the Flatpak build.
 
 ## Flatpak
 

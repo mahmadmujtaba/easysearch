@@ -4,6 +4,24 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.1] - 2026-09-27
+
+### Packaging
+
+- **Package metadata names the real maintainer and copyright holder.** The deb
+  `Maintainer` and the rpm `Packager`/changelog are now
+  `EasySearch maintainers <ahmad.mujtaba11@gmail.com>`, the AppStream
+  `<developer>` names the maintainers, and `LICENSE` reads “2026 EasySearch
+  maintainers”. A single build can still override it with
+  `MAINTAINER='Name <mail>' make deb`.
+
+### Docs
+
+- The README and `CONTRIBUTING.md` now state plainly that the project is
+  **AI-assisted**: most of the code, tests and documentation are written by an
+  AI coding agent from the maintainer's direction and reviewed by a human before
+  release.
+
 ## [0.44.0] - 2026-09-27
 
 ### Added

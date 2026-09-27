@@ -26,6 +26,11 @@ ever exposed on a socket, a port or the network.
 Read [`docs/scope.md`](docs/scope.md) for the design and
 [`docs/ui.md`](docs/ui.md) for the user-facing guide.
 
+> **AI-assisted project.** Most of the code, tests and docs here were written by
+> an AI coding agent under the maintainer's direction, and reviewed by a human
+> before release. Reviews, corrections and second opinions are especially
+> valuable — see *How to contribute* below.
+
 ## Architecture at a glance
 
 ```mermaid

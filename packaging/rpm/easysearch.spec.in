@@ -16,6 +16,7 @@ Summary:        Instant file and content search for Linux
 
 License:        MIT
 URL:            https://github.com/mahmadmujtaba/easysearch
+Packager:       EasySearch maintainers <ahmad.mujtaba11@gmail.com>
 Source0:        easysearch-%{version}.tar.gz
 
 BuildRequires:  cargo
@@ -102,5 +103,5 @@ fi
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 
 %changelog
-* Thu Sep 24 2026 EasySearch contributors <easysearch@localhost> - @VERSION@-1
+* Sun Sep 27 2026 EasySearch maintainers <ahmad.mujtaba11@gmail.com> - @VERSION@-1
 - Initial packaged release (.deb, .rpm and Flatpak metadata).

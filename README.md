@@ -196,6 +196,15 @@ are in [`docs/scope.md`](docs/scope.md).
 | [`docs/pending.md`](docs/pending.md) | Known gaps and what is planned |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release-by-release history |
 
+## Note to users: this project is AI-assisted
+
+**EasySearch is developed with AI assistance.** Most of the code, tests and
+documentation are written by an AI coding agent working from the maintainer's
+direction, then reviewed and tested by a human before it is released. It is a
+real, working program — but it is also a young one, so please treat it that way:
+keep backups of anything precious, expect the occasional rough edge, and report
+what you find. Bug reports, corrections and patches are genuinely welcome.
+
 ## Contributing
 
 Contributions are welcome — from a typo fix to a new feature. Start with

@@ -16,7 +16,7 @@ VERSION=$(cat VERSION)
 ARCH=${ARCH:-$(dpkg --print-architecture)}
 BIN_DIR=${BIN_DIR:-target/release}
 OUT_DIR=${OUT_DIR:-dist}
-MAINTAINER=${MAINTAINER:-"EasySearch <easysearch@localhost>"}
+MAINTAINER=${MAINTAINER:-"EasySearch maintainers <ahmad.mujtaba11@gmail.com>"}
 
 # winit/glutin load these with dlopen() at runtime, so dpkg-shlibdeps cannot see
 # them. These are the Debian/Ubuntu packages that ship the exact sonames the
