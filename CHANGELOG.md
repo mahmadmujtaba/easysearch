@@ -4,6 +4,44 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] - 2026-09-27
+
+### Added
+
+- **Two quick-action buttons in the menu bar**, just left of the logo.
+  **Free memory** clears the current results — the largest thing the window
+  holds, especially after a content search — and asks the engine to return freed
+  pages to the operating system; **Reset defaults** puts every setting, filter,
+  tab and saved search back to its default. Both confirm first and then report
+  what happened; the index, tags and files are never touched.
+- **The window title carries the version and build date** —
+  `EasySearch 0.44.0 (built 2026-09-27)` — stamped by a `build.rs` that computes
+  the date itself (no external command, no date crate). The About dialog and the
+  tray tooltip show the same.
+- **`exclude_names_file`**, a new config option: a file of comma-separated
+  directory *names* skipped anywhere in the tree, seeded with a well-populated
+  common list — virtual environments and dependency trees (`node_modules`,
+  `.venv`, `venv`, `__pycache__`, `target`, `.gradle`, `.dart_tool`,
+  `go/pkg/mod`, …) — at `~/.config/easysearch/exclude-names`. An item with a
+  slash matches a path suffix at any depth.
+- **`index_hidden_dirs`** (default `false`): hidden dot-directories are pruned
+  while walking, so `.git`, `.cache` and the rest never enter the index at all.
+
+### Changed
+
+- **The index no longer holds what the UI can never show.** Hidden directories
+  and excluded names are skipped during the walk, not merely filtered at query
+  time, so the SQLite tables stay small and clean. A `walk_key` fingerprint is
+  stored in the database and the index rebuilds itself when the roots or
+  exclusions change; the SQLite schema version was bumped, which forces one
+  clean rebuild on upgrade.
+
+### Docs
+
+- `docs/config.md` documents `exclude_names_file`, `index_hidden_dirs` and the
+  exclude-names file; `docs/ui.md` and the README describe the quick actions and
+  the titled window.
+
 ## [0.43.0] - 2026-09-27
 
 ### Added

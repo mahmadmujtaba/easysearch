@@ -69,7 +69,7 @@ pub fn start_watcher(
                         }
                     }
                 }
-                for dir in crate::walker::collect_dirs(root, &roots_set, opts) {
+                for dir in crate::walker::collect_dirs(root, &roots_set, opts.clone()) {
                     match watcher.watch(&dir, RecursiveMode::NonRecursive) {
                         Ok(_) => watched += 1,
                         Err(e) => {
@@ -113,7 +113,7 @@ pub fn start_watcher(
                                 p.is_dir() && roots_set.is_in_roots(p) && !roots_set.is_excluded(p)
                             }) {
                                 let _ = watcher.watch(p, RecursiveMode::NonRecursive);
-                                for dir in crate::walker::collect_dirs(p, &roots_set, opts) {
+                                for dir in crate::walker::collect_dirs(p, &roots_set, opts.clone()) {
                                     let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
                                 }
                             }
@@ -125,7 +125,7 @@ pub fn start_watcher(
                             &cache,
                             queue.as_ref(),
                             &status,
-                            opts,
+                            opts.clone(),
                         );
                     }
                     Err(e) => {

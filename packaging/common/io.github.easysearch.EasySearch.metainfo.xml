@@ -68,12 +68,14 @@
   </screenshots>
 
   <releases>
-    <release version="0.43.0" date="2026-09-27">
+    <release version="0.44.0" date="2026-09-27">
       <description>
         <p>
           Realtime filename and content search with a native GUI, tray, tags,
           excluded folders, live previews and a recoverable duplicate finder —
-          fully offline. This release adds a richer tray menu and clearer clicks.
+          fully offline. This release adds quick-action buttons, a versioned
+          window title, and default exclusions for virtual environments and
+          dependency trees.
         </p>
       </description>
     </release>

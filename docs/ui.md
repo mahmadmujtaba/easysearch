@@ -9,7 +9,7 @@ network code. `easysearch-cli` is the engine headless and `easysearch-gui` opens
 ## Window layout
 
 ```
-menu bar        File · Search · Filters · Tools · Settings · Help          [logo]
+menu bar        File · Search · Filters · Tools · Settings · Help   [Free memory] [Reset defaults] [logo]
 search tabs     one pill per open search (restored on restart)               [ + ]
 toolbar         Back Forward Home Index | Content Search Regex Fuzzy | Recent Saved
 search row      Search: [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
@@ -21,6 +21,14 @@ panes           sidebar | results table | preview/details;  below: view tabs · 
 **Menus:** File (tabs, focus, reload, hide, quit) · Search (content, regex, fuzzy, multiline, case,
 hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
 excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts).
+
+**Quick actions** sit at the top right, just left of the logo. **Free memory**
+clears the current results — the largest thing the window holds, especially
+after a content search — and asks the engine to return freed pages to the
+operating system; **Reset defaults** puts every setting, filter, tab and saved
+search back to its default. Each opens a confirmation first, and the index,
+tags and files are never touched. The window title carries the version and build
+date — `EasySearch 0.44.0 (built 2026-09-27)` — as does the logo's tooltip.
 
 ## Searching
 

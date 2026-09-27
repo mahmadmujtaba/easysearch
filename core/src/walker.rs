@@ -19,7 +19,7 @@ const BATCH: usize = 512;
 
 /// Settings that shape a walk. Bundled into one value so adding an option does
 /// not ripple through every walker/watcher signature.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct WalkOptions {
     /// Honor `.gitignore`/`.ignore` files in the tree, plus the global ignore
     /// file at `~/.config/easysearch/ignore`.
@@ -27,15 +27,70 @@ pub struct WalkOptions {
     /// Follow symbolic links into their targets (cycles are detected by the
     /// walker and skipped).
     pub follow_symlinks: bool,
+    /// Never descend into a dot-directory (`.git`, `.cache`, …). Hidden *files*
+    /// are still indexed — the query's Hidden switch decides whether to show
+    /// them — but a hidden directory's whole subtree stays out of the index.
+    pub skip_hidden_dirs: bool,
+    /// Directory *names* to skip anywhere in the tree (virtual environments,
+    /// dependency trees, build caches). Shared so the thread pool can clone the
+    /// walk options cheaply.
+    pub exclude_names: Arc<crate::config::ExcludeNames>,
 }
 
 impl WalkOptions {
-    pub const fn new(respect_ignore: bool, follow_symlinks: bool) -> WalkOptions {
+    pub fn new(respect_ignore: bool, follow_symlinks: bool) -> WalkOptions {
         WalkOptions {
             respect_ignore,
             follow_symlinks,
+            skip_hidden_dirs: true,
+            exclude_names: Arc::new(crate::config::ExcludeNames::default()),
         }
     }
+
+    /// Set whether dot-directories are skipped (see [`Self::skip_hidden_dirs`]).
+    pub fn with_skip_hidden_dirs(mut self, skip: bool) -> Self {
+        self.skip_hidden_dirs = skip;
+        self
+    }
+
+    /// Replace the excluded directory-name set.
+    pub fn with_exclude_names(mut self, names: Arc<crate::config::ExcludeNames>) -> Self {
+        self.exclude_names = names;
+        self
+    }
+
+    /// A `filter_entry` predicate that prunes hidden directories (except `root`
+    /// itself) and directories whose name is in [`WalkOptions::exclude_names`].
+    fn dir_filter(
+        &self,
+        root: &Path,
+    ) -> impl Fn(&ignore::DirEntry) -> bool + Send + Sync + 'static {
+        let root = root.to_path_buf();
+        let skip_hidden = self.skip_hidden_dirs;
+        let exclude = Arc::clone(&self.exclude_names);
+        move |entry: &ignore::DirEntry| {
+            if entry.path() == root {
+                return true; // an explicitly-configured root is never pruned
+            }
+            if !entry.file_type().is_some_and(|t| t.is_dir()) {
+                return true; // files are filtered at query time
+            }
+            !prunes_dir(entry.path(), skip_hidden, &exclude)
+        }
+    }
+}
+
+/// Whether a directory is pruned during a walk: a dot-directory while hidden
+/// trees are skipped, or a directory whose name is excluded.
+fn prunes_dir(path: &Path, skip_hidden: bool, exclude: &crate::config::ExcludeNames) -> bool {
+    if skip_hidden
+        && path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    {
+        return true;
+    }
+    exclude.matches(path)
 }
 
 enum Sink {
@@ -106,7 +161,7 @@ fn walk_impl(
 ) {
     let mut builder = WalkBuilder::new(root);
     builder
-        .hidden(false) // index hidden files too; filtering happens at query time
+        .hidden(false) // index hidden *files*; hidden dirs are pruned by dir_filter
         .follow_links(opts.follow_symlinks)
         .threads(
             std::thread::available_parallelism()
@@ -134,6 +189,8 @@ fn walk_impl(
             .git_exclude(false)
             .parents(false);
     }
+
+    builder.filter_entry(opts.dir_filter(root));
 
     let shared: Arc<Mutex<Vec<(PathBuf, Meta)>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -252,6 +309,7 @@ pub fn collect_dirs(root: &Path, roots: &Arc<RootSet>, opts: WalkOptions) -> Vec
             .git_exclude(false)
             .parents(false);
     }
+    builder.filter_entry(opts.dir_filter(root));
     let mut dirs = Vec::new();
     for entry in builder.build() {
         let Ok(entry) = entry else { continue }; // unreadable: skip, don't fail
@@ -283,5 +341,36 @@ fn global_ignore_path() -> Option<PathBuf> {
 fn bump_skipped(status: &Arc<RwLock<Status>>) {
     if let Ok(mut s) = status.write() {
         s.skipped = s.skipped.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ExcludeNames;
+
+    #[test]
+    fn hidden_and_excluded_directories_are_pruned() {
+        let exclude = ExcludeNames::parse("node_modules,target,go/pkg/mod");
+
+        // Dot-directories go when hidden trees are skipped.
+        assert!(prunes_dir(Path::new("/u/.cache"), true, &exclude));
+        assert!(prunes_dir(Path::new("/u/proj/.git"), true, &exclude));
+        // …but stay when they are indexed on purpose.
+        assert!(!prunes_dir(Path::new("/u/.config"), false, &exclude));
+
+        // Excluded names, at any depth.
+        assert!(prunes_dir(
+            Path::new("/u/proj/node_modules"),
+            true,
+            &exclude
+        ));
+        assert!(prunes_dir(Path::new("/u/a/b/target"), true, &exclude));
+        // Suffix items match the path tail only.
+        assert!(prunes_dir(Path::new("/u/go/pkg/mod"), true, &exclude));
+        assert!(!prunes_dir(Path::new("/u/pkg/mod"), true, &exclude));
+
+        // Ordinary directories are kept.
+        assert!(!prunes_dir(Path::new("/u/Documents"), true, &exclude));
     }
 }

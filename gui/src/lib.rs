@@ -546,7 +546,7 @@ pub fn run_with(
     quit: Arc<AtomicBool>,
 ) -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("EasySearch")
+        .with_title(app_title())
         // Must match the installed desktop entry / icon name so Wayland
         // compositors associate the window with it (and show the icon).
         .with_app_id(APP_ID)
@@ -561,9 +561,22 @@ pub fn run_with(
         ..Default::default()
     };
     eframe::run_native(
-        "EasySearch",
+        &app_title(),
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, backend, initial_query, events, quit)))),
+    )
+}
+
+/// The window (and app) title: name, version and build date.
+///
+/// `BUILD_DATE` is set by `build.rs` (`YYYY-MM-DD`, the build machine's UTC
+/// date); the version comes from the crate manifest. Both are shown so a
+/// screenshot or a bug report identifies exactly which build it is.
+pub fn app_title() -> String {
+    format!(
+        "EasySearch {} (built {})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("BUILD_DATE").unwrap_or("unknown")
     )
 }
 
@@ -1047,6 +1060,12 @@ struct App {
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
+    /// The “Free memory” confirmation dialog is open (the top-right button).
+    show_free_memory: bool,
+    /// The “Reset to defaults” confirmation dialog is open.
+    show_reset: bool,
+    /// One-line outcome of a quick action, shown in a small dialog.
+    notice: Option<String>,
     /// The one-time “content search uses more memory” notice.
     show_content_warning: bool,
     /// Snapshot state of every tab; the active one is mirrored in the fields
@@ -1299,6 +1318,9 @@ impl App {
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
+            show_free_memory: false,
+            show_reset: false,
+            notice: None,
             show_content_warning: false,
             tabs,
             active_tab,
@@ -3471,6 +3493,13 @@ impl eframe::App for App {
         if self.show_shortcuts {
             self.shortcuts_dialog(ctx);
         }
+        if self.show_free_memory {
+            self.free_memory_dialog(ctx);
+        }
+        if self.show_reset {
+            self.reset_defaults_dialog(ctx);
+        }
+        self.notice_dialog(ctx);
         if self.show_content_warning {
             self.content_warning_dialog(ctx);
         }
@@ -3559,8 +3588,12 @@ impl App {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new("EasySearch").size(20.0).strong());
                     ui.label(
-                        egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                            .color(self.fg_dim()),
+                        egui::RichText::new(format!(
+                            "Version {} · built {}",
+                            env!("CARGO_PKG_VERSION"),
+                            option_env!("BUILD_DATE").unwrap_or("unknown")
+                        ))
+                        .color(self.fg_dim()),
                     );
                 });
                 ui.add_space(8.0);
@@ -3952,11 +3985,33 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    // The mark, at the far right of the menu bar.
+                    // At the far right: two quick actions to the *left* of the mark —
+                    // free up memory, and reset every setting to its default.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let mark = self.logo(ui.ctx());
                         ui.add(egui::Image::new((mark.id(), egui::vec2(22.0, 22.0))))
                             .on_hover_text(format!("EasySearch {}", env!("CARGO_PKG_VERSION")));
+                        ui.add_space(8.0);
+                        if ui
+                            .small_button("Reset defaults")
+                            .on_hover_text(
+                                "Put every setting, filter, tab and saved search back to its \
+                                 default.",
+                            )
+                            .clicked()
+                        {
+                            self.show_reset = true;
+                        }
+                        if ui
+                            .small_button("Free memory")
+                            .on_hover_text(
+                                "Clear the current results and ask the engine to return freed \
+                                 pages to the operating system.",
+                            )
+                            .clicked()
+                        {
+                            self.show_free_memory = true;
+                        }
                     });
                 });
             });
@@ -4679,6 +4734,174 @@ impl App {
         self.pending = false;
         self.engine.trim_memory();
         self.dirty = true;
+    }
+
+    /// Release as much memory as we can right now (the *Free memory* button).
+    ///
+    /// The current rows — and any content-search matches in them — are the biggest
+    /// thing the window holds, so they are dropped and shrunk; the engine is then
+    /// asked to return freed pages to the OS (`malloc_trim` in the engine
+    /// process). The query text is left as it is, so pressing Enter re-runs it.
+    fn free_memory(&mut self) {
+        self.results.clear();
+        self.results.shrink_to_fit();
+        self.all_results.clear();
+        self.all_results.shrink_to_fit();
+        self.checked.clear();
+        self.truncated = false;
+        self.error = None;
+        self.elapsed_ms = 0;
+        self.selected = 0;
+        self.scroll_to = None;
+        self.pending = false;
+        self.preview = None;
+        self.hash = None;
+        self.dups = None;
+        self.dup_checked.clear();
+        self.dup_progress = None;
+        self.engine.trim_memory();
+        self.dirty = true;
+        self.notice = Some(
+            "Cleared the current results and asked the engine to return freed pages to the \
+             operating system. The index on disk is untouched — press Enter to run the search \
+             again."
+                .into(),
+        );
+    }
+
+    /// Put every setting, filter and tab back to its default (the *Reset defaults*
+    /// button). The index, tags and files on disk are left alone.
+    fn reset_defaults(&mut self, ctx: &egui::Context) {
+        self.prefs = GuiPrefs::default();
+
+        // Live tab state, back to the defaults the fresh-start window would have.
+        self.query.clear();
+        self.last_sent.clear();
+        self.regex_mode = false;
+        self.content_mode = false;
+        self.full_text = false;
+        self.case_sensitive = false;
+        self.hidden = false;
+        self.full_path = false;
+        self.category = Category::All;
+        self.size = SizeFilter::Any;
+        self.modified = ModifiedFilter::Any;
+        self.extensions.clear();
+        self.under = None;
+        self.sort = None;
+        self.density = Density::default();
+        self.view = ViewTab::default();
+        self.panel_tab = PanelTab::default();
+        self.checked.clear();
+        self.results.clear();
+        self.all_results.clear();
+        self.preview = None;
+        self.hash = None;
+        self.dups = None;
+        self.show_dups = false;
+        self.dup_checked.clear();
+        self.dup_progress = None;
+        self.sidebar_filter.clear();
+        self.selected = 0;
+        self.truncated = false;
+        self.error = None;
+        self.elapsed_ms = 0;
+        self.pending = false;
+        self.history_idx = None;
+        self.loc_history = vec![None];
+        self.loc_idx = 0;
+        self.tabs = vec![TabState::default()];
+        self.active_tab = 0;
+
+        // Appearance, then persist it exactly as a fresh window would.
+        self.theme = self.prefs.theme;
+        ctx.set_zoom_factor(self.prefs.zoom);
+        self.apply_style(ctx);
+        self.save_prefs();
+        self.send_query();
+        self.notice = Some("All settings were reset to their defaults.".into());
+    }
+
+    fn free_memory_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Free memory")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Free up as much memory as possible?").strong());
+                ui.add_space(4.0);
+                ui.label(
+                    "This clears the current results — the largest thing EasySearch holds, \
+                     especially after a content search — and then asks the engine to return \
+                     freed pages to the operating system. Your index, tags and settings are \
+                     not touched, and you can run the search again at any time.",
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Free memory").clicked() {
+                        self.free_memory();
+                        self.show_free_memory = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_free_memory = false;
+                    }
+                });
+            });
+    }
+
+    fn reset_defaults_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Reset to defaults")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Reset every setting to its default?").strong());
+                ui.add_space(4.0);
+                ui.label(
+                    "The theme (Dark), zoom, filters, the content/regex/fuzzy switches, result \
+                     density, tabs, saved searches and the recent-search history all go back to \
+                     their defaults.",
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "The index, your tags and the files on disk are not changed.",
+                    )
+                    .small()
+                    .color(self.fg_dim()),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Reset everything").clicked() {
+                        self.reset_defaults(ctx);
+                        self.show_reset = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_reset = false;
+                    }
+                });
+            });
+    }
+
+    /// A small dialog reporting the outcome of a quick action.
+    fn notice_dialog(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.notice.clone() else {
+            return;
+        };
+        egui::Window::new("EasySearch")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(text);
+                ui.add_space(10.0);
+                if ui.button("OK").clicked() {
+                    self.notice = None;
+                }
+            });
     }
 
     fn category_label(&self) -> String {

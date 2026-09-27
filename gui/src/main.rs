@@ -8,6 +8,7 @@ fn main() -> eframe::Result {
     // Before the window, the tray, the status poller or the engine can start a
     // thread. The cache flags are read when the engine loads its config.
     easysearch_core::process::cap_malloc_arenas();
+    let _ = easysearch_core::Config::load().ensure_exclude_names_file();
     if std::env::args().any(|a| a == "--content-in-memory") {
         easysearch_core::process::use_content_memory();
     }

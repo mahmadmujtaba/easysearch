@@ -87,6 +87,7 @@ enum Command {
 fn main() {
     // Before clap or the in-process engine can start a thread.
     easysearch_core::process::cap_malloc_arenas();
+    let _ = easysearch_core::Config::load().ensure_exclude_names_file();
     let cli = Cli::parse();
     // The engine runs in this process: there is no service to attach to.
     let backend = Backend::local(Config::load());

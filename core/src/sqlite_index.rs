@@ -33,7 +33,7 @@ use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use std::path::{Path, PathBuf};
 
 /// Bumped whenever the schema changes; a mismatch forces a rebuild.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// After this many live changes, a full rebuild is cheaper (and safer) than
 /// replaying deltas — the callers use this as the "refresh" trigger.
@@ -152,9 +152,25 @@ impl SqliteIndex {
             .is_some()
     }
 
-    /// True when the database cannot be trusted yet and must be built.
-    pub fn needs_rebuild(&self) -> bool {
+    /// True when the database must be (re)built: it is incomplete, or the
+    /// settings that decide *which paths* are indexed have changed since it was
+    /// built (`walk_key`, from [`Config::walk_fingerprint`]). Keeping hidden
+    /// directories and excluded names out of the walk as well as the query means
+    /// the tables only ever hold rows the UI can actually show.
+    pub fn needs_rebuild(&self, walk_key: &str) -> bool {
         !self.is_complete()
+            || !matches!(self.meta_value("walk_key").as_deref(), Some(k) if k == walk_key)
+    }
+
+    /// One `meta` value, when present.
+    fn meta_value(&self, key: &str) -> Option<String> {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
     }
 
     pub fn count_all(&self) -> Result<u64, String> {
@@ -181,7 +197,7 @@ impl SqliteIndex {
     }
 
     /// Replace the whole table with `entries` (a fresh walk).
-    pub fn rebuild(&mut self, entries: &[(PathBuf, Meta)]) -> Result<(), String> {
+    pub fn rebuild(&mut self, entries: &[(PathBuf, Meta)], walk_key: &str) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM files", [])
             .map_err(|e| e.to_string())?;
@@ -218,6 +234,14 @@ impl SqliteIndex {
             "INSERT INTO meta(key, value) VALUES('complete', '1')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
+        )
+        .map_err(|e| e.to_string())?;
+        // The walk settings this build used, so a later change (a new exclusion,
+        // hidden directories turned on) rebuilds instead of leaving stale rows.
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES('walk_key', ?1)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [walk_key],
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -577,9 +601,9 @@ mod tests {
     fn idx(tag: &str) -> (SqliteIndex, PathBuf) {
         let dir = tmpdir(tag);
         let mut i = SqliteIndex::open(&dir).unwrap();
-        assert!(i.needs_rebuild(), "a fresh database needs a rebuild");
-        i.rebuild(&sample()).unwrap();
-        assert!(!i.needs_rebuild());
+        assert!(i.needs_rebuild(""), "a fresh database needs a rebuild");
+        i.rebuild(&sample(), "").unwrap();
+        assert!(!i.needs_rebuild(""));
         (i, dir)
     }
 
@@ -612,7 +636,7 @@ mod tests {
         let (i, dir) = idx("basic");
         assert_eq!(i.count_all().unwrap(), 4);
         assert_eq!(i.counts().unwrap(), (3, 1));
-        assert!(!i.needs_rebuild());
+        assert!(!i.needs_rebuild(""));
         assert_eq!(
             run(&i, &query(|_| {})).len(),
             3,
@@ -725,8 +749,8 @@ mod tests {
         let dir = tmpdir("partial");
         {
             let mut i = SqliteIndex::open(&dir).unwrap();
-            i.rebuild(&sample()).unwrap();
-            assert!(!i.needs_rebuild());
+            i.rebuild(&sample(), "").unwrap();
+            assert!(!i.needs_rebuild(""));
             i.conn
                 .execute("DELETE FROM meta WHERE key = 'complete'", [])
                 .unwrap();
@@ -734,7 +758,7 @@ mod tests {
         let reopened = SqliteIndex::open(&dir).unwrap();
         assert_eq!(reopened.count_all().unwrap(), 4, "rows survived");
         assert!(
-            reopened.needs_rebuild(),
+            reopened.needs_rebuild(""),
             "but the index must be rebuilt before it is served"
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -744,9 +768,9 @@ mod tests {
     fn an_empty_but_complete_index_is_valid() {
         let dir = tmpdir("empty");
         let mut i = SqliteIndex::open(&dir).unwrap();
-        i.rebuild(&[]).unwrap();
+        i.rebuild(&[], "").unwrap();
         assert!(
-            !i.needs_rebuild(),
+            !i.needs_rebuild(""),
             "a legitimately empty root must not rebuild on every start"
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -757,7 +781,7 @@ mod tests {
         let dir = tmpdir("schema");
         {
             let mut i = SqliteIndex::open(&dir).unwrap();
-            i.rebuild(&sample()).unwrap();
+            i.rebuild(&sample(), "").unwrap();
             i.conn
                 .execute(
                     "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
@@ -767,7 +791,7 @@ mod tests {
         }
         let reopened = SqliteIndex::open(&dir).unwrap();
         assert!(
-            reopened.needs_rebuild(),
+            reopened.needs_rebuild(""),
             "an incompatible schema must come back empty and be rebuilt"
         );
         let _ = std::fs::remove_dir_all(dir);

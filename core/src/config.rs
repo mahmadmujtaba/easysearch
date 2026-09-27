@@ -1,7 +1,7 @@
 //! User configuration (JSON at `~/.config/easysearch/config.json`).
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const CONFIG_DIR: &str = "easysearch";
 pub const CONFIG_FILE: &str = "config.json";
@@ -87,6 +87,17 @@ pub struct Config {
     /// independent of the fstype exclusions above; it is editable live in the
     /// GUI (**Tools ▸ Excluded folders…**), which saves it back here.
     pub exclude_dirs: Vec<String>,
+    /// File of directory *names* to skip anywhere in the tree, comma-separated
+    /// (`node_modules, .venv, venv, target, …`). `~` expands to `$HOME`; the
+    /// default is `$XDG_CONFIG_HOME/easysearch/exclude-names`, seeded with a
+    /// well-populated common list on first run. Unlike [`Self::exclude_dirs`]
+    /// (exact paths), a name here matches that directory at any depth.
+    pub exclude_names_file: Option<String>,
+    /// Index dot-directories (`.git`, `.cache`, …). Off by default: hidden trees
+    /// are the largest part of a home directory and rarely searched, so leaving
+    /// them out keeps the index — and the SQLite tables — lean. Hidden *files*
+    /// in visible directories are always indexed.
+    pub index_hidden_dirs: bool,
     /// Honor `.ignore`/`.gitignore` files (and the global ignore file at
     /// `~/.config/easysearch/ignore`) while walking, so non-essential
     /// folders listed there are never indexed.
@@ -143,6 +154,8 @@ impl Default for Config {
             exclude_removable: true,
             exclude_network: true,
             exclude_dirs: Vec::new(),
+            exclude_names_file: None,
+            index_hidden_dirs: false,
             respect_ignore_files: true,
             follow_symlinks: false,
             persist_index: true,
@@ -159,6 +172,95 @@ impl Default for Config {
             max_results: 1000,
         }
     }
+}
+
+/// The default exclude-names list, shipped as a data file and written to
+/// [`Config::exclude_names_path`] on first run.
+pub const DEFAULT_EXCLUDE_NAMES: &str = include_str!("../data/exclude-names");
+
+/// A parsed exclude-names list: directory names (and path suffixes) skipped
+/// anywhere in the tree.
+#[derive(Clone, Debug, Default)]
+pub struct ExcludeNames {
+    /// Bare names, matched against a directory's own name.
+    simple: std::collections::HashSet<String>,
+    /// Slash-separated items (`go/pkg/mod`), matched against a path's tail.
+    suffixes: Vec<Vec<String>>,
+}
+
+impl ExcludeNames {
+    /// Parse the comma/newline-separated list. `#` starts a comment; a trailing
+    /// slash is ignored, so `node_modules/` and `node_modules` are the same.
+    pub fn parse(text: &str) -> ExcludeNames {
+        let mut names = ExcludeNames::default();
+        for raw in text.split([',', '\n', '\r']) {
+            let item = raw.trim().trim_end_matches('/');
+            if item.is_empty() || item.starts_with('#') {
+                continue;
+            }
+            if item.contains('/') {
+                names
+                    .suffixes
+                    .push(item.split('/').map(str::to_string).collect());
+            } else {
+                names.simple.insert(item.to_string());
+            }
+        }
+        names
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.simple.is_empty() && self.suffixes.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.simple.len() + self.suffixes.len()
+    }
+
+    /// The configured items, sorted, for a stable fingerprint.
+    pub fn items(&self) -> Vec<String> {
+        let mut items: Vec<String> = self.simple.iter().cloned().collect();
+        for suffix in &self.suffixes {
+            items.push(suffix.join("/"));
+        }
+        items.sort();
+        items
+    }
+
+    /// True when `path` names an excluded directory.
+    pub fn matches(&self, path: &Path) -> bool {
+        if let Some(name) = path.file_name()
+            && self.simple.contains(name.to_string_lossy().as_ref())
+        {
+            return true;
+        }
+        if self.suffixes.is_empty() {
+            return false;
+        }
+        let comps: Vec<String> = path
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        self.suffixes.iter().any(|suffix| {
+            comps.len() >= suffix.len() && comps[comps.len() - suffix.len()..] == suffix[..]
+        })
+    }
+}
+
+/// Expand a leading `~` to `$HOME`; anything else is used as-is.
+fn expand_home(raw: &str) -> PathBuf {
+    if let (Some(rest), Some(home)) = (raw.strip_prefix("~/"), std::env::var_os("HOME")) {
+        return PathBuf::from(home).join(rest);
+    }
+    if raw == "~"
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home);
+    }
+    PathBuf::from(raw)
 }
 
 impl Config {
@@ -261,6 +363,66 @@ impl Config {
         roots.sort();
         roots.dedup();
         roots
+    }
+
+    /// Path of the exclude-names file: the configured one (`~` expanded), or
+    /// `$XDG_CONFIG_HOME/easysearch/exclude-names` by default.
+    pub fn exclude_names_path(&self) -> PathBuf {
+        match self
+            .exclude_names_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(raw) => expand_home(raw),
+            None => xdg_config_dir().join(CONFIG_DIR).join("exclude-names"),
+        }
+    }
+
+    /// The excluded directory names, read from [`Self::exclude_names_path`]. A
+    /// missing file falls back to the shipped [`DEFAULT_EXCLUDE_NAMES`], so a
+    /// first run already skips virtual environments and dependency trees.
+    pub fn effective_exclude_names(&self) -> ExcludeNames {
+        match std::fs::read_to_string(self.exclude_names_path()) {
+            Ok(text) => ExcludeNames::parse(&text),
+            Err(_) => ExcludeNames::parse(DEFAULT_EXCLUDE_NAMES),
+        }
+    }
+
+    /// A fingerprint of the settings that decide *which paths* are indexed.
+    ///
+    /// Stored in the SQLite `meta` table as `walk_key`: when it changes (a new
+    /// root or exclusion, hidden directories turned on), the next start rebuilds
+    /// the index so the tables never keep rows the walk no longer produces.
+    pub fn walk_fingerprint(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut parts: Vec<String> = Vec::new();
+        for root in self.effective_roots() {
+            parts.push(format!("root:{}", root.display()));
+        }
+        for dir in self.effective_exclude_dirs() {
+            parts.push(format!("dir:{}", dir.display()));
+        }
+        for name in self.effective_exclude_names().items() {
+            parts.push(format!("name:{name}"));
+        }
+        parts.push(format!("hidden:{}", self.index_hidden_dirs));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        parts.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    /// Write the default exclude-names file when it does not exist yet. An
+    /// existing file (edited, emptied, or deleted by choice) is never touched.
+    pub fn ensure_exclude_names_file(&self) -> std::io::Result<()> {
+        let path = self.exclude_names_path();
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, DEFAULT_EXCLUDE_NAMES)
     }
 
     /// Resolved directory exclusions: `~` expanded, relative paths taken from
@@ -404,5 +566,44 @@ mod tests {
         let config = Config::default();
         assert!(!config.content_index_enabled, "off at boot");
         assert!(!config.content_index_in_memory, "disk store by default");
+    }
+
+    #[test]
+    fn exclude_names_parse_comma_newline_comments_and_slashes() {
+        let names = ExcludeNames::parse(
+            "# a comment, but comma-free is the rule\n\
+             node_modules/,.venv, venv \n\
+             go/pkg/mod,target\n",
+        );
+        assert!(names.matches(Path::new("/home/u/proj/node_modules")));
+        assert!(names.matches(Path::new("/home/u/.venv")));
+        assert!(names.matches(Path::new("/home/u/app/venv")));
+        assert!(names.matches(Path::new("/home/u/proj/target")));
+        // A suffix item matches the path tail, not a bare name.
+        assert!(names.matches(Path::new("/home/u/go/pkg/mod")));
+        assert!(!names.matches(Path::new("/home/u/pkg/mod")));
+        assert!(!names.matches(Path::new("/home/u/project")));
+        // The comment did not leak a name.
+        assert!(!names.matches(Path::new("/home/u/comment")));
+    }
+
+    #[test]
+    fn the_default_exclude_list_is_well_populated() {
+        let names = ExcludeNames::parse(DEFAULT_EXCLUDE_NAMES);
+        assert!(names.len() >= 40, "only {} items", names.len());
+        for wanted in [
+            "node_modules",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "target",
+            ".gradle",
+            ".dart_tool",
+        ] {
+            assert!(
+                names.matches(Path::new(&format!("/x/{wanted}"))),
+                "default list is missing {wanted}"
+            );
+        }
     }
 }

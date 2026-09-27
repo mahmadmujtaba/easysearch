@@ -96,7 +96,10 @@ impl Tray for AppTray {
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
             title: self.title.clone(),
-            description: "Realtime file & content search".into(),
+            description: format!(
+                "Realtime file & content search · v{}",
+                env!("CARGO_PKG_VERSION")
+            ),
             icon_name: String::new(),
             icon_pixmap: self.icon_pixmap(),
         }

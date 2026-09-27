@@ -143,7 +143,10 @@ pub fn run_daemon() -> Result<(), String> {
 
     // System tray (best effort: some desktops have no StatusNotifier host).
     let history = Arc::new(Mutex::new(easysearch_gui::recent_searches()));
-    let _tray = match easysearch_gui::tray::spawn_tray("EasySearch", Arc::clone(&history)) {
+    let _tray = match easysearch_gui::tray::spawn_tray(
+        &easysearch_gui::app_title(),
+        Arc::clone(&history),
+    ) {
         Ok((tray_rx, handle)) => {
             forward_tray(tray_rx, tx.clone());
             Some(handle)

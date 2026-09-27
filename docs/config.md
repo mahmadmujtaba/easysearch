@@ -14,6 +14,7 @@ searches, history) and `tags.json` (per-path tags) alongside it.
 ```json
 {
   "roots": [], "exclude_removable": true, "exclude_network": true, "exclude_dirs": [],
+  "exclude_names_file": null, "index_hidden_dirs": false,
   "respect_ignore_files": true, "follow_symlinks": false, "persist_index": true,
   "storage": "sqlite", "db_dir": null, "disk_index_dir": null, "overlay_compaction_threshold": 8192,
   "exclude_fstypes": [], "content_index_enabled": false, "content_index_max_file_bytes": 8388608,
@@ -30,8 +31,10 @@ searches, history) and `tags.json` (per-path tags) alongside it.
 | `exclude_removable` | `true` | Skip removable media (USB sticks, card readers), via `/sys/block/*/removable`. |
 | `exclude_network` | `true` | Skip network mounts (`nfs`, `cifs`/`smb`, `sshfs`, `gvfsd-fuse`, `9p`, …). |
 | `exclude_dirs` | `[]` | Exact directory trees to leave out, one path per entry. `~` expands to `$HOME`; a relative path is taken from `$HOME`. Live-editable in **Tools ▸ Excluded folders…**, which saves this key and rebuilds. |
+| `exclude_names_file` | `null` | File of directory **names** to skip anywhere in the tree, comma-separated (`node_modules, .venv, venv, target, …`). `null` uses `~/.config/easysearch/exclude-names`, which is seeded with a well-populated common list on first run. `~` expands to `$HOME`. See *Exclude names* below. |
+| `index_hidden_dirs` | `false` | Index dot-directories (`.git`, `.cache`, …). Off by default, so hidden trees stay out of the index — and out of the SQLite tables — entirely; hidden *files* in visible directories are always indexed. |
 | `exclude_fstypes` | `[]` | *Extra* filesystem types to skip, on top of the built-in list (pseudo filesystems, overlays, network FS). Union, not replacement. |
-| `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files in the tree plus the global `~/.config/easysearch/ignore` file. Keeps `node_modules/`, `target/` and the like out of the index. |
+| `respect_ignore_files` | `true` | Honour `.gitignore` / `.ignore` files in the tree plus the global `~/.config/easysearch/ignore` file. |
 | `follow_symlinks` | `false` | Follow symlinks into their targets while walking, so symlinked folders are indexed too. Off by default (can duplicate subtrees); cycles are skipped. |
 
 `respect_ignore_files` and `follow_symlinks` are also toggled live from
@@ -66,6 +69,20 @@ results are always current. An optional cache can speed up repeated queries:
 | `degraded_rescan_secs` | `30` | If the kernel watcher fails (typically exhausted inotify watch limits), fall back to a full rescan every N seconds. See [`scope.md`](scope.md) (realtime design). |
 | `max_results` | `1000` | Cap on rows returned per query. Bounds the CLI/API; the GUI raises its own limit for the results table. |
 
+## Exclude names
+
+`~/.config/easysearch/exclude-names` is a comma-separated list of directory
+**names** that are skipped wherever they appear — the virtual environments,
+dependency trees and build caches of the major toolchains (`node_modules`,
+`.venv`, `venv`, `__pycache__`, `target`, `.gradle`, `.dart_tool`, `go/pkg/mod`,
+…). EasySearch writes a well-populated default there on first run; the file is
+only created while it does not exist, so edit it freely. An item that contains a
+slash (`go/pkg/mod`) matches that path suffix at any depth.
+
+Unlike `exclude_dirs` (exact paths), a name here covers every copy of a folder.
+Change the file, then restart — the index rebuilds because the walk settings
+changed — or use **Tools ▸ Rebuild index**.
+
 ## Ignore file
 
 `~/.config/easysearch/ignore` holds extra paths to exclude, in `.gitignore`
@@ -86,7 +103,8 @@ pushed to the engine and followed by a rebuild.
 | `~/.config/easysearch/config.json` | this file |
 | `~/.config/easysearch/gui.json` | GUI state: theme, zoom, open tabs, saved searches, history |
 | `~/.config/easysearch/tags.json` | per-path tags added in the GUI |
-| `~/.config/easysearch/ignore` | global ignore patterns |
+| `~/.config/easysearch/ignore` | global ignore patterns (gitignore syntax) |
+| `~/.config/easysearch/exclude-names` | directory names skipped anywhere in the tree |
 | `~/.cache/easysearch/db/index.db` | the SQLite index (+ `-wal`, `-shm`) |
 | `~/.cache/easysearch/index-v1.bin` | the mmap index, when `storage = "mmap"` |
 | `~/.cache/easysearch/engine.log` | the background host's log |

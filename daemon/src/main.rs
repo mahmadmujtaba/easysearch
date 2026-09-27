@@ -34,6 +34,7 @@ struct Cli {
 fn main() {
     // Before clap, the engine, or anything else can start a thread.
     easysearch_core::process::cap_malloc_arenas();
+    let _ = easysearch_core::Config::load().ensure_exclude_names_file();
     let cli = Cli::parse();
     if cli.content_in_memory {
         easysearch_core::process::use_content_memory();

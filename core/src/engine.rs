@@ -352,6 +352,8 @@ impl Engine {
             self.respect_ignore.load(Ordering::Relaxed),
             self.follow_symlinks.load(Ordering::Relaxed),
         )
+        .with_skip_hidden_dirs(!self.config.index_hidden_dirs)
+        .with_exclude_names(Arc::new(self.config.effective_exclude_names()))
     }
 
     /// Start the watcher and the initial index build.
@@ -362,7 +364,11 @@ impl Engine {
         // changed), otherwise serve from it at once and re-validate in the
         // background — the same shape as the mmap path below.
         if let Some(db) = self.sqlite.clone() {
-            let needs_rebuild = db.lock().map(|d| d.needs_rebuild()).unwrap_or(true);
+            let walk_key = self.config.walk_fingerprint();
+            let needs_rebuild = db
+                .lock()
+                .map(|d| d.needs_rebuild(&walk_key))
+                .unwrap_or(true);
             if needs_rebuild {
                 let roots = Arc::clone(&self.roots);
                 let status = Arc::clone(&self.status);
@@ -376,7 +382,7 @@ impl Engine {
                         let entries = build_entries(&roots, queue.as_ref(), &status, opts);
                         let n = entries.len();
                         if let Ok(mut d) = db.lock() {
-                            match d.rebuild(&entries) {
+                            match d.rebuild(&entries, &walk_key) {
                                 Ok(()) => {
                                     let (files, dirs) = d.counts().unwrap_or((0, 0));
                                     *counts_cache.write().unwrap() =
@@ -435,7 +441,14 @@ impl Engine {
                         trim_allocator();
                     } else {
                         for root in &roots.roots {
-                            walk_root_apply(root, &overlay, &roots, queue.as_ref(), &status, opts);
+                            walk_root_apply(
+                                root,
+                                &overlay,
+                                &roots,
+                                queue.as_ref(),
+                                &status,
+                                opts.clone(),
+                            );
                         }
                     }
                     status.write().unwrap().state = State::Live;
@@ -481,6 +494,7 @@ impl Engine {
                 let queue = queue.clone();
                 let rebuilding = Arc::clone(&rebuilding);
                 let status = Arc::clone(&status);
+                let opts = opts.clone();
                 std::thread::Builder::new()
                     .name("rescan".into())
                     .spawn(move || {
@@ -495,7 +509,7 @@ impl Engine {
                                     queue.as_ref(),
                                     &rebuilding,
                                     &status,
-                                    opts,
+                                    opts.clone(),
                                 );
                             } else {
                                 for root in &roots.roots {
@@ -505,7 +519,7 @@ impl Engine {
                                         &roots,
                                         queue.as_ref(),
                                         &status,
-                                        opts,
+                                        opts.clone(),
                                     );
                                 }
                             }
@@ -544,6 +558,7 @@ impl Engine {
             let rebuilding = Arc::clone(&self.rebuilding);
             let counts_cache = Arc::clone(&self.counts_cache);
             let opts = self.walk_options();
+            let walk_key = self.config.walk_fingerprint();
             std::thread::Builder::new()
                 .name("sqlite-rebuild".into())
                 .spawn(move || {
@@ -553,7 +568,7 @@ impl Engine {
                     let entries = build_entries(&roots, queue.as_ref(), &status, opts);
                     let n = entries.len();
                     if let Ok(mut d) = db.lock() {
-                        match d.rebuild(&entries) {
+                        match d.rebuild(&entries, &walk_key) {
                             Ok(()) => {
                                 let (files, dirs) = d.counts().unwrap_or((0, 0));
                                 *counts_cache.write().unwrap() = ((files, dirs), Instant::now());
@@ -1130,7 +1145,7 @@ fn build_entries(
 ) -> Vec<(PathBuf, Meta)> {
     let mut out = Vec::new();
     for root in &roots.roots {
-        out.extend(walk_root_collect(root, roots, queue, status, opts));
+        out.extend(walk_root_collect(root, roots, queue, status, opts.clone()));
     }
     out
 }

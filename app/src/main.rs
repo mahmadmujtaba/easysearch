@@ -56,6 +56,8 @@ fn main() -> ExitCode {
     // Before anything can start a thread: bound glibc's malloc arenas, and take
     // the content-cache mode from the command line so the host inherits it.
     easysearch_core::process::cap_malloc_arenas();
+    // First run: write the default exclude-names list (virtualenvs, node_modules…).
+    let _ = easysearch_core::Config::load().ensure_exclude_names_file();
     if args.iter().any(|a| a == "--content-in-memory") {
         easysearch_core::process::use_content_memory();
     }

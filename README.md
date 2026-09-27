@@ -152,6 +152,10 @@ defaults, with what each one does, are in
 - **`roots`** — directories to index; empty means your home directory.
 - **`exclude_dirs`** — whole subtrees to leave out (editable live in
   **Tools ▸ Excluded folders…**).
+- **`exclude_names_file`** — directory names skipped anywhere (virtual
+  environments, `node_modules`, `target`, …); a common list is seeded at
+  `~/.config/easysearch/exclude-names`. Hidden dot-directories are skipped too
+  (`index_hidden_dirs: false`), so they never reach the index.
 - **`storage`** — `"sqlite"` (default) or `"mmap"`; `persist_index: false`
   keeps nothing on disk.
 
