@@ -22,20 +22,6 @@ equivalent of VoidTools' *Everything*. Written in **Rust** with a **native GUI**
   settings and more).
 - **Fully offline** — nothing on the network, no telemetry, no updater.
 
-## Screenshots
-
-The same window in both themes — search box, filter bar, results table, sidebar
-and preview pane are all themed.
-
-**Dark** (the default) · **Light**
-
-![EasySearch in the dark theme](docs/screenshots/dark.png)
-
-![EasySearch in the light theme](docs/screenshots/light.png)
-
-_A third **Brand** theme uses the logo's teal palette. The images are shot
-against a throwaway demo tree, so no personal filenames appear._
-
 ## Install
 
 Prebuilt packages are attached to each

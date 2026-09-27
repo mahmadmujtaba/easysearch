@@ -4,6 +4,43 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46.0] - 2026-09-27
+
+### Changed
+
+- **A fuller, more colourful chrome.** The six menu titles are colour-coded and
+  every button carries a tinted fill with a visible border that lights up in the
+  accent on hover or press — toolbar buttons included, which previously had no
+  background at all. Spacing is tighter throughout.
+- **The toolbar fills the width.** Back · Forward · Home · Index · Content ·
+  Regex · Fuzzy · Recent · Saved are laid out in nine equal columns, each button
+  showing its icon and its label side by side (icon on the left) in a larger
+  face. (*Content Search* is now labelled *Content* to fit.)
+- **The title and version are stamped.** The window title is
+  `EasySearch v0.46.0-20260927`; the `v<version>-<YYYYMMDD>` form is used in the
+  status bar and the About dialog as well.
+- **Zoom moved to the right** and became a compact dropdown in the status bar,
+  instead of a row of buttons on the left.
+- **Less clutter on the left.** The `Search:` label before the field is gone, and
+  the sidebar's collapsible **TIPS** box is replaced by a query cheat-sheet on
+  hover over the search bar.
+
+### Fixed
+
+- **The bottom view tabs now do something.** *Results*, *Preview*, *Details* and
+  *Search History* switch the central area; previously the centre always showed
+  the results table, so the other three appeared dead. *Search History* lists the
+  recent queries as clickable rows (click to re-run).
+- **Light-mode keyboard hints are readable.** The `faint` tone was too light on
+  the white panel, so the status bar's shortcut hints and counters were hard to
+  read; the light palette's `faint` is darker and those hints use the `dim` tone.
+
+### Docs
+
+- The README screenshot section was removed (the images were from an older UI),
+  and [`docs/ui.md`](docs/ui.md) covers the reworked chrome, the working view
+  tabs and the zoom dropdown.
+
 ## [0.45.1] - 2026-09-27
 
 ### Packaging

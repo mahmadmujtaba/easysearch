@@ -68,13 +68,14 @@
   </screenshots>
 
   <releases>
-    <release version="0.45.1" date="2026-09-27">
+    <release version="0.46.0" date="2026-09-27">
       <description>
         <p>
           Realtime filename and content search with a native GUI, tray, tags,
           excluded folders, live previews and a recoverable duplicate finder —
-          fully offline. This release drops unused rename metadata from the
-          packages.
+          fully offline. This release reworks the window chrome: a full-width
+          toolbar, colour-coded menus, visible button borders, working view tabs
+          and a zoom dropdown.
         </p>
       </description>
     </release>

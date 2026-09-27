@@ -1,4 +1,4 @@
-//! Emits `BUILD_DATE` (a `YYYY-MM-DD` string) for the window title and the
+//! Emits `BUILD_STAMP` (a `YYYYMMDD` string) for the window title and the
 //! About dialog, so every build is identifiable.
 //!
 //! The date is computed here rather than read from the environment, and without
@@ -11,7 +11,7 @@ fn main() {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
-    println!("cargo:rustc-env=BUILD_DATE={year:04}-{month:02}-{day:02}");
+    println!("cargo:rustc-env=BUILD_STAMP={year:04}{month:02}{day:02}");
     // Only rebuild when the script itself changes; a date is not worth a rebuild.
     println!("cargo:rerun-if-changed=build.rs");
 }

@@ -11,16 +11,18 @@ network code. `easysearch-cli` is the engine headless and `easysearch-gui` opens
 ```
 menu bar        File · Search · Filters · Tools · Settings · Help   [Free memory] [Reset defaults] [logo]
 search tabs     one pill per open search (restored on restart)               [ + ]
-toolbar         Back Forward Home Index | Content Search Regex Fuzzy | Recent Saved
-search row      Search: [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
+toolbar         Back · Forward · Home · Index · Content · Regex · Fuzzy · Recent · Saved   (full width)
+search row      [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden  [ ✕ Clear Filters ]
 results header  N results · M files indexed · T ms      Sort by ▾  Cozy Compact
-panes           sidebar | results table | preview/details;  below: view tabs · bulk actions · recent searches · status bar
+panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
 
 **Menus:** File (tabs, focus, reload, hide, quit) · Search (content, regex, fuzzy, multiline, case,
 hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
-excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts).
+excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts). The six
+menu titles are colour-coded, and every button carries a tinted fill and a visible border that
+lights up in the accent on hover.
 
 **Quick actions** sit at the top right, just left of the logo, as two tinted
 icon buttons: **Free memory** (a broom, teal) stops a running content search,
@@ -29,8 +31,7 @@ engine to return freed pages to the operating system; **Reset defaults** (a
 circular arrow, amber) puts every setting, filter, tab and saved search back to
 its default. Each opens a confirmation first and then reports what happened, and
 the index, tags and files are never touched. The window title carries the version
-and build date — `EasySearch 0.45.0 (built 2026-09-27)` — as does the logo's
-tooltip.
+and build stamp — `EasySearch v0.46.0-20260927` — as does the logo's tooltip.
 
 ## Searching
 
@@ -104,7 +105,8 @@ each with a **live count** for the query; **Saved searches** store a named query
 its path count (click to filter, again to clear); **Indexed Locations** scopes to Home, Desktop,
 Documents, Downloads, Pictures, Music, Videos, Workspace and Projects (whichever exist), each with
 a count; **Advanced Search** holds *Include folders*, the **Excluded folders (N)…** link and the
-content-index state; **TIPS** is a collapsible cheat-sheet.
+content-index state. Hovering the **search bar** shows a small query cheat-sheet (`*.pdf` glob,
+`!draft` exclude, `^src/` path prefix, `.*` regex).
 
 ## Preview and Details
 
@@ -121,13 +123,15 @@ Copy path · Terminal · **Tag**.
 ## Status bar and tabs
 
 The status bar shows live index state (`Indexing: idle (86,100 files)` or a spinner), a
-content-search warning while active, **CPU**, **RAM**, the **UI zoom** (100 / 110 / 125 %),
-keyboard hints, and the running **version** at the far right, plus `Entries:`, `Search time:`
-and `Query: N results`. Each search **tab** keeps its own query and filters and is restored on
-the next start (the content scope is not); `Ctrl+T` opens one, `Ctrl+W` closes it, `Ctrl+Tab`
-cycles and `Ctrl+1…9` jumps. The **Recent searches** row shows recent queries as chips (click
-to re-run) and mirrors them in the tray menu; a *saved search* bundles a query with its filters,
-and tabs and history live in `~/.config/easysearch/gui.json`.
+content-search warning while active, **CPU**, **RAM**, a **UI zoom** dropdown (100 / 110 / 125 %,
+on the right), keyboard hints, and the running **version** at the far right, plus `Entries:`,
+`Search time:` and `Query: N results`. The **view tabs** at the bottom of the window —
+**Results**, **Preview**, **Details** and **Search History** — switch what fills the central area
+(the last lists your recent queries as clickable rows). Each search **tab** keeps its own query and
+filters and is restored on the next start (the content scope is not); `Ctrl+T` opens one, `Ctrl+W`
+closes it, `Ctrl+Tab` cycles and `Ctrl+1…9` jumps. The **Recent searches** row shows recent queries
+as chips (click to re-run) and mirrors them in the tray menu; a *saved search* bundles a query with
+its filters, and tabs and history live in `~/.config/easysearch/gui.json`.
 
 ## Finding duplicates
 

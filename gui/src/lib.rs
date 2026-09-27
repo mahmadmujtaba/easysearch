@@ -33,6 +33,11 @@ pub mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
 
+/// The query cheat-sheet, shown on hover over the search bar (it used to be a
+/// sidebar section).
+const SEARCH_TIPS: &str = "Queries:  *.pdf glob  ·  a b all terms  ·  !draft exclude  ·  \
+^src/ path prefix  ·  .* regex mode";
+
 /// Content search (ripgrep over whole files) is held back until the pattern has
 /// at least this many characters: a one- or two-letter pattern would scan the
 /// whole disk for almost no signal.
@@ -147,7 +152,7 @@ impl Theme {
         stroke: egui::Color32::from_rgb(0xdd, 0xe2, 0xec),
         text: egui::Color32::from_rgb(0x1a, 0x1f, 0x2e),
         dim: egui::Color32::from_rgb(0x59, 0x63, 0x78),
-        faint: egui::Color32::from_rgb(0x8b, 0x94, 0xa9),
+        faint: egui::Color32::from_rgb(0x6b, 0x74, 0x88),
         accent: egui::Color32::from_rgb(0x35, 0x68, 0xd4),
         good: egui::Color32::from_rgb(0x2f, 0x9e, 0x44),
         warn: egui::Color32::from_rgb(0xa9, 0x6a, 0x00),
@@ -572,17 +577,23 @@ pub fn run_with(
     )
 }
 
-/// The window (and app) title: name, version and build date.
+/// The version and build stamp, e.g. `v0.46.0-20260927`.
 ///
-/// `BUILD_DATE` is set by `build.rs` (`YYYY-MM-DD`, the build machine's UTC
-/// date); the version comes from the crate manifest. Both are shown so a
-/// screenshot or a bug report identifies exactly which build it is.
-pub fn app_title() -> String {
+/// `BUILD_STAMP` is set by `build.rs` (`YYYYMMDD`, the build machine's UTC
+/// date); the version comes from the crate manifest. Both are shown in the
+/// window title, the status bar and the About dialog, so a screenshot or a bug
+/// report identifies exactly which build it is.
+pub fn version_stamp() -> String {
     format!(
-        "EasySearch {} (built {})",
+        "v{}-{}",
         env!("CARGO_PKG_VERSION"),
-        option_env!("BUILD_DATE").unwrap_or("unknown")
+        option_env!("BUILD_STAMP").unwrap_or("00000000")
     )
+}
+
+/// The window (and app) title: the name and the version/build stamp.
+pub fn app_title() -> String {
+    format!("EasySearch {}", version_stamp())
 }
 
 /// The standalone `easysearch-gui` development binary: one window, no host.
@@ -1421,10 +1432,18 @@ impl App {
             t.text,
             t.stroke,
         );
+        // A visible border on every state and a colour shift on hover/press, so
+        // buttons read as buttons and the accent carries the interaction.
         set(&mut v.widgets.inactive, t.card, t.card, t.text, t.stroke);
-        set(&mut v.widgets.hovered, t.hover, t.hover, t.text, t.accent);
-        set(&mut v.widgets.active, t.active, t.active, t.text, t.accent);
-        set(&mut v.widgets.open, t.card, t.card, t.text, t.stroke);
+        set(
+            &mut v.widgets.hovered,
+            t.accent_soft(),
+            t.accent_soft(),
+            t.accent,
+            t.accent,
+        );
+        set(&mut v.widgets.active, t.accent, t.accent, t.bg, t.accent);
+        set(&mut v.widgets.open, t.active, t.active, t.accent, t.accent);
         ctx.set_visuals(v);
 
         // System font first; the bundled egui fonts remain as glyph fallbacks
@@ -1455,9 +1474,9 @@ impl App {
         ctx.set_fonts(fonts);
 
         let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        style.spacing.button_padding = egui::vec2(10.0, 6.0);
-        style.spacing.interact_size = egui::vec2(28.0, 28.0);
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.button_padding = egui::vec2(9.0, 4.0);
+        style.spacing.interact_size = egui::vec2(24.0, 22.0);
         style.spacing.menu_margin = egui::Margin::same(6);
         style.spacing.window_margin = egui::Margin::same(10);
         style.spacing.scroll = egui::style::ScrollStyle::solid();
@@ -2205,8 +2224,8 @@ fn quick_button(
     resp.on_hover_text(tip)
 }
 
-/// A toolbar button: painted icon above a small label, like the reference UI.
-/// Returns `true` only when it is enabled *and* clicked.
+/// A toolbar button: a painted icon with its label to the right, centred in the
+/// space it is given. Returns `true` only when it is enabled *and* clicked.
 #[allow(clippy::too_many_arguments)]
 fn tool_button(
     ui: &mut egui::Ui,
@@ -2218,36 +2237,33 @@ fn tool_button(
     active: bool,
     enabled: bool,
 ) -> bool {
-    let font = egui::FontId::new(10.5, egui::FontFamily::Proportional);
+    let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
     let text_w = ui
         .painter()
         .layout_no_wrap(label.to_string(), font.clone(), t.text)
         .size()
         .x;
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2((text_w + 20.0).max(50.0), 42.0),
-        egui::Sense::click(),
-    );
+    let (icon_w, gap) = (17.0_f32, 7.0_f32);
+    let width = ui.available_width().max(text_w + icon_w + gap + 24.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
     let hovered = enabled && resp.hovered();
     let radius = egui::CornerRadius::same(7);
-    let fill = if active {
-        Some(t.accent_soft())
-    } else if hovered {
-        Some(t.hover)
+    // Every button carries a fill and a border, so its boundary is visible even
+    // when it is not hovered; hover and the on-state move to the accent.
+    let (fill, border) = if active || hovered {
+        (t.accent_soft(), t.accent)
+    } else if enabled {
+        (t.card, t.stroke)
     } else {
-        None
+        (t.panel, t.stroke)
     };
-    if let Some(fill) = fill {
-        ui.painter().rect_filled(rect, radius, fill);
-    }
-    if active {
-        ui.painter().rect_stroke(
-            rect,
-            radius,
-            egui::Stroke::new(1.0_f32, t.accent),
-            egui::StrokeKind::Inside,
-        );
-    }
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0_f32, border),
+        egui::StrokeKind::Inside,
+    );
     let fg = if !enabled {
         t.faint
     } else if active {
@@ -2255,9 +2271,12 @@ fn tool_button(
     } else {
         t.text
     };
+    // Icon and label are centred together, icon on the left.
+    let content_w = icon_w + gap + text_w;
+    let start = rect.center().x - content_w * 0.5;
     let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.center().x, rect.top() + 15.0),
-        egui::vec2(18.0, 18.0),
+        egui::pos2(start + icon_w * 0.5, rect.center().y),
+        egui::vec2(icon_w, icon_w),
     );
     if let Some(kind) = icon {
         paint_icon(ui.painter(), icon_rect, kind, fg);
@@ -2266,17 +2285,15 @@ fn tool_button(
             icon_rect.center(),
             egui::Align2::CENTER_CENTER,
             g,
-            egui::FontId::new(13.0, egui::FontFamily::Monospace),
+            egui::FontId::new(12.5, egui::FontFamily::Monospace),
             fg,
         );
     }
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
-    ui.painter().galley(
-        egui::pos2(
-            rect.center().x - galley.size().x * 0.5,
-            rect.bottom() - 15.0,
-        ),
-        galley,
+    ui.painter().text(
+        egui::pos2(start + icon_w + gap, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
         fg,
     );
     let tip = if enabled {
@@ -3603,7 +3620,23 @@ impl eframe::App for App {
                 .min_width(240.0)
                 .show(ctx, |ui| self.preview_panel(ui));
         }
-        egui::CentralPanel::default().show(ctx, |ui| self.results_table(ui));
+        // The bottom view tabs drive the central area: Preview and Details share
+        // the preview renderer, and History lists the recent searches.
+        if matches!(self.view, ViewTab::Preview | ViewTab::Details) {
+            self.refresh_preview(ctx);
+        }
+        egui::CentralPanel::default().show(ctx, |ui| match self.view {
+            ViewTab::Results => self.results_table(ui),
+            ViewTab::Preview => {
+                self.panel_tab = PanelTab::Preview;
+                self.preview_panel(ui);
+            }
+            ViewTab::Details => {
+                self.panel_tab = PanelTab::Details;
+                self.preview_panel(ui);
+            }
+            ViewTab::History => self.history_view(ui),
+        });
 
         if self.show_about {
             self.about_dialog(ctx);
@@ -3709,12 +3742,8 @@ impl App {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new("EasySearch").size(20.0).strong());
                     ui.label(
-                        egui::RichText::new(format!(
-                            "Version {} · built {}",
-                            env!("CARGO_PKG_VERSION"),
-                            option_env!("BUILD_DATE").unwrap_or("unknown")
-                        ))
-                        .color(self.fg_dim()),
+                        egui::RichText::new(format!("Version {}", crate::version_stamp()))
+                            .color(self.fg_dim()),
                     );
                 });
                 ui.add_space(8.0);
@@ -3945,7 +3974,8 @@ impl App {
             .exact_height(30.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.menu_button("File", |ui| {
+                    let t = self.theme();
+                    ui.menu_button(egui::RichText::new("File").color(t.accent).strong(), |ui| {
                         if ui.button("New tab").clicked() {
                             self.new_tab();
                             ctx.memory_mut(|m| m.request_focus(search_id()));
@@ -3995,7 +4025,7 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("Search", |ui| {
+                    ui.menu_button(egui::RichText::new("Search").color(t.good).strong(), |ui| {
                         let mut content_on = self.content_mode;
                         let content_changed = ui
                             .checkbox(&mut content_on, "Match contents")
@@ -4032,80 +4062,92 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("Filters", |ui| {
-                        if ui
-                            .checkbox(&mut self.prefs.show_preview, "Preview pane")
-                            .changed()
-                        {
-                            self.prefs.save();
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("Theme").small());
-                        for (choice, label) in [
-                            (ThemeChoice::Dark, "Dark"),
-                            (ThemeChoice::Light, "Light"),
-                            (ThemeChoice::Brand, "Brand"),
-                        ] {
-                            if ui.radio(self.prefs.theme == choice, label).clicked() {
-                                self.prefs.theme = choice;
-                                self.theme = choice;
-                                self.apply_style(ctx);
-                                self.prefs.save();
-                            }
-                        }
-                    });
-                    ui.menu_button("Tools", |ui| {
-                        if ui.button("Rebuild index").clicked() {
-                            self.engine.rebuild();
-                            ui.close_menu();
-                        }
-                        if ui.button("Ignore files…").clicked() {
-                            self.open_ignore_dialog();
-                            ui.close_menu();
-                        }
-                        if ui.button("Excluded folders…").clicked() {
-                            self.open_excludes_dialog();
-                            ui.close_menu();
-                        }
-                        if ui.button("Save current search…").clicked() {
-                            self.show_save = true;
-                            self.save_name = self.query.clone();
-                            ui.close_menu();
-                        }
-                        if ui.button("Saved searches…").clicked() {
-                            self.show_saved = true;
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Settings", |ui| {
-                        if ui.button("Settings…").clicked() {
-                            self.show_settings = true;
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("Zoom").small());
-                        for level in ZOOM_LEVELS {
-                            let label = format!("{:.0}%", level * 100.0);
+                    ui.menu_button(
+                        egui::RichText::new("Filters").color(t.warn).strong(),
+                        |ui| {
                             if ui
-                                .radio((self.prefs.zoom - *level).abs() < 0.001, label)
-                                .clicked()
+                                .checkbox(&mut self.prefs.show_preview, "Preview pane")
+                                .changed()
                             {
-                                self.prefs.zoom = *level;
-                                ui.ctx().set_zoom_factor(*level);
                                 self.prefs.save();
                             }
-                        }
-                    });
-                    ui.menu_button("Help", |ui| {
-                        if ui.button("About").clicked() {
-                            self.show_about = true;
-                            ui.close_menu();
-                        }
-                        if ui.button("Keyboard shortcuts").clicked() {
-                            self.show_shortcuts = true;
-                            ui.close_menu();
-                        }
-                    });
+                            ui.separator();
+                            ui.label(egui::RichText::new("Theme").small());
+                            for (choice, label) in [
+                                (ThemeChoice::Dark, "Dark"),
+                                (ThemeChoice::Light, "Light"),
+                                (ThemeChoice::Brand, "Brand"),
+                            ] {
+                                if ui.radio(self.prefs.theme == choice, label).clicked() {
+                                    self.prefs.theme = choice;
+                                    self.theme = choice;
+                                    self.apply_style(ctx);
+                                    self.prefs.save();
+                                }
+                            }
+                        },
+                    );
+                    ui.menu_button(
+                        egui::RichText::new("Tools").color(t.kind_img).strong(),
+                        |ui| {
+                            if ui.button("Rebuild index").clicked() {
+                                self.engine.rebuild();
+                                ui.close_menu();
+                            }
+                            if ui.button("Ignore files…").clicked() {
+                                self.open_ignore_dialog();
+                                ui.close_menu();
+                            }
+                            if ui.button("Excluded folders…").clicked() {
+                                self.open_excludes_dialog();
+                                ui.close_menu();
+                            }
+                            if ui.button("Save current search…").clicked() {
+                                self.show_save = true;
+                                self.save_name = self.query.clone();
+                                ui.close_menu();
+                            }
+                            if ui.button("Saved searches…").clicked() {
+                                self.show_saved = true;
+                                ui.close_menu();
+                            }
+                        },
+                    );
+                    ui.menu_button(
+                        egui::RichText::new("Settings").color(t.kind_code).strong(),
+                        |ui| {
+                            if ui.button("Settings…").clicked() {
+                                self.show_settings = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Zoom").small());
+                            for level in ZOOM_LEVELS {
+                                let label = format!("{:.0}%", level * 100.0);
+                                if ui
+                                    .radio((self.prefs.zoom - *level).abs() < 0.001, label)
+                                    .clicked()
+                                {
+                                    self.prefs.zoom = *level;
+                                    ui.ctx().set_zoom_factor(*level);
+                                    self.prefs.save();
+                                }
+                            }
+                        },
+                    );
+                    ui.menu_button(
+                        egui::RichText::new("Help").color(t.kind_av).strong(),
+                        |ui| {
+                            if ui.button("About").clicked() {
+                                self.show_about = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Keyboard shortcuts").clicked() {
+                                self.show_shortcuts = true;
+                                ui.close_menu();
+                            }
+                        },
+                    );
                     // At the far right: two tinted quick actions to the *left* of
                     // the mark — free up memory, and reset every setting.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -4197,153 +4239,146 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Back),
-                        None,
-                        "Back",
-                        "Previous location",
-                        false,
-                        self.loc_idx > 0,
-                    ) {
-                        self.nav_location(-1);
-                    }
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Forward),
-                        None,
-                        "Forward",
-                        "Next location",
-                        false,
-                        self.loc_idx + 1 < self.loc_history.len(),
-                    ) {
-                        self.nav_location(1);
-                    }
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Home),
-                        None,
-                        "Home",
-                        "Search your home directory",
-                        at_home,
-                        true,
-                    ) {
-                        self.set_under(home.to_str().map(|s| s.to_string()));
-                    }
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Index),
-                        None,
-                        "Index",
-                        "Rebuild the index from disk",
-                        false,
-                        !indexing,
-                    ) {
-                        self.engine.rebuild();
-                    }
-
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Content),
-                        None,
-                        "Content Search",
-                        "Search inside file contents (ripgrep, always fresh). \
-                         Uses more memory and CPU than filename search.",
-                        self.content_mode,
-                        true,
-                    ) {
-                        let was = self.content_mode;
-                        let on = !was;
-                        self.content_mode = on;
-                        if !on {
-                            self.full_text = false;
+                    // Nine equal columns, so the bar fills the whole width instead
+                    // of clustering every button at the left.
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.columns(9, |c| {
+                        if tool_button(
+                            &mut c[0],
+                            &t,
+                            Some(Icon::Back),
+                            None,
+                            "Back",
+                            "Previous location",
+                            false,
+                            self.loc_idx > 0,
+                        ) {
+                            self.nav_location(-1);
                         }
-                        self.after_scope_change(was, on);
-                    }
-                    if tool_button(
-                        ui,
-                        &t,
-                        None,
-                        Some(".*"),
-                        "Regex",
-                        "Treat the query as a regular expression",
-                        self.regex_mode,
-                        true,
-                    ) {
-                        self.regex_mode = !self.regex_mode;
-                        self.send_query();
-                    }
-                    if tool_button(
-                        ui,
-                        &t,
-                        None,
-                        Some("fz"),
-                        "Fuzzy",
-                        "Fuzzy matching: the query's characters in order, anywhere \
-                         (mtn → meeting-notes.md)",
-                        self.prefs.fuzzy,
-                        true,
-                    ) {
-                        self.prefs.fuzzy = !self.prefs.fuzzy;
-                        self.prefs.save();
-                        self.send_query();
-                    }
-
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Clock),
-                        None,
-                        "Recent",
-                        "Files changed in the last 7 days",
-                        recent,
-                        true,
-                    ) {
-                        self.category = if recent {
-                            Category::All
-                        } else {
-                            Category::Recent {
-                                max_age_secs: RECENT_AGE_SECS,
+                        if tool_button(
+                            &mut c[1],
+                            &t,
+                            Some(Icon::Forward),
+                            None,
+                            "Forward",
+                            "Next location",
+                            false,
+                            self.loc_idx + 1 < self.loc_history.len(),
+                        ) {
+                            self.nav_location(1);
+                        }
+                        if tool_button(
+                            &mut c[2],
+                            &t,
+                            Some(Icon::Home),
+                            None,
+                            "Home",
+                            "Search your home directory",
+                            at_home,
+                            true,
+                        ) {
+                            self.set_under(home.to_str().map(|s| s.to_string()));
+                        }
+                        if tool_button(
+                            &mut c[3],
+                            &t,
+                            Some(Icon::Index),
+                            None,
+                            "Index",
+                            "Rebuild the index from disk",
+                            false,
+                            !indexing,
+                        ) {
+                            self.engine.rebuild();
+                        }
+                        if tool_button(
+                            &mut c[4],
+                            &t,
+                            Some(Icon::Content),
+                            None,
+                            "Content",
+                            "Search inside file contents (ripgrep, always fresh). \
+                             Uses more memory and CPU than filename search.",
+                            self.content_mode,
+                            true,
+                        ) {
+                            let was = self.content_mode;
+                            let on = !was;
+                            self.content_mode = on;
+                            if !on {
+                                self.full_text = false;
                             }
+                            self.after_scope_change(was, on);
+                        }
+                        if tool_button(
+                            &mut c[5],
+                            &t,
+                            None,
+                            Some(".*"),
+                            "Regex",
+                            "Treat the query as a regular expression",
+                            self.regex_mode,
+                            true,
+                        ) {
+                            self.regex_mode = !self.regex_mode;
+                            self.send_query();
+                        }
+                        if tool_button(
+                            &mut c[6],
+                            &t,
+                            None,
+                            Some("fz"),
+                            "Fuzzy",
+                            "Fuzzy matching: the query's characters in order, anywhere \
+                             (mtn → meeting-notes.md)",
+                            self.prefs.fuzzy,
+                            true,
+                        ) {
+                            self.prefs.fuzzy = !self.prefs.fuzzy;
+                            self.prefs.save();
+                            self.send_query();
+                        }
+                        if tool_button(
+                            &mut c[7],
+                            &t,
+                            Some(Icon::Clock),
+                            None,
+                            "Recent",
+                            "Files changed in the last 7 days",
+                            recent,
+                            true,
+                        ) {
+                            self.category = if recent {
+                                Category::All
+                            } else {
+                                Category::Recent {
+                                    max_age_secs: RECENT_AGE_SECS,
+                                }
+                            };
+                            self.send_query();
+                        }
+                        let saved_label = if saved_count > 0 {
+                            format!("Saved ({saved_count})")
+                        } else {
+                            "Saved".to_string()
                         };
-                        self.send_query();
-                    }
-                    let saved_label = if saved_count > 0 {
-                        format!("Saved ({saved_count})")
-                    } else {
-                        "Saved".to_string()
-                    };
-                    if tool_button(
-                        ui,
-                        &t,
-                        Some(Icon::Bookmark),
-                        None,
-                        &saved_label,
-                        "Your saved searches",
-                        self.show_saved,
-                        true,
-                    ) {
-                        self.show_saved = !self.show_saved;
-                    }
+                        if tool_button(
+                            &mut c[8],
+                            &t,
+                            Some(Icon::Bookmark),
+                            None,
+                            &saved_label,
+                            "Your saved searches",
+                            self.show_saved,
+                            true,
+                        ) {
+                            self.show_saved = !self.show_saved;
+                        }
+                    });
                 });
             });
     }
@@ -4361,7 +4396,6 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(bar_label(&t, "Search:"));
 
                     // The field takes whatever is left after the controls.
                     let reserved = 460.0;
@@ -4422,7 +4456,9 @@ impl App {
                                         ui.spinner();
                                     }
                                 });
-                            });
+                            })
+                            .response
+                            .on_hover_text(SEARCH_TIPS);
                     });
 
                     // Scope: what part of a file the query is matched against.
@@ -5188,7 +5224,6 @@ impl App {
                         ui.add_space(12.0);
                         self.sidebar_advanced(ui, &t);
                         ui.add_space(12.0);
-                        self.sidebar_tips(ui, &t);
                     });
 
                 ui.add_space(2.0);
@@ -5425,44 +5460,6 @@ impl App {
     }
 
     /// Collapsible cheat-sheet; its open state is persisted.
-    fn sidebar_tips(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        let open = self.prefs.sidebar_tips;
-        let arrow = if open { "▾" } else { "▸" };
-        let resp = ui.add(
-            egui::Button::new(
-                egui::RichText::new(format!("{arrow}  TIPS"))
-                    .size(10.5)
-                    .strong()
-                    .color(t.faint),
-            )
-            .frame(false),
-        );
-        if resp.clicked() {
-            self.prefs.sidebar_tips = !open;
-            self.prefs.save();
-        }
-        if open {
-            ui.add_space(5.0);
-            for (token, meaning) in [
-                ("*.pdf", "glob pattern"),
-                ("a b", "all terms"),
-                ("!draft", "exclude"),
-                ("^src/", "path prefix"),
-                (".*", "regex mode"),
-            ] {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(token)
-                            .monospace()
-                            .size(10.5)
-                            .color(t.dim),
-                    );
-                    ui.label(egui::RichText::new(meaning).size(10.5).color(t.faint));
-                });
-            }
-        }
-    }
-
     /// “LIVE” / “INDEX” pill; the dot pulses while the first pass runs.
     fn live_badge(&self, ui: &mut egui::Ui) {
         let t = self.theme();
@@ -5502,6 +5499,60 @@ impl App {
 
     /// The results table: `# / Name / Path / Type / Size / Modified / Match /
     /// Relevance`, with bulk-selection checkboxes.
+    /// The central area when the *Search History* tab is selected.
+    fn history_view(&mut self, ui: &mut egui::Ui) {
+        let t = self.theme();
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Recent searches")
+                    .strong()
+                    .size(15.0)
+                    .color(t.accent),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        !self.prefs.history.is_empty(),
+                        egui::Button::new("Clear history"),
+                    )
+                    .clicked()
+                {
+                    self.prefs.clear_history();
+                }
+            });
+        });
+        ui.separator();
+        if self.prefs.history.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("Nothing searched yet — your recent queries appear here.")
+                    .size(12.5)
+                    .color(t.dim),
+            );
+            return;
+        }
+        let history = self.prefs.history.clone();
+        let mut run: Option<String> = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for q in &history {
+                    if ui
+                        .selectable_label(false, egui::RichText::new(q).size(13.0))
+                        .on_hover_text("Run this search again")
+                        .clicked()
+                    {
+                        run = Some(q.clone());
+                    }
+                }
+            });
+        if let Some(q) = run {
+            self.run_query(&q);
+            self.send_query();
+        }
+    }
+
     fn results_table(&mut self, ui: &mut egui::Ui) {
         if let Some(err) = &self.error {
             ui.add_space(24.0);
@@ -6688,53 +6739,54 @@ impl App {
                 .color(t.faint),
             );
 
-            // UI zoom, kept on the left so a long hints string on the right can
-            // never push it out of the window.
-            ui.separator();
-            ui.label(bar_label(&t, "Zoom"));
-            for level in ZOOM_LEVELS {
-                if ui
-                    .selectable_label(
-                        (self.prefs.zoom - *level).abs() < 0.001,
-                        egui::RichText::new(format!("{:.0}%", level * 100.0)).size(10.5),
-                    )
-                    .clicked()
-                {
-                    self.prefs.zoom = *level;
-                    ui.ctx().set_zoom_factor(*level);
-                    self.prefs.save();
-                }
-            }
-
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Rightmost item of the status bar: the running version. It is
                 // added first in this right-to-left layout so the (potentially
                 // long) hints string can never push it out of the window.
-                let app_version = env!("CARGO_PKG_VERSION");
-                ui.label(
-                    egui::RichText::new(format!("v{app_version}"))
-                        .size(10.5)
-                        .color(t.faint),
-                )
-                .on_hover_text("Running version — fully offline, no network access");
+                let app_version = crate::version_stamp();
+                ui.label(egui::RichText::new(app_version).size(10.5).color(t.faint))
+                    .on_hover_text("Running version — fully offline, no network access");
+                ui.separator();
+                // UI zoom, as a compact dropdown on the right.
+                egui::ComboBox::from_id_salt("status-zoom")
+                    .selected_text(
+                        egui::RichText::new(format!("{:.0}%", self.prefs.zoom * 100.0)).size(10.5),
+                    )
+                    .width(72.0)
+                    .show_ui(ui, |ui| {
+                        for level in ZOOM_LEVELS {
+                            let label = format!("{:.0}%", level * 100.0);
+                            if ui
+                                .selectable_label((self.prefs.zoom - *level).abs() < 0.001, label)
+                                .clicked()
+                            {
+                                self.prefs.zoom = *level;
+                                ui.ctx().set_zoom_factor(*level);
+                                self.prefs.save();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("UI zoom");
+                ui.label(bar_label(&t, "Zoom"));
                 ui.separator();
                 ui.label(
                     egui::RichText::new("↑↓ · Enter open · Ctrl+F search · Ctrl+A all · Esc clear")
                         .size(10.5)
-                        .color(t.faint),
+                        .color(t.dim),
                 );
                 ui.add_space(8.0);
                 ui.separator();
                 ui.label(
                     egui::RichText::new(format!("Entries: {}", human_count(files + dirs)))
                         .size(11.0)
-                        .color(t.faint),
+                        .color(t.dim),
                 );
                 ui.separator();
                 ui.label(
                     egui::RichText::new(format!("Search time: {} ms", self.elapsed_ms))
                         .size(11.0)
-                        .color(t.faint),
+                        .color(t.dim),
                 );
                 ui.separator();
                 ui.label(
@@ -6743,7 +6795,7 @@ impl App {
                         human_count(self.results.len() as u64)
                     ))
                     .size(11.0)
-                    .color(t.faint),
+                    .color(t.dim),
                 );
             });
         });
