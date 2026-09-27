@@ -22,13 +22,15 @@ panes           sidebar | results table | preview/details;  below: view tabs · 
 hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
 excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts).
 
-**Quick actions** sit at the top right, just left of the logo. **Free memory**
-clears the current results — the largest thing the window holds, especially
-after a content search — and asks the engine to return freed pages to the
-operating system; **Reset defaults** puts every setting, filter, tab and saved
-search back to its default. Each opens a confirmation first, and the index,
-tags and files are never touched. The window title carries the version and build
-date — `EasySearch 0.44.0 (built 2026-09-27)` — as does the logo's tooltip.
+**Quick actions** sit at the top right, just left of the logo, as two tinted
+icon buttons: **Free memory** (a broom, teal) stops a running content search,
+clears the current results — the largest thing the window holds — and asks the
+engine to return freed pages to the operating system; **Reset defaults** (a
+circular arrow, amber) puts every setting, filter, tab and saved search back to
+its default. Each opens a confirmation first and then reports what happened, and
+the index, tags and files are never touched. The window title carries the version
+and build date — `EasySearch 0.45.0 (built 2026-09-27)` — as does the logo's
+tooltip.
 
 ## Searching
 
@@ -46,7 +48,9 @@ Space-separated terms are **ANDed**; a plain term is a substring match (`draft` 
 **Scope** (beside the search box): **Filenames** (default), **Full path**, **Contents
 (ripgrep)** — inside files, read live so results are never stale — or **Full text** (name
 **or** contents). It is **not** restored on restart; turning content search on shows a
-one-time notice and a status-bar reminder.
+one-time notice and a status-bar reminder. A content search only starts once the pattern
+has **three characters** (a shorter one would scan everything for almost no signal — the
+results header says so until then), and it is **case-insensitive** unless **Case** is on.
 
 **Location** (and the sidebar's *Indexed Locations*) scopes to one directory; the toolbar's
 Back/Forward walk your history. **Fuzzy** (toolbar or Settings) switches to fzf-style matching

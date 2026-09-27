@@ -116,6 +116,13 @@ packages: deb
 cargo-sources:
 	python3 scripts/gen-cargo-sources.py
 
+## Stamp the AppStream <release> version/date from VERSION.
+##
+## The tag build runs this automatically before packaging; run it by hand (and
+## commit) if you want the repository file in step between releases.
+sync-metainfo:
+	./scripts/sync-metainfo-release.sh
+
 ## Check the desktop entry and the AppStream metainfo file.
 ##
 ## appstreamcli is run with --no-net, so remote screenshot URLs are not fetched.

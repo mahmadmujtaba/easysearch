@@ -4,6 +4,41 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.0] - 2026-09-27
+
+### Added
+
+- **Icons and colour on the menu-bar quick actions.** *Free memory* (a teal
+  broom) and *Reset defaults* (an amber circular arrow) are now tinted icon
+  buttons, painted by hand like the rest of the glyphs.
+- **Content search waits for three characters.** A one- or two-letter pattern
+  would read the whole disk for almost no signal, so the content part of a query
+  is held back until then; the results header says why.
+- **Content search is case-insensitive by default**, matching the filename
+  query, unless **Case** is on.
+
+### Changed
+
+- **Free memory also stops a content search.** It leaves the content scope first
+  (releasing the buffers the last scan left behind), then clears the results and
+  asks the engine to trim; arriving results are shrunk to the rows actually
+  kept.
+- **Packaging.** Both formats now declare `Recommends: xdg-utils` (Open / Reveal
+  / Open-in-terminal use `xdg-open`) and `Suggests: ffmpeg` (media previews), and
+  `Provides`/`Conflicts`/`Replaces` (rpm: `Obsoletes`) for the old
+  `everything-linux` name. The rpm ships `LICENSE` via `%license`; the deb gains
+  `Multi-Arch: foreign`, `Rules-Requires-Root: no` and a `Bugs:` field.
+- **CI builds two architectures.** The packages job is a matrix of `amd64` and
+  `arm64` (arm is best-effort and non-blocking for now), uploads a per-arch
+  artifact, and stamps the AppStream `<release>` from `VERSION` before packaging
+  (`scripts/sync-metainfo-release.sh`).
+
+### Docs
+
+- `docs/packaging.md` documents the soft dependencies, the rename, and a
+  publishing plan (Copr, Flathub, OBS, a signed apt repo, AUR); `docs/ui.md`
+  covers the new search rules and the icon buttons.
+
 ## [0.44.1] - 2026-09-27
 
 ### Packaging

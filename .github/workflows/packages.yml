@@ -37,12 +37,29 @@ env:
 
 jobs:
   packages:
-    name: .deb + .rpm
-    runs-on: ubuntu-latest
+    name: .deb + .rpm (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    # The arm64 row is best-effort: a missing arm runner must not block the
+    # amd64 packages or the release.
+    continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+            experimental: false
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            experimental: true
     steps:
       - name: Check out
         uses: actions/checkout@v7
+
+      - name: Stamp the metainfo release
+        # Keep the packaged AppStream <release> in step with VERSION.
+        run: ./scripts/sync-metainfo-release.sh
 
       - name: Rust toolchain
         run: |
@@ -95,17 +112,17 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum ./*.deb ./*.rpm > SHA256SUMS
-          cat SHA256SUMS
+          sha256sum ./*.deb ./*.rpm > "SHA256SUMS.${{ matrix.arch }}"
+          cat "SHA256SUMS.${{ matrix.arch }}"
 
       - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
-          name: easysearch-packages
+          name: easysearch-packages-${{ matrix.arch }}
           path: |
             dist/*.deb
             dist/*.rpm
-            dist/SHA256SUMS
+            dist/SHA256SUMS.${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 90
 
@@ -129,8 +146,16 @@ jobs:
       - name: Download the packages
         uses: actions/download-artifact@v7
         with:
-          name: easysearch-packages
+          # Every arch's artifact, flattened into dist/.
           path: dist
+          merge-multiple: true
+
+      - name: Combine checksums
+        run: |
+          cd dist
+          # One manifest over every arch's packages.
+          sha256sum ./*.deb ./*.rpm > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create or update the release
         env:
@@ -151,12 +176,13 @@ jobs:
               gh release create "$tag" \
                   --title "EasySearch $tag" \
                   --generate-notes
-          gh release upload "$tag" dist/*.deb dist/*.rpm dist/SHA256SUMS --clobber
+          gh release upload "$tag" dist/*.deb dist/*.rpm dist/SHA256SUMS dist/SHA256SUMS.* --clobber
           # Prove it landed. A release that was silently not created — or that
-          # lost its assets — has to fail the run, not pass as success.
+          # lost its assets — has to fail the run, not pass as success. At least
+          # one .deb, one .rpm and the combined SHA256SUMS are expected.
           gh release view "$tag" --json tagName,assets \
               --jq 'if (.assets | length) < 3
-                    then error("release \(.tagName) has \(.assets | length) assets, expected 3")
+                    then error("release \(.tagName) has \(.assets | length) assets, expected at least 3")
                     else "\(.tagName): \(.assets | length) assets published" end'
 
       - name: Summarise

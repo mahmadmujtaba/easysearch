@@ -104,15 +104,47 @@ declared explicitly: package names in the deb (`GUI_DEPENDS` in
 (`Requires: libEGL.so.1()(64bit)`, … — distribution-independent). A dependency
 loaded this way must be added in **both** places, or the two formats drift.
 
+Two *optional* tools are soft dependencies, declared in both formats: the deb
+`Recommends: xdg-utils` (Open / Reveal / Open-in-terminal shell out to `xdg-open`)
+and `Suggests: ffmpeg` (media previews), matching the rpm `Recommends:` and
+`Suggests:`.
+
+## Renaming from everything-linux
+
+EasySearch was briefly packaged as `everything-linux`. Both formats carry
+`Provides`/`Conflicts`/`Replaces` (the rpm spells the last one `Obsoletes`) so
+installing EasySearch takes the old package over on upgrade instead of colliding
+with its files.
+
 ## Continuous integration
 
 `.github/workflows/packages.yml` builds the `.deb` and `.rpm` on every push to
 `master` and every pull request, running the same `scripts/package-deb.sh` and
-`scripts/package-rpm.sh` you would run locally, and uploads them plus a
-`SHA256SUMS` as the artifact `easysearch-packages` (kept 90 days). A `v*` tag
-additionally attaches the two packages and `SHA256SUMS` to the GitHub release. It
-needs no secrets and no root, and it does **not** run the test suite. A newer
-push cancels an in-flight build (tag builds are never cancelled).
+`scripts/package-rpm.sh` you would run locally. It builds on **two runners** — a
+matrix of `amd64` (`ubuntu-latest`) and `arm64` (`ubuntu-24.04-arm`, best-effort
+and non-blocking for now) — and uploads each arch's packages plus a
+`SHA256SUMS.<arch>` as the artifact `easysearch-packages-<arch>` (kept 90 days).
+Before packaging it runs `scripts/sync-metainfo-release.sh`, so the packaged
+AppStream `<release>` always matches `VERSION`. A `v*` tag additionally attaches
+every arch's packages and a combined `SHA256SUMS` to the GitHub release. It needs
+no secrets and no root, and it does **not** run the test suite. A newer push
+cancels an in-flight build (tag builds are never cancelled).
+
+## Publishing (planned)
+
+Today the packages are attached to GitHub releases and installed by hand. The
+next steps, roughly in order of value:
+
+| Target | What it needs |
+| --- | --- |
+| **Copr** (Fedora/EL rpm repo) | a Copr account + API token as a CI secret, and a build step that feeds the spec to Copr |
+| **Flathub** (Flatpak) | a Flathub submission for `io.github.easysearch.EasySearch`, reachable screenshots, and a `flatpak-builder` verification |
+| **openSUSE OBS** | an OBS account/project using the same spec |
+| **apt repo / PPA** | a GPG signing key as a CI secret, `Release`/`InRelease` metadata, and a host |
+| **AUR** | a `PKGBUILD` (generatable from the release tarball) |
+
+Signing is the gate for any repository: unsigned `.deb`/`.rpm` can only be
+downloaded and installed by hand. See [`pending.md`](pending.md).
 
 ## What has been verified
 

@@ -68,13 +68,14 @@
   </screenshots>
 
   <releases>
-    <release version="0.44.1" date="2026-09-27">
+    <release version="0.45.0" date="2026-09-27">
       <description>
         <p>
           Realtime filename and content search with a native GUI, tray, tags,
           excluded folders, live previews and a recoverable duplicate finder —
-          fully offline. This release carries the correct package maintainer and
-          copyright holder.
+          fully offline. This release adds tinted icons for the quick actions,
+          holds content search back until three characters, and searches
+          contents case-insensitively by default.
         </p>
       </description>
     </release>

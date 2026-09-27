@@ -8,7 +8,7 @@ use crate::content_index::{ContentIndex, ExtractQueue};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
@@ -25,14 +25,25 @@ pub struct ContentPattern {
 }
 
 impl ContentPattern {
-    pub fn new(pattern: &str, multiline: bool) -> Result<ContentPattern, String> {
+    /// Compile `pattern`. Case is ignored unless `case_sensitive` — the same
+    /// default as the filename query, so a content search does not surprise you
+    /// by matching only one casing.
+    pub fn new(
+        pattern: &str,
+        multiline: bool,
+        case_sensitive: bool,
+    ) -> Result<ContentPattern, String> {
         // `multi_line` here is the *matcher's* ability to match across lines;
         // the searcher must be told the same thing (see `search_contents`).
         let matcher = RegexMatcherBuilder::new()
             .multi_line(multiline)
+            .case_insensitive(!case_sensitive)
             .build(pattern)
             .map_err(|e| format!("invalid content pattern: {e}"))?;
-        let plain = Regex::new(pattern).map_err(|e| format!("invalid content pattern: {e}"))?;
+        let plain = RegexBuilder::new(pattern)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|e| format!("invalid content pattern: {e}"))?;
         Ok(ContentPattern {
             matcher,
             plain,
@@ -192,14 +203,14 @@ mod tests {
 
         // Line by line (the default): a pattern containing a newline never
         // matches, because no single line contains one.
-        let single = ContentPattern::new("alpha\\nbeta", false).unwrap();
+        let single = ContentPattern::new("alpha\\nbeta", false, false).unwrap();
         assert!(
             search_contents(&paths, &single, 10, &cache, None).is_empty(),
             "a newline pattern must not match in single-line mode"
         );
 
         // Multiline: the same pattern matches across the line boundary.
-        let multi = ContentPattern::new("alpha\\nbeta", true).unwrap();
+        let multi = ContentPattern::new("alpha\\nbeta", true, false).unwrap();
         assert!(multi.multiline());
         assert_eq!(
             search_contents(&paths, &multi, 10, &cache, None),
@@ -207,12 +218,21 @@ mod tests {
         );
 
         // A single-line pattern still works in multiline mode.
-        let plain = ContentPattern::new("gamma", true).unwrap();
+        let plain = ContentPattern::new("gamma", true, false).unwrap();
         assert_eq!(
             search_contents(&paths, &plain, 10, &cache, None),
             vec![path]
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_content_pattern_ignores_case_unless_asked() {
+        let insensitive = ContentPattern::new("hello", false, false).unwrap();
+        assert!(insensitive.matches_cached("say HeLLo there"));
+        let sensitive = ContentPattern::new("hello", false, true).unwrap();
+        assert!(!sensitive.matches_cached("say HeLLo there"));
+        assert!(sensitive.matches_cached("say hello there"));
     }
 }

@@ -38,6 +38,17 @@ Requires:       libXcursor.so.1()(64bit)
 Requires:       libXi.so.6()(64bit)
 Requires:       libXrender.so.1()(64bit)
 
+# Open / Reveal / Open-in-terminal shell out to xdg-open, and the media
+# previews use ffprobe/ffmpeg; both are best-effort (the app degrades
+# gracefully), so they are soft dependencies, not requirements.
+Recommends:     xdg-utils
+Suggests:       ffmpeg
+
+# Renamed from everything-linux; this package takes it over on upgrade.
+Provides:       everything-linux
+Conflicts:      everything-linux < 0.12
+Obsoletes:      everything-linux < 0.12
+
 %description
 EasySearch searches file names and file contents while you type,
 across your whole filesystem, and keeps its index up to date in realtime as
@@ -76,10 +87,6 @@ install -Dpm0644 packaging/common/%{app_id}.metainfo.xml \
 install -Dpm0644 packaging/icons/hicolor/scalable/apps/%{app_id}.svg \
     %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 
-install -d %{buildroot}%{_docdir}/%{name}
-install -pm0644 LICENSE   %{buildroot}%{_docdir}/%{name}/LICENSE
-install -pm0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
-
 # Validate the desktop entry and the AppStream metadata when the tools are here.
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{app_id}.desktop || :
 if command -v appstream-util >/dev/null 2>&1; then
@@ -88,13 +95,11 @@ if command -v appstream-util >/dev/null 2>&1; then
 fi
 
 %files
-# The doc files are listed by their real paths rather than with the doc/license
-# macros: those place them in a name-version directory, while the install step
-# (as in the .deb) puts them in /usr/share/doc/<name>. Listing the real path
-# keeps the two formats consistent and is portable across the rpm
-# implementations (Fedora, Debian, Ubuntu) this may be built with.
-%{_docdir}/%{name}/LICENSE
-%{_docdir}/%{name}/README.md
+# LICENSE and README go through the standard macros, so rpm tooling finds the
+# licence in /usr/share/licenses/<name> and the readme in
+# /usr/share/doc/<name>; the .deb keeps them both in /usr/share/doc/easysearch.
+%license LICENSE
+%doc README.md
 %{_bindir}/easysearch
 %{_bindir}/easysearch-cli
 %{_bindir}/easysearch-daemon

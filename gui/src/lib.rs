@@ -32,6 +32,11 @@ use std::time::{Duration, Instant};
 pub mod tray;
 
 const DEBOUNCE_MS: u128 = 120;
+
+/// Content search (ripgrep over whole files) is held back until the pattern has
+/// at least this many characters: a one- or two-letter pattern would scan the
+/// whole disk for almost no signal.
+const CONTENT_MIN_CHARS: usize = 3;
 const HISTORY_CAP: usize = 20;
 /// Reverse-DNS application id. Kept in sync with the packaging assets in
 /// `packaging/` (desktop entry, AppStream metainfo, Flatpak manifest) so the
@@ -1066,6 +1071,9 @@ struct App {
     show_reset: bool,
     /// One-line outcome of a quick action, shown in a small dialog.
     notice: Option<String>,
+    /// A content search is held back because the pattern is shorter than
+    /// [`CONTENT_MIN_CHARS`].
+    content_blocked: bool,
     /// The one-time “content search uses more memory” notice.
     show_content_warning: bool,
     /// Snapshot state of every tab; the active one is mirrored in the fields
@@ -1321,6 +1329,7 @@ impl App {
             show_free_memory: false,
             show_reset: false,
             notice: None,
+            content_blocked: false,
             show_content_warning: false,
             tabs,
             active_tab,
@@ -1600,15 +1609,36 @@ impl App {
     fn send_query(&mut self) {
         // In the *Contents* scope the query text is the content pattern and the
         // name is empty; in *Full text* it is both, matched as alternatives.
+        //
+        // A content scan reads whole files, so it is held back until the pattern
+        // is long enough to be worth it (see [`CONTENT_MIN_CHARS`]).
+        let pattern = self.query.trim();
+        let content_ready = pattern.chars().count() >= CONTENT_MIN_CHARS;
+        self.content_blocked = self.content_mode && !pattern.is_empty() && !content_ready;
+        let content = if self.content_mode && content_ready && !pattern.is_empty() {
+            Some(self.query.clone())
+        } else {
+            None
+        };
+        // *Contents* alone has no name query, so with the content part held back
+        // there is nothing to run: empty the table and keep the hint up.
+        if self.content_mode && !self.full_text && content.is_none() {
+            self.results.clear();
+            self.all_results.clear();
+            self.checked.clear();
+            self.truncated = false;
+            self.error = None;
+            self.elapsed_ms = 0;
+            self.selected = 0;
+            self.pending = false;
+            self.last_sent = self.query.clone();
+            self.dirty = true;
+            return;
+        }
         let name = if self.content_mode && !self.full_text {
             String::new()
         } else {
             self.query.clone()
-        };
-        let content = if self.content_mode && !self.query.is_empty() {
-            Some(self.query.clone())
-        } else {
-            None
         };
         let (min_size, max_size) = self.size.bounds();
         let q = Query {
@@ -1865,6 +1895,9 @@ enum Icon {
     CatLarge,
     /// A result tag (the sidebar's TAGS section and tag chips).
     Tag,
+    /// The menu-bar quick actions.
+    Broom,
+    Reset,
 }
 
 fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui::Color32) {
@@ -2084,7 +2117,92 @@ fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui
                 );
             }
         }
+        // --- menu-bar quick actions --------------------------------------
+        Icon::Broom => {
+            // A broom: a straight handle with a fanned head.
+            painter.line_segment([p(-0.8, -0.85), p(0.1, -0.05)], stroke);
+            painter.line_segment([p(-0.3, -0.3), p(0.5, 0.35)], stroke);
+            painter.line_segment([p(0.1, -0.05), p(-0.25, 0.85)], stroke);
+            painter.line_segment([p(0.28, 0.1), p(0.15, 0.9)], stroke);
+            painter.line_segment([p(0.5, 0.35), p(0.6, 0.9)], stroke);
+        }
+        Icon::Reset => {
+            // A circular arrow: an open ring with an arrow head at its end.
+            let r = 0.78_f32;
+            let start = -0.6_f32;
+            let sweep = 0.78_f32;
+            let steps = 26;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let a = start + sweep * std::f32::consts::TAU * (i as f32 / steps as f32);
+                pts.push(p(r * a.cos(), r * a.sin()));
+            }
+            painter.add(egui::Shape::line(pts, stroke));
+            let a = start + sweep * std::f32::consts::TAU;
+            let tip = (r * a.cos(), r * a.sin());
+            let tan = (-a.sin(), a.cos());
+            let perp = (-tan.1, tan.0);
+            let (back, side) = (0.4_f32, 0.32_f32);
+            painter.line_segment(
+                [
+                    p(tip.0, tip.1),
+                    p(
+                        tip.0 - tan.0 * back + perp.0 * side,
+                        tip.1 - tan.1 * back + perp.1 * side,
+                    ),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    p(tip.0, tip.1),
+                    p(
+                        tip.0 - tan.0 * back - perp.0 * side,
+                        tip.1 - tan.1 * back - perp.1 * side,
+                    ),
+                ],
+                stroke,
+            );
+        }
     }
+}
+
+/// A small, tinted menu-bar button: a hand-painted icon and a label on a soft
+/// coloured background. Returns the response so the caller can act on a click.
+fn quick_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    tint: egui::Color32,
+    tip: &str,
+) -> egui::Response {
+    let font = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), tint)
+        .size()
+        .x;
+    let (pad, icon_w, gap) = (8.0_f32, 15.0_f32, 6.0_f32);
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(pad + icon_w + gap + text_w + pad, 21.0),
+        egui::Sense::click(),
+    );
+    let radius = egui::CornerRadius::same(6);
+    let bg = tint.linear_multiply(if resp.hovered() { 0.30 } else { 0.18 });
+    ui.painter().rect_filled(rect, radius, bg);
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + pad + icon_w / 2.0, rect.center().y),
+        egui::vec2(icon_w, icon_w),
+    );
+    paint_icon(ui.painter(), icon_rect, icon, tint);
+    ui.painter().text(
+        egui::pos2(rect.min.x + pad + icon_w + gap, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        tint,
+    );
+    resp.on_hover_text(tip)
 }
 
 /// A toolbar button: painted icon above a small label, like the reference UI.
@@ -3130,6 +3248,9 @@ impl eframe::App for App {
                 match result {
                     Ok(r) => {
                         self.all_results = r.results;
+                        // Trim the allocation to the rows we actually hold: a
+                        // big content search can over-allocate its result Vec.
+                        self.all_results.shrink_to_fit();
                         self.truncated = r.truncated;
                         self.elapsed_ms = r.elapsed_ms;
                         self.error = None;
@@ -3985,30 +4106,34 @@ impl App {
                             ui.close_menu();
                         }
                     });
-                    // At the far right: two quick actions to the *left* of the mark —
-                    // free up memory, and reset every setting to its default.
+                    // At the far right: two tinted quick actions to the *left* of
+                    // the mark — free up memory, and reset every setting.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let t = self.theme();
                         let mark = self.logo(ui.ctx());
                         ui.add(egui::Image::new((mark.id(), egui::vec2(22.0, 22.0))))
-                            .on_hover_text(format!("EasySearch {}", env!("CARGO_PKG_VERSION")));
+                            .on_hover_text(app_title());
                         ui.add_space(8.0);
-                        if ui
-                            .small_button("Reset defaults")
-                            .on_hover_text(
-                                "Put every setting, filter, tab and saved search back to its \
-                                 default.",
-                            )
-                            .clicked()
+                        if quick_button(
+                            ui,
+                            Icon::Reset,
+                            "Reset defaults",
+                            t.warn,
+                            "Reset every setting, filter, tab and saved search to its default.",
+                        )
+                        .clicked()
                         {
                             self.show_reset = true;
                         }
-                        if ui
-                            .small_button("Free memory")
-                            .on_hover_text(
-                                "Clear the current results and ask the engine to return freed \
-                                 pages to the operating system.",
-                            )
-                            .clicked()
+                        if quick_button(
+                            ui,
+                            Icon::Broom,
+                            "Free memory",
+                            t.accent,
+                            "Stop a content search, clear the results and return freed pages to \
+                             the operating system.",
+                        )
+                        .clicked()
                         {
                             self.show_free_memory = true;
                         }
@@ -4595,6 +4720,15 @@ impl App {
                                 .color(t.warn),
                         );
                     }
+                    if self.content_blocked {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "• content search starts at {CONTENT_MIN_CHARS} characters"
+                            ))
+                            .size(11.5)
+                            .color(t.warn),
+                        );
+                    }
                     if let Some(tag) = self.tag_filter.clone() {
                         ui.label(egui::RichText::new("•").size(11.5).color(t.faint));
                         if tag_chip(ui, &t, &format!("#{tag}"), true)
@@ -4743,6 +4877,14 @@ impl App {
     /// asked to return freed pages to the OS (`malloc_trim` in the engine
     /// process). The query text is left as it is, so pressing Enter re-runs it.
     fn free_memory(&mut self) {
+        // Leave a content search first: it is the heaviest thing running, and
+        // dropping out of the scope stops new scans and releases the buffers the
+        // last one left behind (the engine is asked to `malloc_trim` as well).
+        let was_content = self.content_mode || self.full_text;
+        self.content_mode = false;
+        self.full_text = false;
+        self.content_blocked = false;
+
         self.results.clear();
         self.results.shrink_to_fit();
         self.all_results.clear();
@@ -4761,12 +4903,16 @@ impl App {
         self.dup_progress = None;
         self.engine.trim_memory();
         self.dirty = true;
-        self.notice = Some(
-            "Cleared the current results and asked the engine to return freed pages to the \
-             operating system. The index on disk is untouched — press Enter to run the search \
-             again."
-                .into(),
-        );
+        let extra = if was_content {
+            "Stopped the content search and released its buffers. "
+        } else {
+            ""
+        };
+        self.notice = Some(format!(
+            "{extra}Cleared the current results and asked the engine to return freed pages to \
+             the operating system. The index on disk is untouched — press Enter to run the \
+             search again."
+        ));
     }
 
     /// Put every setting, filter and tab back to its default (the *Reset defaults*

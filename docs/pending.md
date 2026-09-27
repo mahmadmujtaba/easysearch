@@ -13,7 +13,9 @@ Open, unresolved items only — shipped work lives in
 | `make rpm` | Built and reproduced in an `ubuntu:24.04` container; never on a real rpm distro | a Fedora/openSUSE machine |
 | `make flatpak` | **Never built** | `flatpak-builder` + the freedesktop SDK |
 | Installing the `.deb` manually | Not exercised here (user installs it) | — |
-| Publishing anywhere | **Not done** | Flathub / Copr / OBS / AUR / a PPA |
+| arm64 packages | Built in CI on `ubuntu-24.04-arm` (best-effort, non-blocking) | a confirmed arm runner on the repo |
+| Package signing | **Unsigned** — no GPG key in CI | a signing key as a CI secret |
+| Publishing anywhere | **Not done** (GitHub releases only) | Flathub / Copr / OBS / AUR / a PPA — see [`packaging.md`](packaging.md) |
 
 Both package scripts fail fast with install instructions when their tool is
 missing, so `make packages` degrades cleanly. Details:
@@ -73,4 +75,6 @@ missing, so `make packages` degrades cleanly. Details:
   dependencies change, or the offline Flatpak build fails.
 - **Screenshots are committed** in `docs/screenshots/` (dark + light), used by
   the README and the metainfo. They come from an isolated instance indexing a
-  throwaway demo tree, so no personal filenames are published.
+  throwaway demo tree, so no personal filenames are published. They still show
+  the pre-quick-actions UI and there is no Brand-theme shot; re-shoot before a
+  Flathub submission (its screenshot requirements are stricter).

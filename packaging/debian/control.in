@@ -5,7 +5,15 @@ Priority: optional
 Architecture: @ARCH@
 Maintainer: @MAINTAINER@
 Homepage: https://github.com/mahmadmujtaba/easysearch
+Bugs: https://github.com/mahmadmujtaba/easysearch/issues
 Depends: @DEPENDS@
+Recommends: xdg-utils
+Suggests: ffmpeg
+Conflicts: everything-linux (<< 0.12)
+Replaces: everything-linux (<< 0.12)
+Provides: everything-linux
+Multi-Arch: foreign
+Rules-Requires-Root: no
 Installed-Size: @SIZE@
 Description: Instant file and content search for Linux
  EasySearch searches file names and file contents while you type,

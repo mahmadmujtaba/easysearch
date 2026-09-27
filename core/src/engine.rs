@@ -719,7 +719,11 @@ impl Engine {
         let (results, truncated) = if want_content && cq.content_or_name && cq.has_name_filter {
             // “Full text”: a file matches if its *name* matches or its *content*
             // does, so both halves are evaluated and merged.
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let pattern = ContentPattern::new(
+                cq.content.as_deref().unwrap_or(""),
+                cq.multiline,
+                cq.case_sensitive,
+            )?;
             let name_hits: Vec<PathBuf> = self
                 .collect(&name_filter, cap)
                 .into_iter()
@@ -747,7 +751,11 @@ impl Engine {
                 truncated,
             )
         } else if want_content {
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let pattern = ContentPattern::new(
+                cq.content.as_deref().unwrap_or(""),
+                cq.multiline,
+                cq.case_sensitive,
+            )?;
             let candidates: Vec<PathBuf> = if cq.has_name_filter {
                 self.collect(&name_filter, cap)
                     .into_iter()
@@ -820,7 +828,11 @@ impl Engine {
 
         let (results, truncated) = if want_content && cq.content_or_name && cq.has_name_filter {
             // “Full text”: match the name *or* the content.
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let pattern = ContentPattern::new(
+                cq.content.as_deref().unwrap_or(""),
+                cq.multiline,
+                cq.case_sensitive,
+            )?;
             let name_hits: Vec<PathBuf> = db.candidates(cq, cap)?;
             let name_less = without_name(cq);
             let candidates = db.candidates(&name_less, cap)?;
@@ -846,7 +858,11 @@ impl Engine {
                 .collect();
             (rows, truncated)
         } else if want_content {
-            let pattern = ContentPattern::new(cq.content.as_deref().unwrap_or(""), cq.multiline)?;
+            let pattern = ContentPattern::new(
+                cq.content.as_deref().unwrap_or(""),
+                cq.multiline,
+                cq.case_sensitive,
+            )?;
             let candidates = db.candidates(cq, cap)?;
             let matched = search_contents(
                 &candidates,
