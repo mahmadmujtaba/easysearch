@@ -44,11 +44,6 @@ Requires:       libXrender.so.1()(64bit)
 Recommends:     xdg-utils
 Suggests:       ffmpeg
 
-# Renamed from everything-linux; this package takes it over on upgrade.
-Provides:       everything-linux
-Conflicts:      everything-linux < 0.12
-Obsoletes:      everything-linux < 0.12
-
 %description
 EasySearch searches file names and file contents while you type,
 across your whole filesystem, and keeps its index up to date in realtime as

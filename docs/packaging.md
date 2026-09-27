@@ -109,13 +109,6 @@ Two *optional* tools are soft dependencies, declared in both formats: the deb
 and `Suggests: ffmpeg` (media previews), matching the rpm `Recommends:` and
 `Suggests:`.
 
-## Renaming from everything-linux
-
-EasySearch was briefly packaged as `everything-linux`. Both formats carry
-`Provides`/`Conflicts`/`Replaces` (the rpm spells the last one `Obsoletes`) so
-installing EasySearch takes the old package over on upgrade instead of colliding
-with its files.
-
 ## Continuous integration
 
 `.github/workflows/packages.yml` builds the `.deb` and `.rpm` on every push to

@@ -4,6 +4,15 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.1] - 2026-09-27
+
+### Packaging
+
+- **Dropped the `everything-linux` rename metadata.** That name was only ever
+  built locally and never published, so the `Provides`/`Conflicts`/`Replaces`
+  (rpm `Obsoletes`) fields were pointless noise — removed from the deb control
+  and the rpm spec.
+
 ## [0.45.0] - 2026-09-27
 
 ### Added
