@@ -1,14 +1,20 @@
 //! System tray icon (StatusNotifierItem over D-Bus).
 //!
-//! The tray lives in the **app process**, alongside the window and the engine
-//! child it spawned: the engine's lifetime is the app's, so the app is also what
-//! owns the icon that represents it. Closing the window hides it to the tray and
-//! the engine keeps indexing; *Quit* stops the app (window + engine).
+//! The tray lives in the **background host process**, alongside the engine and
+//! the control socket: the host outlives every window, so it is what owns the
+//! icon that represents the running app. Closing a window leaves the host (with
+//! the tray and the index) running; *Quit* stops the host (and its engine).
 //!
 //! SNI is the shared tray protocol: KDE/Qt hosts it natively, and GTK-based
 //! desktops (GNOME + AppIndicator extension, XFCE, Cinnamon, MATE) do too, so
 //! one implementation covers both worlds. Pure Rust via `ksni`/`zbus` — no
 //! system dependencies beyond the session D-Bus.
+//!
+//! Clicking:
+//! - **left click** opens the app ready to search — the window is shown and the
+//!   search box is focused ([`TrayMsg::Open`]);
+//! - **middle click** flips the window on and off ([`TrayMsg::Toggle`]); and
+//! - **right click** opens the full menu below.
 
 use ksni::blocking::TrayMethods;
 use ksni::menu::{StandardItem, SubMenu};
@@ -18,13 +24,28 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrayMsg {
-    /// Left-click on the icon: show/hide the window.
-    Toggle,
-    /// Menu item "Open": show and focus the window.
+    /// Show the window and focus the search box — left-click, and the menu's
+    /// *Open EasySearch*.
     Open,
-    /// Re-run a query picked from the tray's "Recent searches" submenu.
+    /// Show / hide the window (the menu's *Show / Hide window*, middle-click).
+    Toggle,
+    /// Show the window, clear the current results and focus the search box.
+    NewSearch,
+    /// Empty the open window's result list.
+    ClearResults,
+    /// Re-run a query picked from the tray's *Recent searches* submenu.
     Search(String),
-    /// Menu item "Quit": stop the app (window and engine).
+    /// Drop every entry from the recent-search history.
+    ClearHistory,
+    /// Rebuild the on-disk index.
+    RebuildIndex,
+    /// Reveal the index folder in the file manager.
+    OpenIndexFolder,
+    /// Open the Settings dialog.
+    Settings,
+    /// Open the About dialog.
+    About,
+    /// Stop the app (window and engine).
     Quit,
 }
 
@@ -33,6 +54,30 @@ pub struct AppTray {
     pub title: String,
     /// Shared snapshot of recent searches (mirrored from the GUI prefs).
     pub history: Arc<Mutex<Vec<String>>>,
+}
+
+/// A plain menu item that sends `msg` when chosen.
+fn msg_item(label: impl Into<String>, msg: TrayMsg) -> MenuItem<AppTray> {
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(move |t: &mut AppTray| {
+            let _ = t.tx.send(msg.clone());
+        }),
+        ..Default::default()
+    })
+}
+
+/// A menu item that runs `f` when chosen (used for the recent-search entries,
+/// which each carry their own query).
+fn callback_item(
+    label: impl Into<String>,
+    f: impl Fn(&mut AppTray) + Send + 'static,
+) -> MenuItem<AppTray> {
+    MenuItem::Standard(StandardItem {
+        label: label.into(),
+        activate: Box::new(f),
+        ..Default::default()
+    })
 }
 
 impl Tray for AppTray {
@@ -60,72 +105,64 @@ impl Tray for AppTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let title = self.title.clone();
         let history: Vec<String> = self.history.lock().map(|h| h.clone()).unwrap_or_default();
+
         let mut items = vec![
-            MenuItem::Standard(StandardItem {
-                label: format!("Open {title}"),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(TrayMsg::Open);
-                }),
-                ..Default::default()
-            }),
-            MenuItem::Standard(StandardItem {
-                label: "Show / Hide window".into(),
-                activate: Box::new(|t: &mut Self| {
-                    let _ = t.tx.send(TrayMsg::Toggle);
-                }),
-                ..Default::default()
-            }),
+            msg_item(format!("Open {title}"), TrayMsg::Open),
+            msg_item("Show / Hide window", TrayMsg::Toggle),
+            MenuItem::Separator,
+            msg_item("New search", TrayMsg::NewSearch),
+            msg_item("Clear results", TrayMsg::ClearResults),
             MenuItem::Separator,
         ];
 
-        if history.is_empty() {
-            items.push(MenuItem::Standard(StandardItem {
-                label: "Recent searches".into(),
+        // Recent searches, always ending with *Clear history* so the action is
+        // reachable even before anything has been searched for.
+        let mut children: Vec<MenuItem<Self>> = Vec::new();
+        for q in history.iter().take(12) {
+            let q_owned = q.clone();
+            let label = if q_owned.chars().count() > 48 {
+                format!("{}…", q_owned.chars().take(48).collect::<String>())
+            } else {
+                q_owned.clone()
+            };
+            children.push(callback_item(label, move |t: &mut AppTray| {
+                let _ = t.tx.send(TrayMsg::Search(q_owned.clone()));
+            }));
+        }
+        if children.is_empty() {
+            children.push(MenuItem::Standard(StandardItem {
+                label: "Nothing yet".into(),
                 enabled: false,
                 ..Default::default()
             }));
         } else {
-            let mut children: Vec<MenuItem<Self>> = Vec::new();
-            for q in history.iter().take(12) {
-                let q_owned = q.clone();
-                let label = if q_owned.chars().count() > 48 {
-                    format!("{}…", q_owned.chars().take(48).collect::<String>())
-                } else {
-                    q_owned.clone()
-                };
-                children.push(MenuItem::Standard(StandardItem {
-                    label,
-                    activate: Box::new(move |t: &mut Self| {
-                        let _ = t.tx.send(TrayMsg::Search(q_owned.clone()));
-                    }),
-                    ..Default::default()
-                }));
-            }
-            items.push(MenuItem::SubMenu(SubMenu {
-                label: "Recent searches".into(),
-                submenu: children,
-                ..Default::default()
-            }));
+            children.push(MenuItem::Separator);
         }
-
-        items.push(MenuItem::Separator);
-        items.push(MenuItem::Standard(StandardItem {
-            label: format!("Quit {title}"),
-            activate: Box::new(|t: &mut Self| {
-                let _ = t.tx.send(TrayMsg::Quit);
-            }),
+        children.push(msg_item("Clear history", TrayMsg::ClearHistory));
+        items.push(MenuItem::SubMenu(SubMenu {
+            label: "Recent searches".into(),
+            submenu: children,
             ..Default::default()
         }));
+
+        items.push(MenuItem::Separator);
+        items.push(msg_item("Rebuild index", TrayMsg::RebuildIndex));
+        items.push(msg_item("Open index folder", TrayMsg::OpenIndexFolder));
+        items.push(MenuItem::Separator);
+        items.push(msg_item("Settings…", TrayMsg::Settings));
+        items.push(msg_item(format!("About {title}"), TrayMsg::About));
+        items.push(MenuItem::Separator);
+        items.push(msg_item(format!("Quit {title}"), TrayMsg::Quit));
         items
     }
 
-    /// Left-click on the icon toggles the main window.
+    /// Left-click: open the app ready to search (show + focus the search box).
     fn activate(&mut self, _x: i32, _y: i32) {
-        let _ = self.tx.send(TrayMsg::Toggle);
+        let _ = self.tx.send(TrayMsg::Open);
     }
 
-    /// Middle/right-click toggles too: hosts differ on which click they deliver
-    /// as `Activate`, and this makes the flip work either way.
+    /// Middle-click: flip the window on and off. Hosts differ on which click they
+    /// deliver as `Activate`, so this keeps a one-click hide/show either way.
     fn secondary_activate(&mut self, _x: i32, _y: i32) {
         let _ = self.tx.send(TrayMsg::Toggle);
     }
@@ -167,5 +204,86 @@ pub fn tray_icon_pixmap() -> Icon {
         width: SIZE as i32,
         height: SIZE as i32,
         data: easysearch_core::logo::argb32(SIZE),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tray(history: Vec<String>) -> AppTray {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        AppTray {
+            tx,
+            title: "EasySearch".into(),
+            history: Arc::new(Mutex::new(history)),
+        }
+    }
+
+    /// The labels of a menu, flattening every item kind to its text.
+    fn labels(items: Vec<MenuItem<AppTray>>) -> Vec<String> {
+        items
+            .iter()
+            .filter_map(|m| match m {
+                MenuItem::Standard(s) => Some(s.label.clone()),
+                MenuItem::SubMenu(s) => Some(s.label.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn recent_submenu(t: &AppTray) -> Vec<MenuItem<AppTray>> {
+        t.menu()
+            .into_iter()
+            .find_map(|m| match m {
+                MenuItem::SubMenu(s) if s.label == "Recent searches" => Some(s.submenu),
+                _ => None,
+            })
+            .expect("a Recent searches submenu")
+    }
+
+    #[test]
+    fn the_menu_exposes_the_full_action_set() {
+        let top = labels(tray(vec!["report".into()]).menu());
+        for want in [
+            "Open EasySearch",
+            "Show / Hide window",
+            "New search",
+            "Clear results",
+            "Recent searches",
+            "Rebuild index",
+            "Open index folder",
+            "Settings…",
+            "About EasySearch",
+            "Quit EasySearch",
+        ] {
+            assert!(top.iter().any(|l| l == want), "missing {want:?} in {top:?}");
+        }
+    }
+
+    #[test]
+    fn clearing_history_is_always_offered() {
+        // Even with no history the item is present, so the action stays reachable.
+        for history in [Vec::new(), vec!["report".to_string()]] {
+            let inner = labels(recent_submenu(&tray(history)));
+            assert!(
+                inner.iter().any(|l| l == "Clear history"),
+                "missing Clear history in {inner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clicking_opens_and_the_other_button_toggles() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut t = AppTray {
+            tx,
+            title: "EasySearch".into(),
+            history: Arc::new(Mutex::new(Vec::new())),
+        };
+        t.activate(0, 0);
+        t.secondary_activate(0, 0);
+        assert_eq!(rx.try_recv().unwrap(), TrayMsg::Open);
+        assert_eq!(rx.try_recv().unwrap(), TrayMsg::Toggle);
     }
 }

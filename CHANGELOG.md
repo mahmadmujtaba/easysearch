@@ -4,6 +4,34 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] - 2026-09-27
+
+### Added
+
+- **A richer tray menu and clearer clicks.** The tray (served by the background
+  host) gained a full action set on top of the old *Open* / *Show / Hide window* /
+  *Recent searches* / *Quit*:
+  - **New search** — show the window, clear the current results and focus the
+    search box;
+  - **Clear results** — empty the open window's result list (frees the rows a
+    content search holds);
+  - **Recent searches ▸** now always ends with **Clear history**, so the list can
+    be emptied even before anything has been searched for;
+  - **Rebuild index** and **Open index folder**;
+  - **Settings…** and **About**.
+  **Left-click** now opens the app ready to search (shows the window and focuses
+  the search box) instead of only flipping it, and **middle-click** flips the
+  window on and off. Clearing history is done *in the window* when one is open,
+  so the window's own prefs save cannot write the old list back.
+- Seven host→window events carry the tray actions over the window's pipe:
+  `focus_search`, `new_search`, `clear_results`, `settings`, `about`,
+  `open_index_folder` and `clear_history`.
+
+### Docs
+
+- [`docs/ui.md`](docs/ui.md) documents the tray menu and the click behaviour; the
+  README's tray bullet was brought up to date.
+
 ## [0.42.0] - 2026-09-27
 
 ### Changed

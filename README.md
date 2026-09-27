@@ -17,7 +17,9 @@ equivalent of VoidTools' *Everything*. Written in **Rust** with a **native GUI**
 - **Tags, excluded folders, duplicate finder** — label files, keep whole trees
   out of the index, and move duplicate copies to the **Trash** (recoverable).
 - **Lives in the tray** — closing the window exits the window only; the app keeps
-  indexing in the background and the tray icon reopens it.
+  indexing in the background, and the tray icon reopens it (left-click opens ready
+  to search; the right-click menu adds clear-results, rebuild, recent searches,
+  settings and more).
 - **Fully offline** — nothing on the network, no telemetry, no updater.
 
 ## Screenshots

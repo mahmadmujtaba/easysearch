@@ -22,7 +22,7 @@
 //! `$XDG_RUNTIME_DIR/easysearch.sock` control channel.
 
 use easysearch_core::ipc as gui_ipc;
-use easysearch_core::proto::Event;
+use easysearch_core::proto::{Event, Op, Request};
 use easysearch_core::{Backend, ChildEngine, Config, Engine};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -81,8 +81,24 @@ pub fn run_engine(quiet: bool) -> Result<(), String> {
 #[derive(Clone, Debug)]
 enum DaemonMsg {
     Show,
+    /// Show the window and focus the search box (the tray's left-click / *Open*).
+    Open,
     Hide,
     Toggle,
+    /// Show the window, clear its results and focus the search box.
+    NewSearch,
+    /// Empty the open window's result list.
+    ClearResults,
+    /// Rebuild the on-disk index (the engine lives here, so no window is needed).
+    RebuildIndex,
+    /// Reveal the index folder in the file manager.
+    OpenIndexFolder,
+    /// Open the Settings dialog.
+    Settings,
+    /// Open the About dialog.
+    About,
+    /// Drop the recent-search history.
+    ClearHistory,
     Search(String),
     Quit,
 }
@@ -100,9 +116,16 @@ impl DaemonMsg {
 
     fn from_tray(m: TrayMsg) -> DaemonMsg {
         match m {
-            TrayMsg::Open => DaemonMsg::Show,
+            TrayMsg::Open => DaemonMsg::Open,
             TrayMsg::Toggle => DaemonMsg::Toggle,
+            TrayMsg::NewSearch => DaemonMsg::NewSearch,
+            TrayMsg::ClearResults => DaemonMsg::ClearResults,
             TrayMsg::Search(q) => DaemonMsg::Search(q),
+            TrayMsg::ClearHistory => DaemonMsg::ClearHistory,
+            TrayMsg::RebuildIndex => DaemonMsg::RebuildIndex,
+            TrayMsg::OpenIndexFolder => DaemonMsg::OpenIndexFolder,
+            TrayMsg::Settings => DaemonMsg::Settings,
+            TrayMsg::About => DaemonMsg::About,
             TrayMsg::Quit => DaemonMsg::Quit,
         }
     }
@@ -175,10 +198,22 @@ pub fn run_daemon() -> Result<(), String> {
         }
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(msg) => match msg {
-                DaemonMsg::Show => match &window {
-                    Some(w) => w.send(Event::Show),
-                    None => window = Some(Window::spawn(Arc::clone(&daemon), None)),
-                },
+                // Actions that need a window: open one if none is up, then tell it
+                // what to do.
+                DaemonMsg::Show => to_window(&mut window, &daemon, Event::Show),
+                DaemonMsg::Open => to_window(&mut window, &daemon, Event::FocusSearch),
+                DaemonMsg::NewSearch => to_window(&mut window, &daemon, Event::NewSearch),
+                DaemonMsg::OpenIndexFolder => {
+                    to_window(&mut window, &daemon, Event::OpenIndexFolder)
+                }
+                DaemonMsg::Settings => to_window(&mut window, &daemon, Event::Settings),
+                DaemonMsg::About => to_window(&mut window, &daemon, Event::About),
+                // Clearing results only makes sense with a window already open.
+                DaemonMsg::ClearResults => {
+                    if let Some(w) = &window {
+                        w.send(Event::ClearResults);
+                    }
+                }
                 DaemonMsg::Search(q) => match &window {
                     Some(w) => w.send(Event::Search { query: q }),
                     None => window = Some(Window::spawn(Arc::clone(&daemon), Some(q))),
@@ -192,6 +227,25 @@ pub fn run_daemon() -> Result<(), String> {
                         w.send(Event::Hide);
                     }
                 }
+                // The engine lives in the host, so a rebuild needs no window.
+                DaemonMsg::RebuildIndex => {
+                    daemon.dispatch(Request {
+                        id: 0,
+                        op: Op::Rebuild,
+                        payload: None,
+                    });
+                }
+                // Clearing history with a window open has to happen *there*, or
+                // the window's own prefs save would write the old list back.
+                DaemonMsg::ClearHistory => match &window {
+                    Some(w) => w.send(Event::ClearHistory),
+                    None => {
+                        easysearch_gui::clear_recent_searches();
+                        if let Ok(mut h) = history.lock() {
+                            h.clear();
+                        }
+                    }
+                },
                 DaemonMsg::Quit => {
                     if let Some(w) = &window {
                         w.send(Event::Quit);
@@ -223,6 +277,18 @@ fn forward_tray(rx: Receiver<TrayMsg>, tx: Sender<DaemonMsg>) {
             }
         })
         .ok();
+}
+
+/// Send `event` to the window, opening a fresh one first if none is up.
+fn to_window(window: &mut Option<Window>, daemon: &Arc<easysearch_daemon::Daemon>, event: Event) {
+    match window {
+        Some(w) => w.send(event),
+        None => {
+            let w = Window::spawn(Arc::clone(daemon), None);
+            w.send(event);
+            *window = Some(w);
+        }
+    }
 }
 
 /// A running window process, reached over its stdin/stdout.

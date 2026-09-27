@@ -68,13 +68,12 @@
   </screenshots>
 
   <releases>
-    <release version="0.42.0" date="2026-09-27">
+    <release version="0.43.0" date="2026-09-27">
       <description>
         <p>
           Realtime filename and content search with a native GUI, tray, tags,
           excluded folders, live previews and a recoverable duplicate finder —
-          fully offline. This release runs the app as a background host plus a
-          short-lived window.
+          fully offline. This release adds a richer tray menu and clearer clicks.
         </p>
       </description>
     </release>

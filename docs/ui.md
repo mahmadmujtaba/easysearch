@@ -177,10 +177,26 @@ The **X** closes the window and leaves EasySearch running: the window process
 exits, while the background host keeps the tray icon and the engine indexing, so
 the search stays warm and the next open is instant. Only **Quit** stops the app
 and its engine: *File ▸ Quit EasySearch*, the tray's *Quit EasySearch*, or
-`easysearch --quit`. The **tray icon** toggles the window (as does the menu's
-*Show / Hide window*), and the menu also offers *Open*, *Recent searches* and
-*Quit*. Reopening from the tray or `easysearch --show` starts a fresh window
-process against the same, still-warm index.
+`easysearch --quit`.
+
+**Left-click** the tray icon to open the app ready to search — the window is
+shown with the cursor in the search box. **Middle-click** flips the window on and
+off. **Right-click** opens the menu:
+
+| Tray item | Effect |
+|---|---|
+| *Open EasySearch* | show the window and focus the search box |
+| *Show / Hide window* | flip the window on and off |
+| *New search* | show, clear the current results and focus the search box |
+| *Clear results* | empty the open window's result list (frees the rows) |
+| *Recent searches ▸* | re-run a recent query; *Clear history* empties the list |
+| *Rebuild index* | rebuild the on-disk index |
+| *Open index folder* | reveal the index folder in the file manager |
+| *Settings…* / *About* | open the matching dialog in the window |
+| *Quit EasySearch* | stop the app and its engine |
+
+Reopening from the tray or `easysearch --show` starts a fresh window process
+against the same, still-warm index.
 
 Why it works this way: on **Wayland** a window cannot be unmapped and `winit`
 cannot recreate its event loop, so a closed window could not be reopened inside

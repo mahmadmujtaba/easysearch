@@ -579,6 +579,12 @@ pub fn recent_searches() -> Vec<String> {
     GuiPrefs::load().history
 }
 
+/// Empty the recent-search history (the tray's *Clear history*).
+pub fn clear_recent_searches() {
+    let mut prefs = GuiPrefs::load();
+    prefs.clear_history();
+}
+
 /// The logo rendered for the window icon.
 fn window_icon() -> egui::IconData {
     const SIZE: u32 = 256;
@@ -3407,6 +3413,32 @@ impl eframe::App for App {
                     self.send_query();
                     ctx.memory_mut(|m| m.request_focus(search_id()));
                 }
+                Event::FocusSearch => {
+                    show_window(ctx);
+                    ctx.memory_mut(|m| m.request_focus(search_id()));
+                }
+                Event::NewSearch => {
+                    show_window(ctx);
+                    self.clear_results();
+                    ctx.memory_mut(|m| m.request_focus(search_id()));
+                }
+                Event::ClearResults => self.clear_results(),
+                Event::Settings => {
+                    show_window(ctx);
+                    self.show_settings = true;
+                }
+                Event::About => {
+                    show_window(ctx);
+                    self.show_about = true;
+                }
+                Event::OpenIndexFolder => {
+                    show_window(ctx);
+                    Self::open(&easysearch_core::Config::default_disk_index_dir());
+                }
+                Event::ClearHistory => {
+                    self.prefs.clear_history();
+                    self.history_idx = None;
+                }
             }
         }
 
@@ -4669,6 +4701,27 @@ impl App {
         let needle = self.last_sent.clone();
         sort_results(&mut self.all_results, prefer, &needle, self.prefs.fuzzy);
         self.apply_tag_filter();
+    }
+
+    /// Empty the current query and result list, leaving tabs and filters alone.
+    ///
+    /// Wired to the tray's *Clear results* and *New search*: the rows (and any
+    /// content-search matches) are the largest transient allocation the UI holds,
+    /// so this frees them and leaves an empty table behind.
+    fn clear_results(&mut self) {
+        self.query.clear();
+        self.last_sent.clear();
+        self.results.clear();
+        self.all_results.clear();
+        self.checked.clear();
+        self.truncated = false;
+        self.error = None;
+        self.elapsed_ms = 0;
+        self.selected = 0;
+        self.scroll_to = None;
+        self.pending = false;
+        self.preview = None;
+        self.dirty = true;
     }
 
     fn clear_filters(&mut self) {

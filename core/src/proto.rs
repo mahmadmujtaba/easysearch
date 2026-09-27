@@ -101,9 +101,11 @@ impl Response {
 ///
 /// When the window is a child of a background host (the tray + engine process),
 /// the host drives the window over the same pipes: `Show`/`Hide`/`Quit` mirror
-/// the tray and `--toggle`/`--quit`, and `Search` carries a query from a
-/// shortcut or the tray's recent-searches menu. It is written as one line, like
-/// a [`Response`], and distinguished by carrying `event` instead of `id`.
+/// the tray and `--toggle`/`--quit`, `Search` carries a query from a shortcut or
+/// the tray's recent-searches menu, and the remaining variants are the tray's
+/// other actions (`FocusSearch`, `NewSearch`, `ClearResults`, `Settings`,
+/// `About`, `OpenIndexFolder`). It is written as one line, like a [`Response`],
+/// and distinguished by carrying `event` instead of `id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -115,6 +117,21 @@ pub enum Event {
     Quit,
     /// Show the window and run this query.
     Search { query: String },
+    /// Show the window and put the cursor in the search box.
+    FocusSearch,
+    /// Show the window, clear the current query and results, and focus the
+    /// search box — a fresh start (the tray's *New search*).
+    NewSearch,
+    /// Empty the open window's result list, leaving the window as it is.
+    ClearResults,
+    /// Show the window with the Settings dialog open.
+    Settings,
+    /// Show the window with the About dialog open.
+    About,
+    /// Show the window and reveal the index folder in the file manager.
+    OpenIndexFolder,
+    /// Drop the recent-search history.
+    ClearHistory,
 }
 
 /// The body of an [`Op::Config`] request; every field is optional, so a caller
@@ -207,9 +224,27 @@ mod tests {
         })
         .unwrap();
         assert!(search.contains(r#""event":"search""#), "{search}");
-        assert!(!search.contains("\n"), "an event is one line: {search}");
+        assert!(!search.contains('\n'), "an event is one line: {search}");
         assert_eq!(serde_json::from_str::<Event>(&show).unwrap(), Event::Show);
         // A response is not an event, and vice versa.
         assert!(serde_json::from_str::<Event>(r#"{"id":1,"data":null}"#).is_err());
+    }
+
+    #[test]
+    fn the_tray_events_round_trip() {
+        // Every tray action survives a line of JSON, tagged lower-snake-case.
+        for (event, tag) in [
+            (Event::FocusSearch, r#"{"event":"focus_search"}"#),
+            (Event::NewSearch, r#"{"event":"new_search"}"#),
+            (Event::ClearResults, r#"{"event":"clear_results"}"#),
+            (Event::Settings, r#"{"event":"settings"}"#),
+            (Event::About, r#"{"event":"about"}"#),
+            (Event::OpenIndexFolder, r#"{"event":"open_index_folder"}"#),
+            (Event::ClearHistory, r#"{"event":"clear_history"}"#),
+        ] {
+            let line = serde_json::to_string(&event).unwrap();
+            assert_eq!(line, tag);
+            assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), event);
+        }
     }
 }
