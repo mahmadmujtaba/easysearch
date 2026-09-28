@@ -111,17 +111,20 @@ and `Suggests: ffmpeg` (media previews), matching the rpm `Recommends:` and
 
 ## Continuous integration
 
-`.github/workflows/packages.yml` builds the `.deb` and `.rpm` on every push to
-`master` and every pull request, running the same `scripts/package-deb.sh` and
-`scripts/package-rpm.sh` you would run locally. It builds on **two runners** — a
+`.github/workflows/packages.yml` builds the `.deb` and `.rpm` only when a `v*`
+tag is pushed — or on demand via *Run workflow* — running the same
+`scripts/package-deb.sh` and `scripts/package-rpm.sh` you would run locally.
+Ordinary pushes to `master` (a merged pull request) and pull requests do **not**
+build, so packaging breakage is only caught at tag time, or when the workflow is
+run by hand. It builds on **two runners** — a
 matrix of `amd64` (`ubuntu-latest`) and `arm64` (`ubuntu-24.04-arm`, best-effort
 and non-blocking for now) — and uploads each arch's packages plus a
 `SHA256SUMS.<arch>` as the artifact `easysearch-packages-<arch>` (kept 90 days).
 Before packaging it runs `scripts/sync-metainfo-release.sh`, so the packaged
 AppStream `<release>` always matches `VERSION`. A `v*` tag additionally attaches
 every arch's packages and a combined `SHA256SUMS` to the GitHub release. It needs
-no secrets and no root, and it does **not** run the test suite. A newer push
-cancels an in-flight build (tag builds are never cancelled).
+no secrets and no root, and it does **not** run the test suite. A newer hand-run
+build cancels an in-flight hand-run build (tag builds are never cancelled).
 
 ## Publishing (planned)
 

@@ -1,25 +1,20 @@
 # Build the Debian and RPM packages, and turn a version tag into a release.
 #
-#   push to master     build .deb + .rpm and upload them as a run artifact
-#   pull request       the same build, so packaging breakage is caught before
-#                      the change is merged
-#   push of a v* tag   the same build, then attach the packages to the GitHub
-#                      release for that tag
-#   manual dispatch    build on demand
+#   push of a v* tag   build .deb + .rpm for every arch and attach them (plus
+#                      the checksum manifests) to the GitHub release for the tag
+#   manual dispatch    build on demand, without touching any release
 #
-# A merged pull request *is* a push to `master`, so that trigger is what "every
-# PR that lands" means here; a direct push builds too, on purpose, so the
-# artifacts always match the branch.
+# Packages are built only for a version tag. Ordinary pushes to `master` — which
+# is what a merged pull request produces — and pull requests themselves are no
+# longer built, so a merge stays cheap; run the workflow by hand (Actions ▸
+# packages ▸ *Run workflow*) to check packaging before you tag.
 #
 # No secrets are needed — the release job uses the automatic `GITHUB_TOKEN`.
 name: packages
 
 on:
   push:
-    branches: [master]
     tags: ['v*']
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
 # Build jobs only read the repository; the release job overrides this.

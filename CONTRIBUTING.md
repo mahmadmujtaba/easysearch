@@ -142,9 +142,10 @@ Push your branch and open a PR against `master` with:
   light themes look different).
 - Any **follow-up** you deliberately left out.
 
-CI builds a `.deb` and an `.rpm` on every PR so packaging breakage is caught
-before merge; a `v*` tag on `master` attaches them to the GitHub release. The
-test suite is run by you, not CI, for now.
+CI builds a `.deb` and an `.rpm` only when a `v*` tag is pushed, and attaches
+them to the GitHub release; pulls and pushes to `master` build nothing. Run the
+packaging workflow by hand (Actions ▸ *packages* ▸ *Run workflow*) to check
+packaging before you tag. The test suite is run by you, not CI, for now.
 
 ## Conventions worth knowing
 

@@ -63,9 +63,10 @@ missing, so `make packages` degrades cleanly. Details:
 ## Repo & tooling
 
 - **CI builds the packages, not the tests.** `.github/workflows/packages.yml`
-  builds the `.deb` and `.rpm` on every push to `master` and every PR (uploaded
-  as a run artifact), and a `v*` tag attaches them to the GitHub release. The
-  test suite is run by the contributor, not CI.
+  builds the `.deb` and `.rpm` only when a `v*` tag is pushed (or on demand via
+  *Run workflow*) and attaches them to the GitHub release; ordinary pushes to
+  `master` and pull requests build nothing. The test suite is run by the
+  contributor, not CI.
 - **The end-to-end engine suite is `#[ignore]`d.** Every test in
   `daemon/tests/roundtrip.rs` spawns a real engine and waits for it to index, so
   the suite is slow. Run it on demand with
