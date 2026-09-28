@@ -4,6 +4,29 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.0] - 2026-09-29
+
+### Added
+
+- **Pull-request checks.** `.github/workflows/ci.yml` runs `cargo fmt --check`,
+  `cargo check --workspace --all-targets` and `cargo test --workspace` on every
+  pull request to `master` (and on demand), so formatting and the test suite are
+  guarded without building packages. Clippy is intentionally not run yet.
+
+### Changed
+
+- **Focus follows the pointer in the results.** Hovering the list moves the
+  highlighted row to the row under the cursor, and moving the pointer into it
+  hands the keyboard to the results, so `↑`/`↓`/`PgUp`/`PgDn`/`Enter` act on
+  them instead of staying locked on the first row.
+- **`Ctrl+A` selects every result row**, even while the search box holds focus
+  (the shortcut is no longer swallowed by the field). Selecting the query text
+  with the keyboard is done with the mouse instead.
+- **Packages are built only for a version tag.** `.github/workflows/packages.yml`
+  no longer runs on pull requests or on pushes to `master`; the `.deb`/`.rpm` are
+  built when a `v*` tag is pushed (or by hand), then attached to that tag's
+  release.
+
 ## [0.46.0] - 2026-09-27
 
 ### Changed
