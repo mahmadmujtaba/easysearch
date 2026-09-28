@@ -239,12 +239,12 @@ The first `--toggle`, `--show` or `--search` **starts** the app when nothing is 
 | `Enter` / double-click | Open the selected result |
 | `Esc` | Clear the search |
 | `Ctrl+F` | Focus the search box |
-| `Ctrl+A` | Select all result rows (when the search box is not focused) |
+| `Ctrl+A` | Select all result rows |
 | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
 | `Ctrl+Tab` / `Ctrl+1…9` | Next tab / select tab |
 | `↑` `↓` in an empty search box | Cycle search history |
 | Click column headers | Sort results |
 
-**Focus follows the pointer:** clicking outside the search field drops its focus, so
-`↑`/`↓`/`PgUp`/`PgDn`/`Enter` act on the results, and the first printable key re-grabs the field to
-start a new query.
+**Focus follows the pointer:** a press outside the search field — or moving the pointer into the results — drops its focus, so
+`↑`/`↓`/`PgUp`/`PgDn`/`Enter` and `Ctrl+A` act on the results, and the highlighted row tracks the cursor as it moves over
+the list. The first printable key re-grabs the field to start a new query.
