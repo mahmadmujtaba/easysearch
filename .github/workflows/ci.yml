@@ -1,0 +1,78 @@
+# Fast feedback for pull requests: formatting, a compile of every target and the
+# unit/integration test suite.
+#
+#   pull request       fmt + check + test, so a change is reviewed green
+#   manual dispatch    the same, on demand
+#
+# Packaging (.deb/.rpm) is deliberately *not* built here — that only happens for
+# a version tag, in `packages.yml`. This workflow needs no secrets.
+name: checks
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Read-only: this workflow never writes to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same PR supersedes an in-flight run.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · check · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Rust toolchain
+        # `rustfmt` is not in the minimal profile; the rest is enough for a
+        # `cargo check`/`test` (clippy is intentionally not run here).
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --component rustfmt
+          rustup default stable
+          rustc -vV
+          cargo -vV
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+            ${{ runner.os }}-cargo-
+
+      - name: Install GUI headers (best effort)
+        run: |
+          # The GUI stack (winit/glutin) dlopen()s its libraries, so these are
+          # not normally needed; they are a safety net in case a dependency
+          # links instead. Optional, so a package rename on a future runner
+          # image cannot break the pipeline.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxrender-dev \
+            || echo "note: optional GUI dev headers unavailable; continuing"
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check (all targets)
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
