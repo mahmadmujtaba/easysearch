@@ -1063,9 +1063,13 @@ struct App {
     logo_tex: Option<egui::TextureHandle>,
     history_idx: Option<usize>,
     search_was_focused: bool,
-    /// Screen rect of the search field. A press outside it drops the field's
-    /// keyboard focus (focus follows the pointer); typing re-grabs it.
+    /// Screen rect of the search field. A press outside it — or moving the
+    /// pointer into the results — drops the field's keyboard focus (focus
+    /// follows the pointer); typing re-grabs it.
     search_rect: Option<egui::Rect>,
+    /// Screen rect of the central results area, so a pointer moving into it can
+    /// take the keyboard focus off the search field.
+    results_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
     /// Events pushed by the host process (tray, `--toggle`, `--quit`, `--search`).
@@ -1330,6 +1334,7 @@ impl App {
             history_idx: None,
             search_was_focused: false,
             search_rect: None,
+            results_rect: None,
             ui_font,
             mono_font,
             events,
@@ -3420,6 +3425,19 @@ impl eframe::App for App {
             ctx.memory_mut(|m| m.surrender_focus(search_id()));
         }
 
+        // …and simply moving the pointer into the results does the same, so the
+        // keyboard goes with the mouse: hovering the list highlights the row
+        // under the cursor and hands ↑/↓/Enter and Ctrl+A to the results, while
+        // the field keeps focus as long as the pointer stays over it.
+        if self.view == ViewTab::Results
+            && ctx.memory(|m| m.has_focus(search_id()))
+            && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO)
+            && let Some(pos) = ctx.input(|i| i.pointer.interact_pos())
+            && self.results_rect.is_some_and(|r| r.contains(pos))
+        {
+            ctx.memory_mut(|m| m.surrender_focus(search_id()));
+        }
+
         // …but typing always lands in the search box: the first printable key
         // re-grabs the field and starts a new query, wherever the pointer left
         // focus. The events are inserted here (and swallowed) because egui
@@ -3519,12 +3537,14 @@ impl eframe::App for App {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A)) {
-            // Only while the search field does not have focus, so text selection
-            // inside the box keeps working.
-            if !ctx.memory(|m| m.has_focus(search_id())) {
-                self.checked = self.results.iter().map(|r| r.path.clone()).collect();
-            }
+        // Ctrl+A selects every result row, the Everything behaviour, even
+        // while the search field still holds focus after typing. The keystroke
+        // is consumed so the field does not also select its text; when there is
+        // nothing to select it falls through, leaving normal editing alone.
+        if !self.results.is_empty()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A))
+        {
+            self.checked = self.results.iter().map(|r| r.path.clone()).collect();
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::T)) {
             self.new_tab();
@@ -5554,6 +5574,10 @@ impl App {
     }
 
     fn results_table(&mut self, ui: &mut egui::Ui) {
+        // The central area is the results region: a pointer moving into it takes
+        // the keyboard focus off the search field (see `update`).
+        self.results_rect = Some(ui.max_rect());
+
         if let Some(err) = &self.error {
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {
@@ -5570,6 +5594,9 @@ impl App {
         let t = self.theme();
         let needle = self.last_sent.clone();
         let cozy = self.density.row_height() > 36.0;
+        // Only a moving pointer moves the highlight onto the hovered row, so the
+        // keyboard can still walk the list while the cursor sits still.
+        let pointer_moved = ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
 
         // Column widths are recomputed from the available width every frame so
         // the layout stays stable when the UI zoom (or the window) changes. The
@@ -5833,6 +5860,12 @@ impl App {
                     });
 
                     let row_resp = row.response().clone();
+                    // Focus follows the pointer: the highlighted row tracks the
+                    // cursor, so the row under the mouse — not the first result —
+                    // is what the preview, Enter and the context menu act on.
+                    if pointer_moved && row_resp.hovered() {
+                        self.selected = i;
+                    }
                     if row_resp.double_clicked() {
                         App::open(&r.path);
                     }
