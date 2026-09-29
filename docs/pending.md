@@ -109,7 +109,10 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   (Tools/Settings/palette/tray, with **Pause on battery** and **Pause when hot**
   auto-throttles read from `/sys`; resuming re-syncs the index).
 - **Command palette** (`Ctrl+Shift+P`) over the app's actions. **Done.**
-- **Editable breadcrumb** path bar with autocomplete over the index.
+- **Editable breadcrumb** path bar with autocomplete over the index. **Done**
+  (a location bar with a path field and filesystem autocomplete; the suggestion
+  source is the filesystem, not the index, so a not-yet-indexed folder is still
+  offered).
 - **CLI parity** — `--json` output, the same filters, and `watch "query"` to
   stream new matches. **Done** (the filters were already there; `search --json`
   prints one response object, `watch` re-runs on `--interval` and streams new

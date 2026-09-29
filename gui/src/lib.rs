@@ -1154,6 +1154,9 @@ struct App {
     /// Location history for the Back/Forward toolbar buttons.
     loc_history: Vec<Option<String>>,
     loc_idx: usize,
+    /// The editable location bar: its input buffer and the suggested directories.
+    loc_edit: String,
+    loc_suggest: Vec<PathBuf>,
     // --- live system stats for the status bar -----------------------------
     sys_at: Instant,
     sys_cpu: f32,
@@ -1487,6 +1490,8 @@ impl App {
             show_saved: false,
             loc_history: vec![start_under.clone()],
             loc_idx: 0,
+            loc_edit: String::new(),
+            loc_suggest: Vec::new(),
             sys_at: Instant::now(),
             sys_cpu: 0.0,
             sys_ram_used_kb: 0,
@@ -2271,6 +2276,10 @@ fn search_id() -> egui::Id {
 
 fn palette_id() -> egui::Id {
     egui::Id::new("palette_input")
+}
+
+fn loc_id() -> egui::Id {
+    egui::Id::new("loc_input")
 }
 
 /// Score a command-palette query against a label: `None` when the query's
@@ -4483,6 +4492,82 @@ fn ext_key(path: &Path) -> Option<String> {
         .map(|e| e.to_ascii_lowercase())
 }
 
+/// Split a location input into (the directory to list, the partial last
+/// component): `/a/b` → (`/a/`, `b`), `/a/b/` → (`/a/b/`, "").
+fn location_parts(input: &str) -> (String, String) {
+    if input.is_empty() {
+        return (String::new(), String::new());
+    }
+    if input.ends_with('/') {
+        return (input.to_string(), String::new());
+    }
+    match input.rfind('/') {
+        Some(i) => (input[..=i].to_string(), input[i + 1..].to_string()),
+        None => (String::new(), input.to_string()),
+    }
+}
+
+/// Order directory names for a partial component: case-insensitive prefix
+/// matches first, then case-insensitive substring matches, each band keeping the
+/// sorted order it came in. An empty partial lists everything as-is.
+fn rank_suggestions(partial: &str, names: &[String]) -> Vec<String> {
+    if partial.is_empty() {
+        return names.to_vec();
+    }
+    let needle = partial.to_lowercase();
+    let mut prefix: Vec<String> = Vec::new();
+    let mut contains: Vec<String> = Vec::new();
+    for name in names {
+        let lower = name.to_lowercase();
+        if lower.starts_with(&needle) {
+            prefix.push(name.clone());
+        } else if lower.contains(&needle) {
+            contains.push(name.clone());
+        }
+    }
+    prefix.extend(contains);
+    prefix
+}
+
+/// The directory a location input's directory part names, expanding a leading
+/// `~` (an empty part means the home directory).
+fn resolve_dir_part(dir_part: &str, home: &Path) -> PathBuf {
+    if let Some(rest) = dir_part.strip_prefix('~') {
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        return if rest.is_empty() {
+            home.to_path_buf()
+        } else {
+            home.join(rest)
+        };
+    }
+    if dir_part.is_empty() {
+        return home.to_path_buf();
+    }
+    PathBuf::from(dir_part)
+}
+
+/// Directories to offer for a location input, ranked (see [`rank_suggestions`])
+/// and capped at `limit`. Reads the filesystem directly — suggestions do not need
+/// the index, and a directory that is not indexed yet is still worth offering.
+fn suggest_dirs(input: &str, home: &Path, limit: usize) -> Vec<PathBuf> {
+    let (dir_part, partial) = location_parts(input);
+    let dir = resolve_dir_part(&dir_part, home);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    rank_suggestions(&partial, &names)
+        .into_iter()
+        .take(limit)
+        .map(|n| dir.join(n))
+        .collect()
+}
+
 // --- battery / thermal ----------------------------------------------------
 
 /// Thermal-zone temperature (millidegrees) above which indexing is throttled.
@@ -5150,6 +5235,7 @@ impl eframe::App for App {
         self.toolbar(ctx);
         self.search_row(ctx);
         self.filter_row(ctx);
+        self.location_bar(ctx);
         self.results_header(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
         self.recent_row(ctx);
@@ -7982,6 +8068,111 @@ impl App {
         }
         self.loc_history.push(here);
         self.loc_idx = self.loc_history.len() - 1;
+    }
+
+    /// The editable location bar: a path field with filesystem autocomplete.
+    fn location_bar(&mut self, ctx: &egui::Context) {
+        let t = self.theme();
+        let id = loc_id();
+        let focused = ctx.memory(|m| m.has_focus(id));
+        // While it is not being edited, the field mirrors the current location.
+        if !focused {
+            self.loc_edit = self.under.clone().unwrap_or_default();
+            self.loc_suggest.clear();
+        }
+        let mut field_rect: Option<egui::Rect> = None;
+        let mut apply = false;
+        egui::TopBottomPanel::top("locationbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Location").size(11.0).color(t.faint));
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.loc_edit)
+                            .id(id)
+                            .desired_width(380.0)
+                            .hint_text("type a path (\u{7e} for home), or / for everywhere"),
+                    );
+                    field_rect = Some(resp.rect);
+                    if resp.changed() {
+                        let home = self.home_path();
+                        self.loc_suggest = suggest_dirs(&self.loc_edit, &home, 8);
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        apply = true;
+                    }
+                    if ui.button("Go").clicked() {
+                        apply = true;
+                    }
+                    if ui
+                        .button("/ (everywhere)")
+                        .on_hover_text("Clear the location filter and search the whole index.")
+                        .clicked()
+                    {
+                        self.under = None;
+                        self.push_location();
+                        self.loc_suggest.clear();
+                        self.send_query();
+                    }
+                });
+            });
+        // Suggestions hang under the field while it has focus.
+        if focused
+            && !self.loc_suggest.is_empty()
+            && let Some(rect) = field_rect
+        {
+            let mut pick: Option<PathBuf> = None;
+            egui::Area::new(egui::Id::new("loc_suggest"))
+                .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 2.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(rect.width());
+                        for p in &self.loc_suggest {
+                            if ui
+                                .selectable_label(false, p.display().to_string())
+                                .clicked()
+                            {
+                                pick = Some(p.clone());
+                            }
+                        }
+                    });
+                });
+            if let Some(p) = pick {
+                self.loc_edit = p.display().to_string();
+                apply = true;
+            }
+        }
+        if apply {
+            self.apply_location_input();
+        }
+    }
+
+    /// Apply whatever is in the location field: `\u{7e}` expands to home, a bare
+    /// ``/`` (or empty) clears the filter, anything else becomes the location.
+    fn apply_location_input(&mut self) {
+        let text = self.loc_edit.trim().to_string();
+        self.loc_suggest.clear();
+        if text.is_empty() || text == "/" {
+            self.under = None;
+        } else {
+            let home = self.home_path();
+            let (dir_part, partial) = location_parts(&text);
+            let mut path = resolve_dir_part(&dir_part, &home);
+            // A complete path is taken as-is; a trailing partial is dropped, so
+            // typing `/home/a/doc` and pressing Enter goes to `/home/a/` unless
+            // `doc` really exists.
+            if !partial.is_empty() && path.join(&partial).is_dir() {
+                path = path.join(&partial);
+            }
+            self.under = Some(path.display().to_string());
+        }
+        self.push_location();
+        self.send_query();
     }
 
     fn sidebar(&mut self, ctx: &egui::Context) {
@@ -13161,6 +13352,48 @@ mod tests {
         assert_eq!(replace_all("A-b-a", "a", "x", true), "A-b-x");
         // An empty needle is a no-op, not an infinite loop.
         assert_eq!(replace_all("abc", "", "x", false), "abc");
+    }
+
+    #[test]
+    fn location_inputs_split_into_a_directory_and_a_partial() {
+        assert_eq!(
+            location_parts("/home/a/doc"),
+            ("/home/a/".to_string(), "doc".to_string())
+        );
+        assert_eq!(
+            location_parts("/home/a/"),
+            ("/home/a/".to_string(), String::new())
+        );
+        assert_eq!(location_parts("doc"), (String::new(), "doc".to_string()));
+        assert_eq!(location_parts(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn suggestions_rank_prefix_matches_first() {
+        let names = vec![
+            "Documents".to_string(),
+            "Downloads".to_string(),
+            "mysync".to_string(),
+            "sync".to_string(),
+        ];
+        // `sy` → prefix matches (sync) before substring matches (mysync).
+        assert_eq!(rank_suggestions("sy", &names), ["sync", "mysync"]);
+        // Case-insensitive prefix.
+        assert_eq!(rank_suggestions("do", &names), ["Documents", "Downloads"]);
+        // An empty partial lists everything unchanged.
+        assert_eq!(rank_suggestions("", &names), names);
+    }
+
+    #[test]
+    fn tilde_in_a_location_input_expands_to_home() {
+        let home = Path::new("/home/u");
+        assert_eq!(resolve_dir_part("~/", home), PathBuf::from("/home/u"));
+        assert_eq!(
+            resolve_dir_part("~/docs", home),
+            PathBuf::from("/home/u/docs")
+        );
+        assert_eq!(resolve_dir_part("", home), PathBuf::from("/home/u"));
+        assert_eq!(resolve_dir_part("/srv", home), PathBuf::from("/srv"));
     }
 
     #[test]

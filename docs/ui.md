@@ -14,6 +14,7 @@ search tabs     one pill per open search (restored on restart)               [ +
 toolbar         [ < │ > ]  Home  Index  [ Simple │ Regex │ Fuzzy ]  Recent  Saved   (left-aligned)
 search row      [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden  [ ✕ Clear Filters ]
+location bar    Location [ path field, with autocomplete ]  Go  / (everywhere)
 results header  N results · M files indexed · T ms   [ Filter results… ]   Sort by ▾  Cozy Compact
 panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
@@ -75,6 +76,12 @@ An unrecognised `key:value` (like `time:12:30`) is matched literally.
 **Search ▸ Advanced search…** builds a query from the same tokens with a small form — name
 contains, extension, size (at least / at most), modified and folder — and puts the composed query
 in the search box.
+
+The **location bar** below the filters is an editable path field: type a directory (a leading
+`~` means home) and press Enter, or pick from the autocomplete that lists its sub-directories as
+you type; `/ (everywhere)` clears the filter. The field mirrors the current location when it is
+not focused. Back/Forward in the toolbar walk the location history, and the sidebar's *Path* menu
+and Indexed Locations set the same thing.
 
 **Scope** (beside the search box): **Filenames** (default), **Full path**, **Contents
 (ripgrep)** — inside files, read live so results are never stale — or **Full text** (name
