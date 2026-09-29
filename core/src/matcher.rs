@@ -107,6 +107,180 @@ impl Default for Query {
     }
 }
 
+/// Filters pulled out of `key:value` tokens in the query text.
+///
+/// Recognised keys: `ext:` (extensions), `size:` (`>`, `<`, `>=`, `<=`, `a..b`, and
+/// B/KB/MB/GB/TB units, binary), `modified:`/`mod:`/`date:` (`today`, `yesterday`,
+/// `week`, `month`, `year`, or `Nd`/`Nw`/`Nh`), `in:`/`under:` (a directory
+/// prefix) and `file:` (files only). Anything else keeps its literal meaning, so
+/// `time:12:30` still matches that text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryTokens {
+    pub extensions: Vec<String>,
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
+    pub modified_within_secs: Option<i64>,
+    pub under: Option<String>,
+    pub files_only: bool,
+}
+
+/// Split a query into terms, honouring double quotes: `"a b"` yields one term
+/// whose text is `a b` (quotes stripped). The bool is true when the term was
+/// quoted, so the caller can leave a quoted `key:value` as literal text.
+fn split_terms(name: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut quoted = false;
+    let mut has = false;
+    for c in name.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                quoted = true;
+                has = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if has {
+                    out.push((std::mem::take(&mut cur), quoted));
+                    quoted = false;
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push((cur, quoted));
+    }
+    out
+}
+
+/// Parse `key:value` filter tokens out of `name`, returning the remaining terms
+/// (to match) and the filters they specified.
+pub fn parse_query_tokens(name: &str) -> (Vec<String>, QueryTokens) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut toks = QueryTokens::default();
+    for (term, quoted) in split_terms(name) {
+        if term.is_empty() {
+            continue;
+        }
+        if !quoted {
+            if let Some(v) = term.strip_prefix("ext:") {
+                for e in v.split([',', ';']) {
+                    let e = e.trim().trim_start_matches('.').to_ascii_lowercase();
+                    if !e.is_empty() && !toks.extensions.contains(&e) {
+                        toks.extensions.push(e);
+                    }
+                }
+                continue;
+            }
+            if let Some(v) = term.strip_prefix("size:")
+                && let Some((min, max)) = parse_size(v)
+            {
+                toks.min_size = min.or(toks.min_size);
+                toks.max_size = max.or(toks.max_size);
+                continue;
+            }
+            if let Some(v) = term
+                .strip_prefix("modified:")
+                .or_else(|| term.strip_prefix("mod:"))
+                .or_else(|| term.strip_prefix("date:"))
+                && let Some(secs) = parse_age(v)
+            {
+                toks.modified_within_secs = Some(secs);
+                continue;
+            }
+            if let Some(v) = term
+                .strip_prefix("in:")
+                .or_else(|| term.strip_prefix("under:"))
+                && !v.is_empty()
+            {
+                toks.under = Some(v.to_string());
+                continue;
+            }
+            if term == "file:" || term == "files:" {
+                toks.files_only = true;
+                continue;
+            }
+        }
+        kept.push(term);
+    }
+    (kept, toks)
+}
+
+/// Parse a `size:` value — `>10MB`, `>=1KB`, `<2GB`, `1MB..100MB`, or an exact
+/// `10MB` — into `(min, max)` byte bounds.
+fn parse_size(v: &str) -> Option<(Option<u64>, Option<u64>)> {
+    let v = v.trim();
+    if let Some((a, b)) = v.split_once("..") {
+        return Some((Some(parse_bytes(a)?), Some(parse_bytes(b)?)));
+    }
+    if let Some(rest) = v.strip_prefix(">=") {
+        return Some((Some(parse_bytes(rest)?), None));
+    }
+    if let Some(rest) = v.strip_prefix("<=") {
+        return Some((None, Some(parse_bytes(rest)?)));
+    }
+    if let Some(rest) = v.strip_prefix('>') {
+        return Some((Some(parse_bytes(rest)?.saturating_add(1)), None));
+    }
+    if let Some(rest) = v.strip_prefix('<') {
+        return Some((None, Some(parse_bytes(rest)?.saturating_sub(1))));
+    }
+    let n = parse_bytes(v)?;
+    Some((Some(n), Some(n)))
+}
+
+/// Parse a byte quantity: `10`, `10B`, `1KB`, `2.5MB`, `1GB`, `1TB` (binary).
+fn parse_bytes(s: &str) -> Option<u64> {
+    let s = s.trim().to_ascii_lowercase();
+    let (num, mult) = if let Some(n) = s.strip_suffix("tb") {
+        (n, 1024u64.pow(4))
+    } else if let Some(n) = s.strip_suffix("gb") {
+        (n, 1024u64.pow(3))
+    } else if let Some(n) = s.strip_suffix("mb") {
+        (n, 1024u64.pow(2))
+    } else if let Some(n) = s.strip_suffix("kb") {
+        (n, 1024)
+    } else if let Some(n) = s.strip_suffix('b') {
+        (n, 1)
+    } else {
+        (s.as_str(), 1)
+    };
+    let value: f64 = num.trim().parse().ok()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(value.mul_add(mult as f64, 0.5) as u64)
+}
+
+/// Parse a `modified:` value into a maximum age in seconds.
+fn parse_age(v: &str) -> Option<i64> {
+    let v = v.trim().to_ascii_lowercase();
+    let secs = match v.as_str() {
+        "today" => 24 * 3600,
+        "yesterday" => 48 * 3600,
+        "week" | "thisweek" => 7 * 24 * 3600,
+        "month" => 30 * 24 * 3600,
+        "year" => 365 * 24 * 3600,
+        other => {
+            let (num, unit) = other.split_at(other.len().saturating_sub(1));
+            let n: i64 = num.parse().ok()?;
+            match unit {
+                "h" => n * 3600,
+                "d" => n * 24 * 3600,
+                "w" => n * 7 * 24 * 3600,
+                _ => return None,
+            }
+        }
+    };
+    Some(secs)
+}
+
 /// True if `path`/`meta` matches the category filter.
 pub fn matches_category(cat: &Category, path: &Path, meta: &crate::overlay::Meta) -> bool {
     let ext = |path: &Path| -> Option<String> {
@@ -223,12 +397,15 @@ pub struct CompiledQuery {
 impl CompiledQuery {
     pub fn compile(q: &Query) -> Result<CompiledQuery, String> {
         let ci = !q.case_sensitive;
+        // Pull out `key:value` filter tokens (Everything-style); the rest is the
+        // name query. Quoted terms stay literal, so `"ext:pdf"` matches that text.
+        let (kept, toks) = parse_query_tokens(&q.name);
         let mut terms = Vec::new();
         let mut excludes = Vec::new();
-        for raw in q.name.split_whitespace() {
+        for raw in &kept {
             let (neg, tok) = match raw.strip_prefix('!') {
                 Some(rest) => (true, rest),
-                None => (false, raw),
+                None => (false, raw.as_str()),
             };
             if tok.is_empty() {
                 continue;
@@ -241,9 +418,15 @@ impl CompiledQuery {
             }
         }
         // Canonicalise the extension filter: trim, strip one leading '.',
-        // lowercase, drop empties, dedupe (order preserved).
+        // lowercase, drop empties, dedupe (order preserved). An `ext:` token
+        // overrides the query's own list.
+        let ext_source: &[String] = if toks.extensions.is_empty() {
+            &q.extensions
+        } else {
+            &toks.extensions
+        };
         let mut extensions: Vec<String> = Vec::new();
-        for raw in &q.extensions {
+        for raw in ext_source {
             let trimmed = raw.trim();
             let normalized = trimmed
                 .strip_prefix('.')
@@ -254,7 +437,9 @@ impl CompiledQuery {
             }
             extensions.push(normalized);
         }
-        if let (Some(min), Some(max)) = (q.min_size, q.max_size)
+        let min_size = toks.min_size.or(q.min_size);
+        let max_size = toks.max_size.or(q.max_size);
+        if let (Some(min), Some(max)) = (min_size, max_size)
             && min > max
         {
             return Err(format!(
@@ -269,16 +454,20 @@ impl CompiledQuery {
             full_path: q.full_path,
             content: q.content.clone(),
             category: q.category,
-            include_dirs: q.include_dirs,
-            under: q.under.clone(),
+            include_dirs: if toks.files_only {
+                false
+            } else {
+                q.include_dirs
+            },
+            under: toks.under.clone().or_else(|| q.under.clone()),
             extensions,
-            min_size: q.min_size,
-            max_size: q.max_size,
-            modified_within_secs: q.modified_within_secs,
+            min_size,
+            max_size,
+            modified_within_secs: toks.modified_within_secs.or(q.modified_within_secs),
             limit: q.limit.max(1),
             multiline: q.multiline,
             content_or_name: q.content_or_name,
-            has_name_filter: !q.name.split_whitespace().any(|t| t.is_empty()),
+            has_name_filter: !kept.is_empty(),
         })
     }
 
@@ -720,5 +909,62 @@ mod tests {
         assert!(!cq.name_matches(Path::new("/x/meeting-tmp-notes.md")));
         // A scattered "t-m-p" is not an exclusion under substring semantics.
         assert!(cq.name_matches(Path::new("/x/meeting-time-notes.md")));
+    }
+
+    #[test]
+    fn ext_token_filters_extensions() {
+        let cq = q("report ext:pdf,doc", false);
+        assert_eq!(cq.extensions, vec!["pdf", "doc"]);
+        assert!(cq.extension_matches(Path::new("/a/report.pdf")));
+        assert!(!cq.extension_matches(Path::new("/a/report.txt")));
+        // The token is not part of the name query.
+        assert!(cq.name_matches(Path::new("/a/report.pdf")));
+    }
+
+    #[test]
+    fn size_token_parses_units_and_bounds() {
+        let cq = q("size:>1MB", false);
+        assert_eq!(cq.min_size, Some(1024 * 1024 + 1));
+        assert_eq!(cq.max_size, None);
+        let cq = q("size:1KB..2KB", false);
+        assert_eq!((cq.min_size, cq.max_size), (Some(1024), Some(2048)));
+        let cq = q("size:<10B", false);
+        assert_eq!(cq.max_size, Some(9));
+        // An unparseable value stays a literal term.
+        let cq = q("size:big", false);
+        assert_eq!(cq.min_size, None);
+        assert_eq!(cq.terms.len(), 1);
+    }
+
+    #[test]
+    fn modified_and_under_tokens() {
+        let cq = q("modified:today in:/var/log", false);
+        assert_eq!(cq.modified_within_secs, Some(24 * 3600));
+        assert_eq!(cq.under.as_deref(), Some("/var/log"));
+    }
+
+    #[test]
+    fn file_token_is_files_only() {
+        let cq = q("file: notes", false);
+        assert!(!cq.include_dirs);
+        assert_eq!(cq.terms.len(), 1);
+    }
+
+    #[test]
+    fn quoted_phrases_and_quoted_tokens() {
+        let (kept, toks) = parse_query_tokens("\"ext:pdf\"");
+        assert!(toks.extensions.is_empty());
+        assert_eq!(kept, vec!["ext:pdf"]);
+        // A quoted phrase is one term and matches a run with a space.
+        let cq = q("\"meeting notes\"", false);
+        assert!(cq.name_matches(Path::new("/x/meeting notes.md")));
+        assert!(!cq.name_matches(Path::new("/x/notes-meeting.md")));
+    }
+
+    #[test]
+    fn unknown_colon_token_is_literal() {
+        let (kept, toks) = parse_query_tokens("time:12:30");
+        assert_eq!(kept, vec!["time:12:30"]);
+        assert_eq!(toks, QueryTokens::default());
     }
 }

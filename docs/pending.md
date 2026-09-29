@@ -84,8 +84,10 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 ### M — medium
 
 - **Filter-within-results** box — narrow the visible list without re-querying. **Done.**
-- **Query tokens** — `ext:pdf size:>10MB modified:today folder: parent: file:`,
-  plus `|` (OR) and quoted phrases; most map onto fields `Query` already has.
+- **Query tokens** — `ext:pdf size:>10MB modified:today folder: parent: file:`, plus `|`
+  (OR) and quoted phrases; most map onto fields `Query` already has. **Done** for
+  `ext:`, `size:`, `modified:`, `in:`/`under:`, `file:` and quoted phrases; **still
+  open**: `folder:`/`parent:` and `|` (OR).
 - **Advanced Search** dialog — a builder that composes those tokens.
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
   Permissions / Inode / Link count, persisted per tab.

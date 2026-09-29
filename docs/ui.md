@@ -56,6 +56,20 @@ Space-separated terms are **ANDed**; a plain term is a substring match (`draft` 
 | `report[_-]\d{4}` | regex, while **Regex** is on |
 | `foo\nbar` *(Multiline)* | content pattern spanning lines (much slower) |
 
+**Filter tokens** can be typed in the query as well as set with the controls; a token applies for
+that query and takes precedence over the matching filter control:
+
+| You type | Meaning |
+|---|---|
+| `"a b"` | a phrase — one term that may contain spaces |
+| `ext:pdf,doc` | only these extensions (a leading `.` is optional) |
+| `size:>10MB` | size bounds: `>`, `<`, `>=`, `<=`, or `a..b`; units `B`/`KB`/`MB`/`GB`/`TB` (binary) |
+| `modified:today` | modified within `today` / `yesterday` / `week` / `month` / `year`, or `7d` / `12h` / `2w` |
+| `in:/var/log` | only paths under this directory (`under:` works too) |
+| `file:` | files only |
+
+An unrecognised `key:value` (like `time:12:30`) is matched literally.
+
 **Scope** (beside the search box): **Filenames** (default), **Full path**, **Contents
 (ripgrep)** — inside files, read live so results are never stale — or **Full text** (name
 **or** contents). It is **not** restored on restart; turning content search on shows a
