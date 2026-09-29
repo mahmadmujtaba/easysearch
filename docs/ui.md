@@ -134,9 +134,10 @@ optional **Add a number** counter, a start and a zero-pad width), a live old →
 conflict checks — the **Rename N** button stays disabled until every target is clear.
 
 The **Columns** menu on the results header shows or hides each column (`#`, Name, Path, Type,
-Size, Modified, Created, Match, Relevance, and an **Extension** column off by default) and moves
-them left or right; the choice is stored in `gui.json`. The stat-based columns (owner, group,
-permissions, inode, link count) are not implemented yet.
+Size, Modified, Created, Match, Relevance, **Extension**, and the stat-backed **Owner**, **Group**,
+**Permissions**, **Inode** and **Links**) and moves them left or right; the choice is stored in
+`gui.json`. The stat-backed columns read `stat(2)` per row (cached), so they cost nothing while
+they are switched off.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:

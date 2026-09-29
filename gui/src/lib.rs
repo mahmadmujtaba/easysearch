@@ -19,7 +19,8 @@ use easysearch_core::{
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -1002,6 +1003,12 @@ enum ColumnKind {
     Match,
     Relevance,
     Extension,
+    /// Owner / group / permissions / inode / hard-link count, from `stat(2)`.
+    Owner,
+    Group,
+    Permissions,
+    Inode,
+    Links,
 }
 
 impl ColumnKind {
@@ -1017,6 +1024,11 @@ impl ColumnKind {
         ColumnKind::Match,
         ColumnKind::Relevance,
         ColumnKind::Extension,
+        ColumnKind::Owner,
+        ColumnKind::Group,
+        ColumnKind::Permissions,
+        ColumnKind::Inode,
+        ColumnKind::Links,
     ];
 
     fn label(self) -> &'static str {
@@ -1031,6 +1043,11 @@ impl ColumnKind {
             ColumnKind::Match => "Match",
             ColumnKind::Relevance => "Relevance",
             ColumnKind::Extension => "Extension",
+            ColumnKind::Owner => "Owner",
+            ColumnKind::Group => "Group",
+            ColumnKind::Permissions => "Permissions",
+            ColumnKind::Inode => "Inode",
+            ColumnKind::Links => "Links",
         }
     }
 
@@ -1047,7 +1064,25 @@ impl ColumnKind {
             ColumnKind::Match => 120.0,
             ColumnKind::Relevance => 74.0,
             ColumnKind::Extension => 64.0,
+            ColumnKind::Owner => 96.0,
+            ColumnKind::Group => 96.0,
+            ColumnKind::Permissions => 84.0,
+            ColumnKind::Inode => 76.0,
+            ColumnKind::Links => 52.0,
         }
+    }
+
+    /// Whether a column needs a `stat(2)` (so the table only pays for the ones
+    /// the user actually enabled).
+    fn needs_stat(self) -> bool {
+        matches!(
+            self,
+            ColumnKind::Owner
+                | ColumnKind::Group
+                | ColumnKind::Permissions
+                | ColumnKind::Inode
+                | ColumnKind::Links
+        )
     }
 
     fn is_flexible(self) -> bool {
@@ -1055,13 +1090,103 @@ impl ColumnKind {
     }
 }
 
-/// The columns shown on a fresh profile: everything but `Extension`.
+/// The columns shown on a fresh profile: everything but the opt-in extras.
 fn default_columns() -> Vec<ColumnKind> {
     ColumnKind::ALL
         .iter()
         .copied()
-        .filter(|c| *c != ColumnKind::Extension)
+        .filter(|c| {
+            !matches!(
+                c,
+                ColumnKind::Extension
+                    | ColumnKind::Owner
+                    | ColumnKind::Group
+                    | ColumnKind::Permissions
+                    | ColumnKind::Inode
+                    | ColumnKind::Links
+            )
+        })
         .collect()
+}
+
+/// The `stat(2)` fields the extra columns show.
+#[derive(Clone, Copy)]
+struct StatInfo {
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    ino: u64,
+    nlink: u64,
+}
+
+/// `stat(2)` for `path` (via `lstat`, so a symlink is not followed and a broken
+/// one still reports).
+fn stat_of(path: &Path) -> Option<StatInfo> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some(StatInfo {
+        mode: m.mode(),
+        uid: m.uid(),
+        gid: m.gid(),
+        ino: m.ino(),
+        nlink: m.nlink(),
+    })
+}
+
+/// The nine permission characters for a mode (`rw-r--r--`), ignoring the
+/// setuid/setgid/sticky bits.
+fn format_mode(mode: u32) -> String {
+    let tri = |r: u32, w: u32, x: u32| -> String {
+        let mut s = String::with_capacity(3);
+        s.push(if mode & r != 0 { 'r' } else { '-' });
+        s.push(if mode & w != 0 { 'w' } else { '-' });
+        s.push(if mode & x != 0 { 'x' } else { '-' });
+        s
+    };
+    format!(
+        "{}{}{}",
+        tri(0o400, 0o200, 0o100),
+        tri(0o040, 0o020, 0o010),
+        tri(0o004, 0o002, 0o001)
+    )
+}
+
+/// uid/gid → name maps, loaded once from `/etc/passwd` and `/etc/group`.
+#[derive(Default)]
+struct IdNames {
+    users: HashMap<u32, String>,
+    groups: HashMap<u32, String>,
+}
+
+impl IdNames {
+    fn load() -> IdNames {
+        IdNames {
+            users: parse_id_names(&read_etc("passwd")),
+            groups: parse_id_names(&read_etc("group")),
+        }
+    }
+}
+
+fn read_etc(name: &str) -> String {
+    std::fs::read_to_string(format!("/etc/{name}")).unwrap_or_default()
+}
+
+/// `name:…:id:…` lines to an `id → name` map (comments and short lines skipped).
+fn parse_id_names(text: &str) -> HashMap<u32, String> {
+    let mut out = HashMap::new();
+    for line in text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split(':');
+        let (Some(name), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) else {
+            continue;
+        };
+        if let Ok(id) = id.trim().parse::<u32>() {
+            out.entry(id).or_insert_with(|| name.to_string());
+        }
+    }
+    out
 }
 
 /// A command offered by the palette (see [`palette_actions`]).
@@ -1384,6 +1509,10 @@ struct App {
     roots_text: String,
     roots_msg: Option<String>,
     roots_counts: Vec<u64>,
+    /// `stat(2)` info for the extra columns, keyed by path (filled on demand), and
+    /// the uid/gid → name maps, loaded once.
+    stats: RefCell<HashMap<PathBuf, StatInfo>>,
+    id_names: RefCell<Option<IdNames>>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1684,6 +1813,8 @@ impl App {
             roots_text: String::new(),
             roots_msg: None,
             roots_counts: Vec::new(),
+            stats: RefCell::new(HashMap::new()),
+            id_names: RefCell::new(None),
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -8869,6 +9000,13 @@ impl App {
                         ColumnKind::Extension => {
                             ui.label(egui::RichText::new("Extension").size(11.0).color(t.faint));
                         }
+                        ColumnKind::Owner
+                        | ColumnKind::Group
+                        | ColumnKind::Permissions
+                        | ColumnKind::Inode
+                        | ColumnKind::Links => {
+                            ui.label(egui::RichText::new(kind.label()).size(11.0).color(t.faint));
+                        }
                     });
                 }
             })
@@ -8904,6 +9042,20 @@ impl App {
                         }
                     });
                     for kind in &cols {
+                        // The stat-backed columns resolve their values here, before
+                        // the cell closure, so the closure never needs `&self`.
+                        let (stat, owner, group) = if kind.needs_stat() {
+                            let st = self.stat_for(&r.path);
+                            let owner = st
+                                .map(|s| self.user_name(s.uid))
+                                .unwrap_or_else(|| "—".to_string());
+                            let group = st
+                                .map(|s| self.group_name(s.gid))
+                                .unwrap_or_else(|| "—".to_string());
+                            (st, owner, group)
+                        } else {
+                            (None, String::new(), String::new())
+                        };
                         row.col(|ui| match kind {
                             // Row number.
                             ColumnKind::Num => {
@@ -9073,6 +9225,41 @@ impl App {
                                     ext.to_ascii_lowercase()
                                 };
                                 ui.label(egui::RichText::new(text).size(10.5).color(t.dim));
+                            }
+                            ColumnKind::Owner => {
+                                ui.label(egui::RichText::new(owner.as_str()).size(10.5).color(t.dim));
+                            }
+                            ColumnKind::Group => {
+                                ui.label(egui::RichText::new(group.as_str()).size(10.5).color(t.dim));
+                            }
+                            ColumnKind::Permissions => {
+                                let text = stat
+                                    .map(|s| format_mode(s.mode))
+                                    .unwrap_or_else(|| "—".to_string());
+                                ui.label(
+                                    egui::RichText::new(text).monospace().size(10.5).color(t.dim),
+                                );
+                            }
+                            ColumnKind::Inode => {
+                                let text = stat
+                                    .map(|s| s.ino.to_string())
+                                    .unwrap_or_else(|| "—".to_string());
+                                ui.label(
+                                    egui::RichText::new(text).monospace().size(10.5).color(t.dim),
+                                );
+                            }
+                            ColumnKind::Links => {
+                                let text = stat
+                                    .map(|s| s.nlink.to_string())
+                                    .unwrap_or_else(|| "—".to_string());
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(text).size(10.5).color(t.dim),
+                                        );
+                                    },
+                                );
                             }
                         });
                     }
@@ -9961,6 +10148,45 @@ impl App {
             self.roots_counts.push(self.count_under(root));
         }
         self.show_roots = true;
+    }
+
+    // --- extra column metadata -------------------------------------------
+
+    /// Cached `stat(2)` for a row (the owner/group/permissions/inode/links
+    /// columns). The cache is bounded — it is cleared when it grows too large.
+    fn stat_for(&self, path: &Path) -> Option<StatInfo> {
+        if let Some(info) = self.stats.borrow().get(path) {
+            return Some(*info);
+        }
+        let info = stat_of(path)?;
+        let mut cache = self.stats.borrow_mut();
+        if cache.len() > 4096 {
+            cache.clear();
+        }
+        cache.insert(path.to_path_buf(), info);
+        Some(info)
+    }
+
+    /// The login name for a uid (the number when there is no entry).
+    fn user_name(&self, uid: u32) -> String {
+        self.with_id_names(|n| n.users.get(&uid).cloned())
+            .unwrap_or_else(|| uid.to_string())
+    }
+
+    /// The group name for a gid (the number when there is no entry).
+    fn group_name(&self, gid: u32) -> String {
+        self.with_id_names(|n| n.groups.get(&gid).cloned())
+            .unwrap_or_else(|| gid.to_string())
+    }
+
+    /// Run `f` against the uid/gid name maps, loading them on first use.
+    fn with_id_names<T>(&self, f: impl FnOnce(&IdNames) -> T) -> T {
+        let loaded = self.id_names.borrow().is_some();
+        if !loaded {
+            *self.id_names.borrow_mut() = Some(IdNames::load());
+        }
+        let guard = self.id_names.borrow();
+        f(guard.as_ref().expect("id names loaded above"))
     }
 
     /// How many entries are indexed under `root` (0 when it cannot be resolved).
@@ -13777,12 +14003,32 @@ mod tests {
         assert!(cols.contains(&ColumnKind::Name));
         assert!(cols.contains(&ColumnKind::Relevance));
         assert!(!cols.contains(&ColumnKind::Extension));
+        assert!(!cols.contains(&ColumnKind::Owner));
+        assert!(!cols.contains(&ColumnKind::Permissions));
         // Every column has a label and only `Name` is the flexible one.
         for c in ColumnKind::ALL {
             assert!(!c.label().is_empty());
         }
         assert!(ColumnKind::Name.is_flexible());
         assert!(!ColumnKind::Size.is_flexible());
+        // Only the stat-backed columns pay for a `stat`.
+        assert!(!ColumnKind::Size.needs_stat());
+        assert!(ColumnKind::Owner.needs_stat());
+        assert!(ColumnKind::Inode.needs_stat());
+    }
+
+    #[test]
+    fn modes_and_id_names_are_formatted() {
+        assert_eq!(format_mode(0o644), "rw-r--r--");
+        assert_eq!(format_mode(0o755), "rwxr-xr-x");
+        assert_eq!(format_mode(0o000), "---------");
+
+        let passwd =
+            "# comment\nroot:x:0:0::/root:/bin/sh\nme:x:1000:1000::/home/me:/bin/bash\nshort:x\n";
+        let users = parse_id_names(passwd);
+        assert_eq!(users.get(&0).map(String::as_str), Some("root"));
+        assert_eq!(users.get(&1000).map(String::as_str), Some("me"));
+        assert_eq!(users.get(&7), None);
     }
 
     #[test]

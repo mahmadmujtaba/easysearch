@@ -60,6 +60,11 @@ missing, so `make packages` degrades cleanly. Details:
 - **SQLite FTS5** for content search — the natural next step for the index.
 - A **tag/ignore** picker for paths outside the results (today you tag from a
   result row).
+- **Drag rows out** to a file manager or another app (XDG drag-and-drop) —
+  `egui`/`eframe` 0.31 has no API for dragging *files* out to the desktop, so it
+  needs platform DnD code (winit/GTK) that cannot be exercised in this headless
+  environment. The **Copy path** / **Copy as URI** / **Open containing folder**
+  row actions cover the common cases meanwhile.
 
 ## Feature backlog (wishlist, shortest first)
 
@@ -91,11 +96,10 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Advanced Search** dialog — a builder that composes those tokens. **Done**
   (Search ▸ Advanced search…).
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
-  Permissions / Inode / Link count, persisted per tab. **Partly done**: the
-  Columns menu toggles and reorders the existing columns and adds an
-  **Extension** column, persisted in `gui.json` (globally, not per tab). The
-  stat-based columns — Owner / Group / Permissions / Inode / Link count — are
-  **still open** (they need a per-row `stat`, which the table does not do yet).
+  Permissions / Inode / Link count. **Done** (the Columns menu on the results
+  header toggles and reorders every column, including the stat-backed ones, and
+  the choice is persisted in `gui.json`; per *tab* persistence is not done — the
+  set is global).
 - **Rename in place** (`F2`) with clobber checks. **Done.**
 - **Restore from Trash** in-app — list trashed items with original paths. **Done**
   (Tools ▸ Restore from Trash…, also in the command palette).
@@ -127,7 +131,6 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Bulk rename** by pattern (find/replace, numbering). **Done** (Tools ▸ Bulk
   rename…: find/replace with case, an optional numbered counter, live preview and
   conflict checks).
-- **Drag rows out** to a file manager or another app (XDG drag-and-drop).
 
 ### L — large
 
@@ -138,7 +141,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Removable-media indexing** — detect mounts, index on mount, drop on unmount.
 - **Browse and search inside archives** (zip/tar/7z) without extracting.
 - **Font preview** and first-page thumbnails for documents.
-- **Accessibility sweep** — screen-reader labels (accesskit), high-contrast and
+Accessibility sweep — screen-reader labels (accesskit), high-contrast and
   reduced-motion options.
 - **Live-updating results** — add/remove rows as the index changes while a query
   is open.
