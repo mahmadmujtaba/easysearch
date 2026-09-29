@@ -356,6 +356,15 @@ impl ChildEngine {
         })
     }
 
+    /// Replace the engine's index roots (rebuilding its index).
+    pub fn set_roots(&self, roots: Vec<String>) -> Result<(), String> {
+        self.patch(ConfigPatch {
+            roots: Some(roots),
+            rebuild: true,
+            ..Default::default()
+        })
+    }
+
     /// Last polled status report (`None` until the first successful poll).
     pub fn report(&self) -> Option<StatusReport> {
         self.report.read().ok().and_then(|r| r.clone())

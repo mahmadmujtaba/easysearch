@@ -285,6 +285,11 @@ fn print_status(backend: &Backend) {
     }
     println!("skipped dirs:   {}", s.skipped);
     println!("paused:         {}", s.paused);
+    if s.roots.is_empty() {
+        println!("roots:          home (default)");
+    } else {
+        println!("roots:          {}", s.roots.join(", "));
+    }
     if s.last_index_at > 0 {
         println!("last indexed:   {} (unix)", s.last_index_at);
     }

@@ -18,8 +18,9 @@ pub struct Mount {
 /// Which subtrees must never be entered.
 #[derive(Debug, Default)]
 pub struct RootSet {
-    /// Roots that are searched (already canonicalized).
-    pub roots: Vec<PathBuf>,
+    /// Roots that are searched (already canonicalized). Shared and mutable so the
+    /// GUI can add or remove a root without an engine restart.
+    roots: Arc<RwLock<Vec<PathBuf>>>,
     /// Mount points (within or overlapping the roots) that are excluded.
     excluded: Vec<Mount>,
     /// Directory subtrees to skip (from `config.exclude_dirs`, resolved). Shared
@@ -58,7 +59,7 @@ impl RootSet {
         }
 
         RootSet {
-            roots,
+            roots: Arc::new(RwLock::new(roots)),
             excluded,
             exclude_dirs: Arc::new(RwLock::new(config.effective_exclude_dirs())),
         }
@@ -96,7 +97,22 @@ impl RootSet {
 
     /// True if `path` is inside one of the search roots.
     pub fn is_in_roots(&self, path: &Path) -> bool {
-        self.roots.iter().any(|r| path.starts_with(r))
+        self.roots
+            .read()
+            .map(|r| r.iter().any(|root| path.starts_with(root)))
+            .unwrap_or(false)
+    }
+
+    /// The current search roots (canonicalized).
+    pub fn roots(&self) -> Vec<PathBuf> {
+        self.roots.read().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// Replace the search roots (takes effect on the next walk).
+    pub fn set_roots(&self, roots: Vec<PathBuf>) {
+        if let Ok(mut guard) = self.roots.write() {
+            *guard = roots;
+        }
     }
 }
 
@@ -208,7 +224,7 @@ mod tests {
     #[test]
     fn exclusion_set_marks_known_mounts() {
         let set = RootSet {
-            roots: vec![PathBuf::from("/home/ahmad")],
+            roots: Arc::new(RwLock::new(vec![PathBuf::from("/home/ahmad")])),
             excluded: vec![
                 Mount {
                     point: PathBuf::from("/proc"),
@@ -234,7 +250,7 @@ mod tests {
     #[test]
     fn excluded_dirs_can_be_replaced_live() {
         let set = RootSet {
-            roots: vec![PathBuf::from("/home/ahmad")],
+            roots: Arc::new(RwLock::new(vec![PathBuf::from("/home/ahmad")])),
             ..RootSet::default()
         };
         let scratch = Path::new("/home/ahmad/scratch/x");
@@ -242,5 +258,15 @@ mod tests {
         set.set_exclude_dirs(vec![PathBuf::from("/home/ahmad/scratch")]);
         assert!(set.is_excluded(scratch));
         assert_eq!(set.exclude_dirs().len(), 1);
+    }
+
+    #[test]
+    fn roots_can_be_replaced_live() {
+        let set = RootSet::default();
+        assert!(set.roots().is_empty());
+        assert!(!set.is_in_roots(Path::new("/srv/data/x")));
+        set.set_roots(vec![PathBuf::from("/srv/data")]);
+        assert!(set.is_in_roots(Path::new("/srv/data/x")));
+        assert_eq!(set.roots(), [PathBuf::from("/srv/data")]);
     }
 }

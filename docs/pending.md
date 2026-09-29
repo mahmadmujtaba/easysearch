@@ -122,6 +122,8 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   prints one response object, `watch` re-runs on `--interval` and streams new
   matches as JSONL with `--json`).
 - **Multiple index roots** managed in the UI, each with its own count and status.
+  **Done** (Tools ▸ Indexed roots…: edit `config.roots`, save & rebuild, per-root
+  counts; live *watching* of a newly added root begins at the next start).
 - **Bulk rename** by pattern (find/replace, numbering). **Done** (Tools ▸ Bulk
   rename…: find/replace with case, an optional numbered counter, live preview and
   conflict checks).

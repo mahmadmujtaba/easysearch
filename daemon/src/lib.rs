@@ -87,9 +87,14 @@ impl Daemon {
                     if let Some(on) = patch.paused {
                         self.engine.set_paused(on);
                     }
+                    let roots_changed = patch.roots.is_some();
+                    if let Some(roots) = patch.roots {
+                        self.engine.set_roots(roots, false);
+                    }
                     let walk_changed = patch.respect.is_some()
                         || patch.follow_symlinks.is_some()
-                        || patch.exclude_dirs.is_some();
+                        || patch.exclude_dirs.is_some()
+                        || roots_changed;
                     if let Some(dirs) = patch.exclude_dirs {
                         self.engine.set_exclude_dirs(dirs, false);
                     }

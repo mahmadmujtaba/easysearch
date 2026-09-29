@@ -138,6 +138,17 @@ impl Backend {
         }
     }
 
+    /// Replace the index roots (in-process engine, or the child). The engine
+    /// resolves `~`/relative entries and rebuilds its index.
+    pub fn set_roots(&self, roots: Vec<String>) {
+        match self {
+            Backend::Local(e) => e.set_roots(roots, true),
+            Backend::Child(c) => {
+                let _ = c.set_roots(roots);
+            }
+        }
+    }
+
     /// Replace the excluded-directory list (in-process engine, or the child).
     /// The engine resolves `~`/relative entries and rebuilds its index.
     pub fn set_exclude_dirs(&self, dirs: Vec<String>) {

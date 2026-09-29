@@ -147,6 +147,10 @@ pub struct ConfigPatch {
     /// Pause live indexing (the watcher's updates and background rebuilds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<bool>,
+    /// Replace the index roots (resolved by the engine; `~` expands to the
+    /// engine's `$HOME`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roots: Option<Vec<String>>,
     /// Replace the excluded-directory list (resolved by the engine; `~` expands
     /// to the engine's `$HOME`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -21,7 +21,7 @@ panes           sidebar | central view | preview/details;  below: view tabs · b
 
 **Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (advanced search,
 content, regex, fuzzy, multiline, case, hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
-excluded folders, saved searches, restore from trash, index diagnostics, bulk rename) · Settings (settings, zoom) · Help (about, shortcuts). The six
+excluded folders, saved searches, restore from trash, index diagnostics, bulk rename, indexed roots) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
 
@@ -249,6 +249,12 @@ folders…** edits `config.exclude_dirs` — exact directory trees to skip, one 
 home) — and saves `config.json` with a live rebuild; right-clicking a folder result ▸ **Exclude
 folder from the index** adds one on the spot, and the sidebar's **Excluded folders (N)…** row
 shows the count and opens the dialog ([`config.md`](config.md)).
+
+**Tools ▸ Indexed roots…** edits `config.roots` — the directories the index covers, one path per
+line (`~` = home; an empty list indexes home) — and **Save & rebuild** writes `config.json` and
+reindexes over the new set, with each root's entry count shown beside it. Adding or removing a
+root takes effect at once for search; the *watcher* only begins watching a brand-new root at the
+next start.
 
 **Tools ▸ Index diagnostics…** (also in the palette) opens a read-only snapshot: the backend and
 state, files and folders, base entries, pending overlay changes, paths skipped (typically

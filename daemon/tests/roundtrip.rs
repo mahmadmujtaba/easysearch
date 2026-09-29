@@ -66,6 +66,8 @@ fn isolated_env(dir: &Path, root: &Path) -> Vec<(String, String)> {
 struct Fixture {
     _dir: TestDir,
     child: ChildEngine,
+    /// The fixture root, which the isolated config sets as the index root.
+    root: PathBuf,
 }
 
 impl Fixture {
@@ -79,7 +81,11 @@ impl Fixture {
         let envs = isolated_env(&dir.0, &root);
         let exe = PathBuf::from(env!("CARGO_BIN_EXE_easysearch-daemon"));
         let child = ChildEngine::spawn(&exe, &[], &envs, None).expect("spawn the engine");
-        Fixture { _dir: dir, child }
+        Fixture {
+            _dir: dir,
+            child,
+            root,
+        }
     }
 
     /// Poll the engine's status until `check` is satisfied.
@@ -181,6 +187,24 @@ fn pausing_indexing_round_trips() {
 
     fixture.child.set_paused(false).unwrap();
     fixture.wait_for("resumed", |r| !r.status.paused);
+}
+
+#[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
+fn index_roots_round_trip_through_the_child() {
+    let fixture = Fixture::new("roots");
+    fixture.wait_for("a live index", |r| r.status.state == State::Live);
+
+    // The isolated config points at the fixture root.
+    let configured = fixture.root.to_string_lossy().into_owned();
+    fixture.wait_for("the configured root", |r| {
+        r.status.roots == [configured.clone()]
+    });
+
+    // Replace it with the fixture's subfolder and see it recorded.
+    let sub = fixture.root.join("folder").to_string_lossy().into_owned();
+    fixture.child.set_roots(vec![sub.clone()]).unwrap();
+    fixture.wait_for("the replaced root", |r| r.status.roots == [sub.clone()]);
 }
 
 #[test]

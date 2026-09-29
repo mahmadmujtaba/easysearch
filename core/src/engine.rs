@@ -88,6 +88,10 @@ pub struct Status {
     /// held back). Live-toggleable via [`Engine::set_paused`].
     #[serde(default)]
     pub paused: bool,
+    /// The index roots in force (as configured; `~` and relative paths shown
+    /// unresolved). Live-editable via [`Engine::set_roots`].
+    #[serde(default)]
+    pub roots: Vec<String>,
     /// Directory subtrees excluded from the index (as configured; `~` and
     /// relative paths are shown unresolved). Live-editable via
     /// [`Engine::set_exclude_dirs`].
@@ -111,6 +115,7 @@ impl Default for Status {
             follow_symlinks: false,
             last_index_at: 0,
             paused: false,
+            roots: Vec::new(),
             exclude_dirs: Vec::new(),
         }
     }
@@ -179,6 +184,7 @@ impl Engine {
             follow_symlinks: config.follow_symlinks,
             last_index_at: 0,
             paused: false,
+            roots: config.roots.clone(),
             exclude_dirs: config.exclude_dirs.clone(),
         }));
         let cache = Arc::new(ContentIndex::new(
@@ -348,7 +354,7 @@ impl Engine {
         std::thread::Builder::new()
             .name("resync".into())
             .spawn(move || {
-                for root in &roots.roots {
+                for root in &roots.roots() {
                     walk_root_apply(
                         root,
                         &overlay,
@@ -398,6 +404,49 @@ impl Engine {
         self.roots.exclude_dirs()
     }
 
+    /// Replace the index roots (resolved by the engine) and, by default, rebuild
+    /// so the index matches the new set at once.
+    ///
+    /// Live watching of a *newly added* root only begins at the next start; the
+    /// rebuild already indexes its contents, so search results are correct
+    /// immediately.
+    pub fn set_roots(&self, roots: Vec<String>, rebuild: bool) {
+        let mut config = self.config.clone();
+        config.roots = roots;
+        self.roots.set_roots(config.effective_roots());
+        if let Ok(mut s) = self.status.write() {
+            s.roots = config.roots.clone();
+        }
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// The index roots in force (resolved absolute paths).
+    pub fn roots(&self) -> Vec<PathBuf> {
+        self.roots.roots()
+    }
+
+    /// The walk fingerprint over the *live* roots and exclusions (see
+    /// [`Config::walk_fingerprint`]). A live change would otherwise look like a
+    /// mismatch on the next start and trigger a needless rebuild.
+    fn walk_key(&self) -> String {
+        let mut config = self.config.clone();
+        config.roots = self
+            .roots
+            .roots()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        config.exclude_dirs = self
+            .roots
+            .exclude_dirs()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        config.walk_fingerprint()
+    }
+
     /// Turn the optional background content cache on or off.
     ///
     /// Switching it on is lazy (documents are cached as they are searched) and
@@ -430,7 +479,7 @@ impl Engine {
         // changed), otherwise serve from it at once and re-validate in the
         // background — the same shape as the mmap path below.
         if let Some(db) = self.sqlite.clone() {
-            let walk_key = self.config.walk_fingerprint();
+            let walk_key = self.walk_key();
             let needs_rebuild = db
                 .lock()
                 .map(|d| d.needs_rebuild(&walk_key))
@@ -516,7 +565,7 @@ impl Engine {
                         }
                         trim_allocator();
                     } else {
-                        for root in &roots.roots {
+                        for root in &roots.roots() {
                             walk_root_apply(
                                 root,
                                 &overlay,
@@ -592,7 +641,7 @@ impl Engine {
                                     opts.clone(),
                                 );
                             } else {
-                                for root in &roots.roots {
+                                for root in &roots.roots() {
                                     walk_root_apply(
                                         root,
                                         &overlay,
@@ -610,7 +659,7 @@ impl Engine {
         };
 
         let handle = watcher::start_watcher(
-            self.roots.roots.clone(),
+            self.roots.roots(),
             overlay,
             roots,
             cache,
@@ -644,7 +693,7 @@ impl Engine {
             let rebuilding = Arc::clone(&self.rebuilding);
             let counts_cache = Arc::clone(&self.counts_cache);
             let opts = self.walk_options();
-            let walk_key = self.config.walk_fingerprint();
+            let walk_key = self.walk_key();
             std::thread::Builder::new()
                 .name("sqlite-rebuild".into())
                 .spawn(move || {
@@ -1259,7 +1308,7 @@ fn build_entries(
     opts: walker::WalkOptions,
 ) -> Vec<(PathBuf, Meta)> {
     let mut out = Vec::new();
-    for root in &roots.roots {
+    for root in &roots.roots() {
         out.extend(walk_root_collect(root, roots, queue, status, opts.clone()));
     }
     out

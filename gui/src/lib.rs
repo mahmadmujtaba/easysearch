@@ -1076,6 +1076,7 @@ enum PaletteAction {
     RebuildIndex,
     TogglePause,
     BulkRename,
+    IndexedRoots,
     Advanced,
     FindHash,
     Export,
@@ -1377,6 +1378,12 @@ struct App {
     bulk_number_start: u64,
     bulk_number_pad: usize,
     bulk_msg: Option<String>,
+    /// The “Indexed roots” dialog: the editable list, a status line and the
+    /// per-root entry counts shown beside it.
+    show_roots: bool,
+    roots_text: String,
+    roots_msg: Option<String>,
+    roots_counts: Vec<u64>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1673,6 +1680,10 @@ impl App {
             bulk_number_start: 1,
             bulk_number_pad: 2,
             bulk_msg: None,
+            show_roots: false,
+            roots_text: String::new(),
+            roots_msg: None,
+            roots_counts: Vec::new(),
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -2403,6 +2414,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Rebuild index", RebuildIndex),
         ("Pause / resume indexing", TogglePause),
         ("Bulk rename…", BulkRename),
+        ("Indexed roots…", IndexedRoots),
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
@@ -5083,6 +5095,7 @@ impl eframe::App for App {
             || self.open_with_target.is_some()
             || self.show_diagnostics
             || self.show_bulk
+            || self.show_roots
             || self.rename_target.is_some()
             || self.show_advanced
             || self.show_palette;
@@ -5389,6 +5402,9 @@ impl eframe::App for App {
         }
         if self.show_bulk {
             self.bulk_rename_dialog(ctx);
+        }
+        if self.show_roots {
+            self.roots_dialog(ctx);
         }
         if self.show_advanced {
             self.advanced_dialog(ctx);
@@ -5947,6 +5963,14 @@ impl App {
                             }
                             if ui.button("Excluded folders…").clicked() {
                                 self.open_excludes_dialog();
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button("Indexed roots…")
+                                .on_hover_text("Add or remove the directories that are indexed.")
+                                .clicked()
+                            {
+                                self.open_roots_dialog();
                                 ui.close_menu();
                             }
                             if ui.button("Save current search…").clicked() {
@@ -7230,6 +7254,7 @@ impl App {
                 self.status.paused = paused;
             }
             PaletteAction::BulkRename => self.open_bulk_rename(),
+            PaletteAction::IndexedRoots => self.open_roots_dialog(),
             PaletteAction::Advanced => self.open_advanced(),
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
@@ -7844,6 +7869,12 @@ impl App {
                             s.exclude_dirs.len().to_string(),
                             t.text,
                         );
+                        let roots = if s.roots.is_empty() {
+                            "home (default)".to_string()
+                        } else {
+                            format!("{} ({})", s.roots.len(), s.roots.join(", "))
+                        };
+                        row(ui, "Index roots", roots, t.text);
                     });
                 if s.skipped > 0 {
                     ui.add_space(4.0);
@@ -9914,6 +9945,159 @@ impl App {
                     ));
                 }
                 Err(e) => self.exclude_msg = Some(format!("Cannot save config: {e}")),
+            }
+        }
+    }
+
+    // --- index roots ------------------------------------------------------
+
+    /// Open the “Indexed roots” dialog, loaded from `config.json`.
+    fn open_roots_dialog(&mut self) {
+        let cfg = easysearch_core::Config::load();
+        self.roots_text = cfg.roots.join("\n");
+        self.roots_msg = None;
+        self.roots_counts = Vec::new();
+        for root in &cfg.roots {
+            self.roots_counts.push(self.count_under(root));
+        }
+        self.show_roots = true;
+    }
+
+    /// How many entries are indexed under `root` (0 when it cannot be resolved).
+    fn count_under(&self, root: &str) -> u64 {
+        let path = if let Some(rest) = root.trim().strip_prefix('~') {
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            let home = self.home_path();
+            if rest.is_empty() {
+                home
+            } else {
+                home.join(rest)
+            }
+        } else {
+            PathBuf::from(root.trim())
+        };
+        let q = Query {
+            under: Some(path.display().to_string()),
+            include_hidden: true,
+            limit: 1,
+            ..Query::default()
+        };
+        self.engine.count(&q).unwrap_or(0)
+    }
+
+    /// Manage the directories the index covers, one per line.
+    fn roots_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_roots {
+            return;
+        }
+        let t = self.theme();
+        let config_path = easysearch_core::Config::default_path();
+        let mut open = true;
+        let mut close = false;
+        let mut save = false;
+        let mut reload = false;
+        egui::Window::new("Indexed roots")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(560.0)
+            .default_height(430.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Directories the index covers, one per line. `~` means home; an empty list
+                         indexes home. Adding a root grows the index; removing one drops its
+                         entries on the next rebuild. Live watching of a new root begins at the
+                         next start.",
+                    )
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("config.json ▸ roots").strong());
+                ui.label(
+                    egui::RichText::new(config_path.display().to_string())
+                        .monospace()
+                        .size(11.0)
+                        .color(t.faint),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.roots_text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(6)
+                                .hint_text("~/Projects\n/mnt/data"),
+                        );
+                    });
+                // Per-root entry counts, so each root's share is visible.
+                if !self.roots_counts.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Current roots").strong());
+                    let roots: Vec<String> = self.roots_text.lines().map(str::to_string).collect();
+                    for (root, count) in roots.iter().zip(self.roots_counts.iter()) {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(root.trim())
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(t.text),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{} entries", human_count(*count)))
+                                    .size(10.5)
+                                    .color(t.faint),
+                            );
+                        });
+                    }
+                }
+                if let Some(msg) = &self.roots_msg {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(msg).size(11.5).color(t.dim));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Save & rebuild")
+                        .on_hover_text("Write config.json and reindex over these roots.")
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui.button("Reload").clicked() {
+                        reload = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        self.show_roots = open && !close;
+        if reload {
+            let cfg = easysearch_core::Config::load();
+            self.roots_text = cfg.roots.join("\n");
+            self.roots_msg = Some("Reloaded from config.json.".to_string());
+        }
+        if save {
+            let mut cfg = easysearch_core::Config::load();
+            cfg.roots = self
+                .roots_text
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            self.roots_text = cfg.roots.join("\n");
+            match cfg.save() {
+                Ok(()) => {
+                    self.engine.set_roots(cfg.roots.clone());
+                    self.roots_msg =
+                        Some(format!("Saved {} root(s) — reindexing…", cfg.roots.len()));
+                    self.roots_counts = cfg.roots.iter().map(|r| self.count_under(r)).collect();
+                }
+                Err(e) => self.roots_msg = Some(format!("Cannot save config: {e}")),
             }
         }
     }
