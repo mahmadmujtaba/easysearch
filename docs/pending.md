@@ -85,9 +85,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 
 - **Filter-within-results** box — narrow the visible list without re-querying. **Done.**
 - **Query tokens** — `ext:pdf size:>10MB modified:today folder: parent: file:`, plus `|`
-  (OR) and quoted phrases; most map onto fields `Query` already has. **Done** for
-  `ext:`, `size:`, `modified:`, `in:`/`under:`, `file:` and quoted phrases; **still
-  open**: `folder:`/`parent:` and `|` (OR).
+  (OR) and quoted phrases; most map onto fields `Query` already has. **Done**
+  (`ext:`, `size:`, `modified:`, `in:`/`under:`, `folder:`/`parent:`, `file:`, `|`
+  OR among one term's alternatives, and quoted phrases).
 - **Advanced Search** dialog — a builder that composes those tokens. **Done**
   (Search ▸ Advanced search…).
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
@@ -107,7 +107,6 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   stream new matches.
 - **Multiple index roots** managed in the UI, each with its own count and status.
 - **Bulk rename** by pattern (find/replace, numbering).
-- **Two-pane copy/move**.
 - **Drag rows out** to a file manager or another app (XDG drag-and-drop).
 
 ### L — large

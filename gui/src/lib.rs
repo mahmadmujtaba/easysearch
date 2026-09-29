@@ -36,7 +36,8 @@ const DEBOUNCE_MS: u128 = 120;
 /// The query cheat-sheet, shown on hover over the search bar (it used to be a
 /// sidebar section).
 const SEARCH_TIPS: &str = "Queries:  *.pdf glob  ·  a b all terms  ·  \"a b\" phrase  ·  \
-!draft exclude  ·  ext:pdf  ·  size:>1MB  ·  modified:today  ·  in:/path  ·  file:  ·  .* regex";
+!draft exclude  ·  a|b either  ·  ext:pdf  ·  size:>1MB  ·  modified:today  ·  \
+in:/path  ·  folder:docs  ·  file:  ·  .* regex";
 
 /// Content search (ripgrep over whole files) is held back until the pattern has
 /// at least this many characters: a one- or two-letter pattern would scan the

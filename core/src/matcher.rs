@@ -112,8 +112,9 @@ impl Default for Query {
 /// Recognised keys: `ext:` (extensions), `size:` (`>`, `<`, `>=`, `<=`, `a..b`, and
 /// B/KB/MB/GB/TB units, binary), `modified:`/`mod:`/`date:` (`today`, `yesterday`,
 /// `week`, `month`, `year`, or `Nd`/`Nw`/`Nh`), `in:`/`under:` (a directory
-/// prefix) and `file:` (files only). Anything else keeps its literal meaning, so
-/// `time:12:30` still matches that text.
+/// prefix), `folder:`/`parent:` (the containing directory's *name*) and `file:`
+/// (files only). Anything else keeps its literal meaning, so `time:12:30` still
+/// matches that text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QueryTokens {
     pub extensions: Vec<String>,
@@ -121,6 +122,7 @@ pub struct QueryTokens {
     pub max_size: Option<u64>,
     pub modified_within_secs: Option<i64>,
     pub under: Option<String>,
+    pub folder: Option<String>,
     pub files_only: bool,
 }
 
@@ -162,7 +164,14 @@ fn split_terms(name: &str) -> Vec<(String, bool)> {
 /// Parse `key:value` filter tokens out of `name`, returning the remaining terms
 /// (to match) and the filters they specified.
 pub fn parse_query_tokens(name: &str) -> (Vec<String>, QueryTokens) {
-    let mut kept: Vec<String> = Vec::new();
+    let (kept, toks) = parse_query_terms(name);
+    (kept.into_iter().map(|(term, _)| term).collect(), toks)
+}
+
+/// [`parse_query_tokens`] keeping each term's *quoted* flag, so the caller knows
+/// whether a `|` inside it is an OR separator or literal text.
+fn parse_query_terms(name: &str) -> (Vec<(String, bool)>, QueryTokens) {
+    let mut kept: Vec<(String, bool)> = Vec::new();
     let mut toks = QueryTokens::default();
     for (term, quoted) in split_terms(name) {
         if term.is_empty() {
@@ -202,12 +211,20 @@ pub fn parse_query_tokens(name: &str) -> (Vec<String>, QueryTokens) {
                 toks.under = Some(v.to_string());
                 continue;
             }
+            if let Some(v) = term
+                .strip_prefix("folder:")
+                .or_else(|| term.strip_prefix("parent:"))
+                && !v.is_empty()
+            {
+                toks.folder = Some(v.to_string());
+                continue;
+            }
             if term == "file:" || term == "files:" {
                 toks.files_only = true;
                 continue;
             }
         }
-        kept.push(term);
+        kept.push((term, quoted));
     }
     (kept, toks)
 }
@@ -371,7 +388,10 @@ impl Term {
 /// A compiled, runnable query.
 #[derive(Clone, Debug)]
 pub struct CompiledQuery {
-    pub terms: Vec<Term>,
+    /// Positive name terms, grouped by the term the user typed: a path matches
+    /// when *every* group has at least one matching term (a space is an AND, a
+    /// `|` inside one term is an OR).
+    pub or_groups: Vec<Vec<Term>>,
     pub excludes: Vec<Term>,
     pub case_sensitive: bool,
     pub include_hidden: bool,
@@ -380,6 +400,8 @@ pub struct CompiledQuery {
     pub category: Category,
     pub include_dirs: bool,
     pub under: Option<String>,
+    /// `folder:`/`parent:` — the containing directory's name must match.
+    pub folder: Option<Term>,
     /// Canonicalised extension filter (see [`Query::extensions`]); empty = off.
     pub extensions: Vec<String>,
     pub min_size: Option<u64>,
@@ -399,10 +421,10 @@ impl CompiledQuery {
         let ci = !q.case_sensitive;
         // Pull out `key:value` filter tokens (Everything-style); the rest is the
         // name query. Quoted terms stay literal, so `"ext:pdf"` matches that text.
-        let (kept, toks) = parse_query_tokens(&q.name);
-        let mut terms = Vec::new();
+        let (kept, toks) = parse_query_terms(&q.name);
+        let mut or_groups: Vec<Vec<Term>> = Vec::new();
         let mut excludes = Vec::new();
-        for raw in &kept {
+        for (raw, quoted) in &kept {
             let (neg, tok) = match raw.strip_prefix('!') {
                 Some(rest) => (true, rest),
                 None => (false, raw.as_str()),
@@ -410,13 +432,34 @@ impl CompiledQuery {
             if tok.is_empty() {
                 continue;
             }
-            let term = compile_term(tok, q.regex_mode, ci, q.fuzzy && !neg)?;
             if neg {
-                excludes.push(term);
+                // An exclusion stays a single literal term (fuzzy never applies).
+                excludes.push(compile_term(tok, q.regex_mode, ci, false)?);
+                continue;
+            }
+            // A `|` splits one term into alternatives and binds tighter than the
+            // implicit AND, as in Everything: `foo bar|baz` is `foo AND (bar OR
+            // baz)`. In regex mode `|` is the regex alternation, and a quoted
+            // term is literal, so neither is split.
+            let parts: Vec<&str> = if q.regex_mode || *quoted {
+                vec![tok]
             } else {
-                terms.push(term);
+                tok.split('|').filter(|s| !s.is_empty()).collect()
+            };
+            let mut group = Vec::new();
+            for part in parts {
+                group.push(compile_term(part, q.regex_mode, ci, q.fuzzy)?);
+            }
+            if !group.is_empty() {
+                or_groups.push(group);
             }
         }
+        // `folder:`/`parent:` matches the parent directory's name; it is a
+        // pattern, never a fuzzy one.
+        let folder = match toks.folder.as_deref() {
+            Some(f) => Some(compile_term(f, q.regex_mode, ci, false)?),
+            None => None,
+        };
         // Canonicalise the extension filter: trim, strip one leading '.',
         // lowercase, drop empties, dedupe (order preserved). An `ext:` token
         // overrides the query's own list.
@@ -446,8 +489,9 @@ impl CompiledQuery {
                 "min_size ({min} bytes) is greater than max_size ({max} bytes)"
             ));
         }
+        let has_name_filter = !or_groups.is_empty() || !excludes.is_empty() || folder.is_some();
         Ok(CompiledQuery {
-            terms,
+            or_groups,
             excludes,
             case_sensitive: q.case_sensitive,
             include_hidden: q.include_hidden,
@@ -460,6 +504,7 @@ impl CompiledQuery {
                 q.include_dirs
             },
             under: toks.under.clone().or_else(|| q.under.clone()),
+            folder,
             extensions,
             min_size,
             max_size,
@@ -467,7 +512,7 @@ impl CompiledQuery {
             limit: q.limit.max(1),
             multiline: q.multiline,
             content_or_name: q.content_or_name,
-            has_name_filter: !kept.is_empty(),
+            has_name_filter,
         })
     }
 
@@ -486,12 +531,27 @@ impl CompiledQuery {
 
     /// Match one indexed path against the name terms.
     pub fn name_matches(&self, path: &Path) -> bool {
+        // `folder:`/`parent:` looks at the containing directory's name.
+        if let Some(folder) = &self.folder {
+            let dir = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !folder.is_match(&dir) {
+                return false;
+            }
+        }
         let target: &Path = match path.file_name() {
             Some(name) if !self.full_path => name.as_ref(),
             _ => path,
         };
         let text = target.to_string_lossy();
-        let all = self.terms.iter().all(|t| t.is_match(&text));
+        // Every group must match; within a group, one alternative is enough.
+        let all = self
+            .or_groups
+            .iter()
+            .all(|group| group.iter().any(|t| t.is_match(&text)));
         let none_excluded = !self.excludes.iter().any(|t| t.is_match(&text));
         all && none_excluded
     }
@@ -933,7 +993,7 @@ mod tests {
         // An unparseable value stays a literal term.
         let cq = q("size:big", false);
         assert_eq!(cq.min_size, None);
-        assert_eq!(cq.terms.len(), 1);
+        assert_eq!(cq.or_groups.len(), 1);
     }
 
     #[test]
@@ -947,7 +1007,61 @@ mod tests {
     fn file_token_is_files_only() {
         let cq = q("file: notes", false);
         assert!(!cq.include_dirs);
-        assert_eq!(cq.terms.len(), 1);
+        assert_eq!(cq.or_groups.len(), 1);
+    }
+
+    #[test]
+    fn a_pipe_is_an_or_within_one_term() {
+        let cq = q("*.jpg|*.png", false);
+        assert!(cq.name_matches(Path::new("/x/a.jpg")));
+        assert!(cq.name_matches(Path::new("/x/a.png")));
+        assert!(!cq.name_matches(Path::new("/x/a.gif")));
+    }
+
+    #[test]
+    fn space_is_and_and_pipe_binds_tighter() {
+        // `foo bar|baz` is `foo AND (bar OR baz)`.
+        let cq = q("invoice 2025|2026", false);
+        assert!(cq.name_matches(Path::new("/x/invoice-2026-03.pdf")));
+        assert!(cq.name_matches(Path::new("/x/invoice-2025-03.pdf")));
+        assert!(!cq.name_matches(Path::new("/x/receipt-2026.pdf")));
+        assert!(!cq.name_matches(Path::new("/x/invoice-2024.pdf")));
+    }
+
+    #[test]
+    fn a_quoted_pipe_stays_literal() {
+        let cq = q("\"a|b\"", false);
+        assert!(cq.name_matches(Path::new("/x/a|b.txt")));
+        assert!(!cq.name_matches(Path::new("/x/a.txt")));
+    }
+
+    #[test]
+    fn a_regex_pipe_is_not_split() {
+        // In regex mode `|` is the regex alternation, not a token separator.
+        let cq = q("^(draft|final).pdf$", true);
+        assert!(cq.name_matches(Path::new("draft.pdf")));
+        assert!(cq.name_matches(Path::new("final.pdf")));
+        assert!(!cq.name_matches(Path::new("other.pdf")));
+        assert_eq!(cq.or_groups.len(), 1, "one regex term, not two");
+    }
+
+    #[test]
+    fn folder_and_parent_tokens_match_the_directory_name() {
+        let cq = q("folder:docs", false);
+        assert!(cq.name_matches(Path::new("/home/a/docs/report.pdf")));
+        assert!(
+            cq.name_matches(Path::new("/srv/Docs/notes.txt")),
+            "case-insensitive"
+        );
+        assert!(!cq.name_matches(Path::new("/home/a/downloads/report.pdf")));
+        // `parent:` is an alias, and matches a deeper path's immediate folder.
+        let cq = q("parent:downloads", false);
+        assert!(cq.name_matches(Path::new("/home/a/downloads/report.pdf")));
+        assert!(!cq.name_matches(Path::new("/home/a/downloads/old/report.pdf")));
+        // A folder-only token still counts as a name filter.
+        let cq = q("folder:docs", false);
+        assert!(cq.has_name_filter);
+        assert_eq!(cq.or_groups.len(), 0);
     }
 
     #[test]

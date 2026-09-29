@@ -1081,8 +1081,9 @@ impl Engine {
 /// without also demanding that the name match.
 fn without_name(cq: &CompiledQuery) -> CompiledQuery {
     let mut bare = cq.clone();
-    bare.terms.clear();
+    bare.or_groups.clear();
     bare.excludes.clear();
+    bare.folder = None;
     bare.has_name_filter = false;
     bare
 }

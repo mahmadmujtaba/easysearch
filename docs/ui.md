@@ -62,10 +62,12 @@ that query and takes precedence over the matching filter control:
 | You type | Meaning |
 |---|---|
 | `"a b"` | a phrase — one term that may contain spaces |
+| `a|b` | either `a` or `b` (one term — binds tighter than the space/AND) |
 | `ext:pdf,doc` | only these extensions (a leading `.` is optional) |
 | `size:>10MB` | size bounds: `>`, `<`, `>=`, `<=`, or `a..b`; units `B`/`KB`/`MB`/`GB`/`TB` (binary) |
 | `modified:today` | modified within `today` / `yesterday` / `week` / `month` / `year`, or `7d` / `12h` / `2w` |
 | `in:/var/log` | only paths under this directory (`under:` works too) |
+| `folder:docs` | only files whose immediate folder's *name* matches (`parent:` works too) |
 | `file:` | files only |
 
 An unrecognised `key:value` (like `time:12:30`) is matched literally.
