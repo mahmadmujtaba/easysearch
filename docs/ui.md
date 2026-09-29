@@ -158,8 +158,10 @@ its filters, and tabs and history live in `~/.config/easysearch/gui.json`.
 ## Finding duplicates
 
 Right-click ▸ **Find duplicates in results…** (or **in selection** with rows checked) scans for
-files with *identical contents*. Only files count and empty files are ignored; candidates are
-grouped by size and compared by size + the first 64 KiB before being hashed in full (SHA-256);
+files with *identical contents*. Only files count, empty files are ignored, and hardlinks to
+one inode are collapsed to a single entry (the same file is not its own duplicate); candidates
+are grouped by size and compared by size + the first 64 KiB before being hashed in full
+(SHA-256);
 groups of more than one are shown largest waste first, capped at 50 000 candidates (`scan
 capped` past that).
 

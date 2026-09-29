@@ -3017,11 +3017,17 @@ fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) ->
 
     let mut by_size: std::collections::HashMap<u64, Vec<PathBuf>> =
         std::collections::HashMap::new();
+    // Hardlinks to one file are the same file, not duplicates: keep one path per
+    // (device, inode) so they are never reported against each other.
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     for p in paths {
         if let Ok(md) = std::fs::metadata(p)
             && md.is_file()
             && md.len() > 0
         {
+            if !seen.insert(inode_key(&md)) {
+                continue;
+            }
             by_size.entry(md.len()).or_default().push(p.clone());
         }
     }
@@ -3086,6 +3092,12 @@ fn find_duplicates(paths: &[PathBuf], progress: &mut dyn FnMut(usize, usize)) ->
         extra_bytes,
         capped,
     }
+}
+
+/// `(device, inode)` for an open handle to a file, so hardlinks collapse to one.
+fn inode_key(md: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (md.dev(), md.ino())
 }
 
 /// The most recently modified path in `paths` (ties broken by name). Used as
@@ -11031,6 +11043,24 @@ mod tests {
         assert!(hash_eq("AABBCC", "aabbcc"));
         assert!(hash_eq("aabbcc", "  AABBCC  "));
         assert!(!hash_eq("aabbcc", "aabbcd"));
+    }
+
+    #[test]
+    fn duplicates_ignore_hardlinks() {
+        let dir = std::env::temp_dir().join(format!("easysearch-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        std::fs::write(&a, b"same bytes here").unwrap();
+        let b = dir.join("b.txt");
+        std::fs::hard_link(&a, &b).unwrap();
+        let c = dir.join("c.txt");
+        std::fs::write(&c, b"same bytes here").unwrap();
+        let report = find_duplicates(&[a, b, c], &mut |_, _| {});
+        // a and b share an inode, so only one survives; it groups with c.
+        assert_eq!(report.groups.len(), 1);
+        assert_eq!(report.groups[0].paths.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

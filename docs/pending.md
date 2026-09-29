@@ -71,7 +71,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 
 - **Copy as…** — copy the paths as `file://` URIs or shell-escaped. **Done.**
 - Keyboard extras on the results: `Ctrl+Enter` open containing folder, `F5` re-run
-  the search, `Alt+↑` go to the parent location.
+  the search, `Alt+↑` go to the parent location. **Done.**
 - Export the current results as CSV / TSV / JSON. **Done.**
 - **Open at login** — a toggle that writes an XDG autostart entry (or a systemd
   user unit). **Done** (Settings ▸ Startup).
@@ -79,7 +79,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   hash…, over the visible results).
 - Extra cleanup filters — empty files/folders and broken symlinks. **Done** (results-header
   checkboxes).
-- Duplicate finder: ignore hardlinks / same-inode files.
+- Duplicate finder: ignore hardlinks / same-inode files. **Done.**
 
 ### M — medium
 
