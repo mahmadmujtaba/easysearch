@@ -91,7 +91,11 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Advanced Search** dialog — a builder that composes those tokens. **Done**
   (Search ▸ Advanced search…).
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
-  Permissions / Inode / Link count, persisted per tab.
+  Permissions / Inode / Link count, persisted per tab. **Partly done**: the
+  Columns menu toggles and reorders the existing columns and adds an
+  **Extension** column, persisted in `gui.json` (globally, not per tab). The
+  stat-based columns — Owner / Group / Permissions / Inode / Link count — are
+  **still open** (they need a per-row `stat`, which the table does not do yet).
 - **Rename in place** (`F2`) with clobber checks. **Done.**
 - **Restore from Trash** in-app — list trashed items with original paths. **Done**
   (Tools ▸ Restore from Trash…, also in the command palette).

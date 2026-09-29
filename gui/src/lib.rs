@@ -733,6 +733,9 @@ struct GuiPrefs {
     /// Pause live indexing automatically when a thermal zone runs hot.
     #[serde(default)]
     throttle_when_hot: bool,
+    /// The result columns shown, in order (see [`ColumnKind`]).
+    #[serde(default = "default_columns")]
+    columns: Vec<ColumnKind>,
 }
 
 impl Default for GuiPrefs {
@@ -755,6 +758,7 @@ impl Default for GuiPrefs {
             pause_indexing: false,
             throttle_on_battery: false,
             throttle_when_hot: false,
+            columns: default_columns(),
         }
     }
 }
@@ -979,6 +983,85 @@ impl ExportFormat {
             ExportFormat::Json => "json",
         }
     }
+}
+
+/// One result column: its width, and whether it is the flexible (remainder) one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ColumnKind {
+    /// The row number.
+    Num,
+    /// The file name (takes the remaining width).
+    Name,
+    Path,
+    /// The kind pill (folder, image, …) — the `Type` column.
+    Kind,
+    Size,
+    Modified,
+    Created,
+    Match,
+    Relevance,
+    Extension,
+}
+
+impl ColumnKind {
+    /// Every column, in the default order (the schema the chooser lists).
+    const ALL: &'static [ColumnKind] = &[
+        ColumnKind::Num,
+        ColumnKind::Name,
+        ColumnKind::Path,
+        ColumnKind::Kind,
+        ColumnKind::Size,
+        ColumnKind::Modified,
+        ColumnKind::Created,
+        ColumnKind::Match,
+        ColumnKind::Relevance,
+        ColumnKind::Extension,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ColumnKind::Num => "#",
+            ColumnKind::Name => "Name",
+            ColumnKind::Path => "Path",
+            ColumnKind::Kind => "Type",
+            ColumnKind::Size => "Size",
+            ColumnKind::Modified => "Modified",
+            ColumnKind::Created => "Created",
+            ColumnKind::Match => "Match",
+            ColumnKind::Relevance => "Relevance",
+            ColumnKind::Extension => "Extension",
+        }
+    }
+
+    /// The fixed width in points; `Name` is the remainder column and reports 0.
+    fn width(self) -> f32 {
+        match self {
+            ColumnKind::Num => 28.0,
+            ColumnKind::Name => 0.0,
+            ColumnKind::Path => 142.0,
+            ColumnKind::Kind => 58.0,
+            ColumnKind::Size => 74.0,
+            ColumnKind::Modified => 92.0,
+            ColumnKind::Created => 92.0,
+            ColumnKind::Match => 120.0,
+            ColumnKind::Relevance => 74.0,
+            ColumnKind::Extension => 64.0,
+        }
+    }
+
+    fn is_flexible(self) -> bool {
+        matches!(self, ColumnKind::Name)
+    }
+}
+
+/// The columns shown on a fresh profile: everything but `Extension`.
+fn default_columns() -> Vec<ColumnKind> {
+    ColumnKind::ALL
+        .iter()
+        .copied()
+        .filter(|c| *c != ColumnKind::Extension)
+        .collect()
 }
 
 /// A command offered by the palette (see [`palette_actions`]).
@@ -6644,6 +6727,60 @@ impl App {
                             self.prefs.save();
                         }
                         ui.add_space(10.0);
+                        // Column chooser: toggle and reorder the result columns.
+                        ui.menu_button("Columns", |ui| {
+                            ui.set_min_width(190.0);
+                            let mut toggle: Option<ColumnKind> = None;
+                            let mut mov: Option<(ColumnKind, i32)> = None;
+                            for kind in ColumnKind::ALL.iter().copied() {
+                                let enabled = self.prefs.columns.contains(&kind);
+                                ui.horizontal(|ui| {
+                                    let mut on = enabled;
+                                    if ui.checkbox(&mut on, kind.label()).changed() {
+                                        toggle = Some(kind);
+                                    }
+                                    if enabled {
+                                        if ui.small_button("↑").on_hover_text("Move left").clicked()
+                                        {
+                                            mov = Some((kind, -1));
+                                        }
+                                        if ui
+                                            .small_button("↓")
+                                            .on_hover_text("Move right")
+                                            .clicked()
+                                        {
+                                            mov = Some((kind, 1));
+                                        }
+                                    }
+                                });
+                            }
+                            ui.separator();
+                            let reset = ui.button("Reset columns").clicked();
+                            if let Some(k) = toggle {
+                                if self.prefs.columns.contains(&k) {
+                                    if self.prefs.columns.len() > 1 {
+                                        self.prefs.columns.retain(|c| *c != k);
+                                    }
+                                } else {
+                                    self.prefs.columns.push(k);
+                                }
+                                self.prefs.save();
+                            }
+                            if let Some((k, dir)) = mov
+                                && let Some(i) = self.prefs.columns.iter().position(|c| *c == k)
+                            {
+                                let j = i as i32 + dir;
+                                if j >= 0 && (j as usize) < self.prefs.columns.len() {
+                                    self.prefs.columns.swap(i, j as usize);
+                                    self.prefs.save();
+                                }
+                            }
+                            if reset {
+                                self.prefs.columns = default_columns();
+                                self.prefs.save();
+                            }
+                        });
+                        ui.add_space(10.0);
                         let sort_label = match self.sort {
                             None | Some(Sort::Relevance(_)) => "Relevance",
                             Some(Sort::Name(_)) => "Name",
@@ -8594,7 +8731,8 @@ impl App {
 
         // Column widths are recomputed from the available width every frame so
         // the layout stays stable when the UI zoom (or the window) changes. The
-        // metadata columns keep a fixed size; `Name` takes what is left.
+        // enabled columns come from `prefs.columns` (the chooser); every fixed
+        // column keeps its size and `Name` takes what is left.
         //
         // This deliberately avoids `TableBuilder::resizable`, which caches each
         // column's width in points after the first frame (including the
@@ -8603,40 +8741,25 @@ impl App {
         // Modified / Actions columns were pushed off-screen.
         let spacing = ui.spacing().item_spacing.x;
         let check_w = 24.0_f32;
-        let num_w = 28.0_f32;
-        let path_w = 142.0_f32;
-        let type_w = 58.0_f32;
-        let size_w = 74.0_f32;
-        let mod_w = 92.0_f32;
-        let created_w = 92.0_f32;
-        let match_w = 120.0_f32;
-        let rel_w = 74.0_f32;
-        let fixed = check_w
-            + num_w
-            + path_w
-            + type_w
-            + size_w
-            + mod_w
-            + created_w
-            + match_w
-            + rel_w
-            + spacing * 9.0;
+        let cols = self.prefs.columns.clone();
+        let fixed: f32 = check_w
+            + cols
+                .iter()
+                .filter(|c| !c.is_flexible())
+                .map(|c| c.width())
+                .sum::<f32>()
+            + spacing * cols.len() as f32;
         let name_w = (ui.available_width() - fixed - 2.0).max(90.0);
 
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click()) // rows must sense clicks, not just hover
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(check_w))
-            .column(Column::exact(num_w))
-            .column(Column::exact(name_w))
-            .column(Column::exact(path_w))
-            .column(Column::exact(type_w))
-            .column(Column::exact(size_w))
-            .column(Column::exact(mod_w))
-            .column(Column::exact(created_w))
-            .column(Column::exact(match_w))
-            .column(Column::exact(rel_w));
+            .column(Column::exact(check_w));
+        for c in &cols {
+            let w = if c.is_flexible() { name_w } else { c.width() };
+            table = table.column(Column::exact(w));
+        }
         if let Some(target) = self.scroll_to.take() {
             table = table.scroll_to_row(target, Some(egui::Align::Center));
         }
@@ -8644,63 +8767,79 @@ impl App {
         table
             .header(28.0, |mut header| {
                 header.col(|_| {});
-                header.col(|ui| {
-                    ui.label(egui::RichText::new("#").size(10.5).color(t.faint));
-                });
-                header.col(|ui| {
-                    if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_))).clicked()
-                    {
-                        self.toggle_sort(Sort::Name(true));
-                    }
-                });
-                header.col(|ui| {
-                    ui.label(egui::RichText::new("Path").size(11.0).color(t.faint));
-                });
-                header.col(|ui| {
-                    ui.label(egui::RichText::new("Type").size(11.0).color(t.faint));
-                });
-                header.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Size", self.sort, |s| matches!(s, Sort::Size(_)))
-                            .clicked()
-                        {
-                            self.toggle_sort(Sort::Size(true));
+                for kind in &cols {
+                    header.col(|ui| match kind {
+                        ColumnKind::Num => {
+                            ui.label(egui::RichText::new("#").size(10.5).color(t.faint));
+                        }
+                        ColumnKind::Name => {
+                            if sort_button(ui, "Name", self.sort, |s| matches!(s, Sort::Name(_)))
+                                .clicked()
+                            {
+                                self.toggle_sort(Sort::Name(true));
+                            }
+                        }
+                        ColumnKind::Path => {
+                            ui.label(egui::RichText::new("Path").size(11.0).color(t.faint));
+                        }
+                        ColumnKind::Kind => {
+                            ui.label(egui::RichText::new("Type").size(11.0).color(t.faint));
+                        }
+                        ColumnKind::Size => {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if sort_button(ui, "Size", self.sort, |s| {
+                                    matches!(s, Sort::Size(_))
+                                })
+                                .clicked()
+                                {
+                                    self.toggle_sort(Sort::Size(true));
+                                }
+                            });
+                        }
+                        ColumnKind::Modified => {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if sort_button(ui, "Modified", self.sort, |s| {
+                                    matches!(s, Sort::Mtime(_))
+                                })
+                                .clicked()
+                                {
+                                    self.toggle_sort(Sort::Mtime(true));
+                                }
+                            });
+                        }
+                        ColumnKind::Created => {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if sort_button(ui, "Created", self.sort, |s| {
+                                    matches!(s, Sort::Created(_))
+                                })
+                                .on_hover_text(
+                                    "Birth time, read live (— when the filesystem has none)",
+                                )
+                                .clicked()
+                                {
+                                    self.toggle_sort(Sort::Created(true));
+                                }
+                            });
+                        }
+                        ColumnKind::Match => {
+                            ui.label(egui::RichText::new("Match").size(11.0).color(t.faint));
+                        }
+                        ColumnKind::Relevance => {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if sort_button(ui, "Relevance", self.sort, |s| {
+                                    matches!(s, Sort::Relevance(_))
+                                })
+                                .clicked()
+                                {
+                                    self.toggle_sort(Sort::Relevance(false));
+                                }
+                            });
+                        }
+                        ColumnKind::Extension => {
+                            ui.label(egui::RichText::new("Extension").size(11.0).color(t.faint));
                         }
                     });
-                });
-                header.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Modified", self.sort, |s| matches!(s, Sort::Mtime(_)))
-                            .clicked()
-                        {
-                            self.toggle_sort(Sort::Mtime(true));
-                        }
-                    });
-                });
-                header.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Created", self.sort, |s| matches!(s, Sort::Created(_)))
-                            .on_hover_text("Birth time, read live (— when the filesystem has none)")
-                            .clicked()
-                        {
-                            self.toggle_sort(Sort::Created(true));
-                        }
-                    });
-                });
-                header.col(|ui| {
-                    ui.label(egui::RichText::new("Match").size(11.0).color(t.faint));
-                });
-                header.col(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if sort_button(ui, "Relevance", self.sort, |s| {
-                            matches!(s, Sort::Relevance(_))
-                        })
-                        .clicked()
-                        {
-                            self.toggle_sort(Sort::Relevance(false));
-                        }
-                    });
-                });
+                }
             })
             .body(|body| {
                 let rows = self.results.len();
@@ -8733,127 +8872,179 @@ impl App {
                             toggle = Some(r.path.clone());
                         }
                     });
-                    // Row number.
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new((i + 1).to_string())
-                                    .size(10.5)
-                                    .color(t.faint),
-                            );
-                        });
-                    });
-                    // Name (two-line when cozy).
-                    row.col(|ui| {
-                        let rect = ui.max_rect();
-                        if i == selected {
-                            let bar = egui::Rect::from_min_size(
-                                egui::pos2(rect.min.x, rect.top() + 5.0),
-                                egui::vec2(3.0, (rect.height() - 10.0).max(6.0)),
-                            );
-                            ui.painter()
-                                .rect_filled(bar, egui::CornerRadius::same(2), t.accent);
-                        }
-                        ui.horizontal(|ui| {
-                            type_chip(ui, &t, &r.path, r.is_dir);
-                            ui.add_space(3.0);
-                            if cozy {
-                                ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 1.0;
-                                    ui.label(egui::RichText::new(name).strong().color(t.text));
-                                    breadcrumb_ui(ui, &r.path, t.faint);
-                                });
-                            } else {
-                                ui.label(egui::RichText::new(name).strong().color(t.text));
-                            }
-                            for tag in row_tags.iter().take(2) {
-                                ui.add_space(2.0);
-                                if tag_chip(ui, &t, tag, false)
-                                    .on_hover_text(format!("#{tag} — click to filter"))
-                                    .clicked()
-                                {
-                                    self.pending_cmds.push(RowCmd::FilterTag(tag.clone()));
-                                }
-                            }
-                        });
-                    });
-                    // Path.
-                    row.col(|ui| {
-                        ui.label(
-                            egui::RichText::new(short_dir(&r.path))
-                                .size(11.0)
-                                .color(t.dim),
-                        )
-                        .on_hover_text(r.path.display().to_string());
-                    });
-                    // Type.
-                    row.col(|ui| {
-                        type_pill(ui, &t, &r.path, r.is_dir);
-                    });
-                    // Size.
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(if r.is_dir {
-                                    "—".to_string()
-                                } else {
-                                    human_size(r.size)
-                                })
-                                .color(t.dim),
-                            );
-                        });
-                    });
-                    // Modified.
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(human_time(r.mtime)).color(t.dim));
-                        });
-                    });
-                    // Created (birth time, read live).
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(file_created(&r.path)).color(t.dim));
-                        });
-                    });
-                    // Which query terms this hit matched.
-                    row.col(|ui| {
-                        if terms.is_empty() {
-                            ui.label(egui::RichText::new("—").size(11.0).color(t.faint));
-                        } else {
-                            for term in terms.iter().take(2) {
-                                ui.label(
-                                    egui::RichText::new(*term)
-                                        .size(10.5)
-                                        .monospace()
-                                        .color(t.accent),
+                    for kind in &cols {
+                        row.col(|ui| match kind {
+                            // Row number.
+                            ColumnKind::Num => {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new((i + 1).to_string())
+                                                .size(10.5)
+                                                .color(t.faint),
+                                        );
+                                    },
                                 );
                             }
-                        }
-                    });
-                    // Relevance.
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(format!("{rel}%")).size(10.5).color(
-                                if rel >= 70 {
-                                    t.good
-                                } else if rel >= 40 {
-                                    t.dim
+                            // Name (two-line when cozy).
+                            ColumnKind::Name => {
+                                let rect = ui.max_rect();
+                                if i == selected {
+                                    let bar = egui::Rect::from_min_size(
+                                        egui::pos2(rect.min.x, rect.top() + 5.0),
+                                        egui::vec2(3.0, (rect.height() - 10.0).max(6.0)),
+                                    );
+                                    ui.painter().rect_filled(
+                                        bar,
+                                        egui::CornerRadius::same(2),
+                                        t.accent,
+                                    );
+                                }
+                                ui.horizontal(|ui| {
+                                    type_chip(ui, &t, &r.path, r.is_dir);
+                                    ui.add_space(3.0);
+                                    if cozy {
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 1.0;
+                                            ui.label(
+                                                egui::RichText::new(name.as_str())
+                                                    .strong()
+                                                    .color(t.text),
+                                            );
+                                            breadcrumb_ui(ui, &r.path, t.faint);
+                                        });
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(name.as_str()).strong().color(t.text),
+                                        );
+                                    }
+                                    for tag in row_tags.iter().take(2) {
+                                        ui.add_space(2.0);
+                                        if tag_chip(ui, &t, tag, false)
+                                            .on_hover_text(format!("#{tag} — click to filter"))
+                                            .clicked()
+                                        {
+                                            self.pending_cmds
+                                                .push(RowCmd::FilterTag(tag.clone()));
+                                        }
+                                    }
+                                });
+                            }
+                            ColumnKind::Path => {
+                                ui.label(
+                                    egui::RichText::new(short_dir(&r.path))
+                                        .size(11.0)
+                                        .color(t.dim),
+                                )
+                                .on_hover_text(r.path.display().to_string());
+                            }
+                            ColumnKind::Kind => {
+                                type_pill(ui, &t, &r.path, r.is_dir);
+                            }
+                            ColumnKind::Size => {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(if r.is_dir {
+                                                "—".to_string()
+                                            } else {
+                                                human_size(r.size)
+                                            })
+                                            .color(t.dim),
+                                        );
+                                    },
+                                );
+                            }
+                            ColumnKind::Modified => {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(human_time(r.mtime)).color(t.dim),
+                                        );
+                                    },
+                                );
+                            }
+                            ColumnKind::Created => {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(file_created(&r.path)).color(t.dim),
+                                        );
+                                    },
+                                );
+                            }
+                            ColumnKind::Match => {
+                                if terms.is_empty() {
+                                    ui.label(egui::RichText::new("—").size(11.0).color(t.faint));
                                 } else {
-                                    t.faint
-                                },
-                            ));
-                            let (bar, _) =
-                                ui.allocate_exact_size(egui::vec2(32.0, 4.0), egui::Sense::hover());
-                            ui.painter()
-                                .rect_filled(bar, egui::CornerRadius::same(2), t.stroke);
-                            let filled = egui::Rect::from_min_size(
-                                bar.min,
-                                egui::vec2(bar.width() * (rel as f32 / 100.0), bar.height()),
-                            );
-                            ui.painter()
-                                .rect_filled(filled, egui::CornerRadius::same(2), t.accent);
+                                    for term in terms.iter().take(2) {
+                                        ui.label(
+                                            egui::RichText::new(*term)
+                                                .size(10.5)
+                                                .monospace()
+                                                .color(t.accent),
+                                        );
+                                    }
+                                }
+                            }
+                            ColumnKind::Relevance => {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("{rel}%")).size(10.5).color(
+                                                if rel >= 70 {
+                                                    t.good
+                                                } else if rel >= 40 {
+                                                    t.dim
+                                                } else {
+                                                    t.faint
+                                                },
+                                            ),
+                                        );
+                                        let (bar, _) = ui.allocate_exact_size(
+                                            egui::vec2(32.0, 4.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(
+                                            bar,
+                                            egui::CornerRadius::same(2),
+                                            t.stroke,
+                                        );
+                                        let filled = egui::Rect::from_min_size(
+                                            bar.min,
+                                            egui::vec2(
+                                                bar.width() * (rel as f32 / 100.0),
+                                                bar.height(),
+                                            ),
+                                        );
+                                        ui.painter().rect_filled(
+                                            filled,
+                                            egui::CornerRadius::same(2),
+                                            t.accent,
+                                        );
+                                    },
+                                );
+                            }
+                            ColumnKind::Extension => {
+                                let ext = r
+                                    .path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("");
+                                let text = if r.is_dir || ext.is_empty() {
+                                    "—".to_string()
+                                } else {
+                                    ext.to_ascii_lowercase()
+                                };
+                                ui.label(egui::RichText::new(text).size(10.5).color(t.dim));
+                            }
                         });
-                    });
+                    }
 
                     let row_resp = row.response().clone();
                     // Focus follows the pointer: the highlighted row tracks the
@@ -13394,6 +13585,33 @@ mod tests {
         );
         assert_eq!(resolve_dir_part("", home), PathBuf::from("/home/u"));
         assert_eq!(resolve_dir_part("/srv", home), PathBuf::from("/srv"));
+    }
+
+    #[test]
+    fn the_default_columns_omit_the_extension() {
+        let cols = default_columns();
+        assert!(cols.contains(&ColumnKind::Name));
+        assert!(cols.contains(&ColumnKind::Relevance));
+        assert!(!cols.contains(&ColumnKind::Extension));
+        // Every column has a label and only `Name` is the flexible one.
+        for c in ColumnKind::ALL {
+            assert!(!c.label().is_empty());
+        }
+        assert!(ColumnKind::Name.is_flexible());
+        assert!(!ColumnKind::Size.is_flexible());
+    }
+
+    #[test]
+    fn column_choices_round_trip_in_prefs() {
+        let p: GuiPrefs =
+            serde_json::from_str(r#"{"columns":["name","extension","size"]}"#).unwrap();
+        assert_eq!(
+            p.columns,
+            [ColumnKind::Name, ColumnKind::Extension, ColumnKind::Size]
+        );
+        // An older gui.json without a columns list gets the default set.
+        let p: GuiPrefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.columns, default_columns());
     }
 
     #[test]

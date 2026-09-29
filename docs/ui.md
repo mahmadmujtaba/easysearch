@@ -15,7 +15,7 @@ toolbar         [ < │ > ]  Home  Index  [ Simple │ Regex │ Fuzzy ]  Recent
 search row      [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden  [ ✕ Clear Filters ]
 location bar    Location [ path field, with autocomplete ]  Go  / (everywhere)
-results header  N results · M files indexed · T ms   [ Filter results… ]   Sort by ▾  Cozy Compact
+results header  N results · M files indexed · T ms   [ Filter results… ]   Sort by ▾  Columns ▾  Cozy Compact
 panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
 
@@ -132,6 +132,11 @@ name is checked for clashes before the rename, and the row updates in place. **T
 rename…** renames the whole checked selection at once: a find/replace over the file name (with an
 optional **Add a number** counter, a start and a zero-pad width), a live old → new preview, and
 conflict checks — the **Rename N** button stays disabled until every target is clear.
+
+The **Columns** menu on the results header shows or hides each column (`#`, Name, Path, Type,
+Size, Modified, Created, Match, Relevance, and an **Extension** column off by default) and moves
+them left or right; the choice is stored in `gui.json`. The stat-based columns (owner, group,
+permissions, inode, link count) are not implemented yet.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:
