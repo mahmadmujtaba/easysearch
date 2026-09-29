@@ -714,6 +714,10 @@ struct GuiPrefs {
     multiline: bool,
     /// Whether the “content search uses more memory” warning has been shown.
     content_warning_seen: bool,
+    /// Remembered “Open with…” choice per file extension (`pdf` → desktop-file
+    /// id), so the same app is reused for that kind of file.
+    #[serde(default)]
+    open_with: BTreeMap<String, String>,
 }
 
 impl Default for GuiPrefs {
@@ -732,6 +736,7 @@ impl Default for GuiPrefs {
             fuzzy: false,
             multiline: false,
             content_warning_seen: false,
+            open_with: BTreeMap::new(),
         }
     }
 }
@@ -972,6 +977,7 @@ enum PaletteAction {
     FindHash,
     Export,
     OpenTrash,
+    OpenWith,
     RenameSelected,
     TogglePreview,
     ToggleCozy,
@@ -1202,6 +1208,13 @@ struct App {
     show_palette: bool,
     palette_query: String,
     palette_index: usize,
+    /// The “Open with…” chooser: the target file, its filter text, whether the
+    /// pick is remembered for the extension, and the lazily-loaded app list.
+    open_with_target: Option<PathBuf>,
+    open_with_filter: String,
+    open_with_remember: bool,
+    open_apps: Vec<DesktopApp>,
+    open_apps_loaded: bool,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1496,6 +1509,11 @@ impl App {
             show_palette: false,
             palette_query: String::new(),
             palette_index: 0,
+            open_with_target: None,
+            open_with_filter: String::new(),
+            open_with_remember: true,
+            open_apps: Vec::new(),
+            open_apps_loaded: false,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -1962,6 +1980,130 @@ impl App {
         }
     }
 
+    // --- open with ---------------------------------------------------------
+
+    /// Open `path` with the application `id`, remembering it for the extension
+    /// when the “remember” box is ticked.
+    fn open_path_with(&mut self, path: &Path, id: &str) {
+        let app = self
+            .open_apps
+            .iter()
+            .find(|a| a.id == id)
+            .cloned()
+            .or_else(|| find_desktop_app(id));
+        let Some(app) = app else {
+            self.open_with_target = None;
+            return;
+        };
+        launch_open_with(&app.exec, path);
+        if self.open_with_remember
+            && let Some(ext) = ext_key(path)
+        {
+            self.prefs.open_with.insert(ext, app.id.clone());
+            self.prefs.save();
+        }
+        self.open_with_target = None;
+    }
+
+    /// A chooser over the installed applications, with a search box, a
+    /// remember-for-extension box and the current default made easy to clear.
+    fn open_with_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.open_with_target.clone() else {
+            return;
+        };
+        let t = self.theme();
+        let ext = ext_key(&path);
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let remembered = ext
+            .as_ref()
+            .and_then(|e| self.prefs.open_with.get(e).cloned());
+        let mut choose: Option<String> = None;
+        let mut clear = false;
+        let mut cancel = false;
+        egui::Window::new("Open with")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .default_height(420.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("Open {file_name} with:"))
+                        .strong()
+                        .color(t.text),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.open_with_filter)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Filter applications…"),
+                );
+                let mut remember = self.open_with_remember;
+                if ui
+                    .checkbox(&mut remember, "Remember for this file type")
+                    .changed()
+                {
+                    self.open_with_remember = remember;
+                }
+                if let (Some(ext), Some(id)) = (&ext, &remembered) {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Default for .{ext}: {id}"))
+                                .size(11.0)
+                                .color(t.faint),
+                        );
+                        if ui.small_button("Clear").clicked() {
+                            clear = true;
+                        }
+                    });
+                }
+                ui.separator();
+                let filter = self.open_with_filter.to_lowercase();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut shown = 0usize;
+                        for app in &self.open_apps {
+                            if !filter.is_empty() && !app.name.to_lowercase().contains(&filter) {
+                                continue;
+                            }
+                            shown += 1;
+                            let is_default = remembered.as_deref() == Some(app.id.as_str());
+                            let label = if is_default {
+                                format!("★ {}", app.name)
+                            } else {
+                                app.name.clone()
+                            };
+                            if ui
+                                .selectable_label(false, label)
+                                .on_hover_text(&app.exec)
+                                .clicked()
+                            {
+                                choose = Some(app.id.clone());
+                            }
+                        }
+                        if shown == 0 {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("No matching application").color(t.faint));
+                        }
+                    });
+                ui.add_space(6.0);
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        if clear && let Some(ext) = &ext {
+            self.prefs.open_with.remove(ext);
+            self.prefs.save();
+        }
+        if let Some(id) = choose {
+            self.open_path_with(&path, &id);
+        } else if cancel {
+            self.open_with_target = None;
+        }
+    }
+
     fn refresh_preview(&mut self, ctx: &egui::Context) {
         let Some(row) = self.results.get(self.selected) else {
             self.preview = None;
@@ -2106,6 +2248,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
+        ("Open with…", OpenWith),
         ("Restore from Trash…", OpenTrash),
         ("Rename selected file", RenameSelected),
         ("Toggle preview pane", TogglePreview),
@@ -3316,6 +3459,13 @@ enum RowCmd {
     Open(PathBuf),
     Folder(PathBuf),
     Terminal(PathBuf),
+    /// Open the “Open with…” chooser for this file.
+    OpenWithDialog(PathBuf),
+    /// Open this file with a remembered application (desktop-file id).
+    OpenWith {
+        path: PathBuf,
+        id: String,
+    },
     /// `selection: true` = act on the whole checked set, not just this row.
     CopyPaths {
         path: PathBuf,
@@ -3966,6 +4116,250 @@ fn theme_from_name(name: &str) -> Option<ThemeChoice> {
     }
 }
 
+// --- open with ------------------------------------------------------------
+
+/// One installed application, from a freedesktop `.desktop` entry.
+#[derive(Clone, Debug, PartialEq)]
+struct DesktopApp {
+    /// The `Name=` shown in the menu.
+    name: String,
+    /// The `Exec=` template, field codes intact.
+    exec: String,
+    /// The desktop file's stem, e.g. `org.gnome.Evince` — the stable key we
+    /// remember a per-extension choice under.
+    id: String,
+}
+
+/// The `…/applications` directories to scan, user's first (so it wins).
+fn desktop_app_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
+        });
+    if let Some(home) = data_home {
+        dirs.push(home.join("applications"));
+    }
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    for dir in data_dirs.split(':').filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(dir).join("applications"));
+    }
+    dirs
+}
+
+/// Every non-hidden application the desktop advertises, sorted by name.
+///
+/// Deliberately flat (the `.desktop` files live one level down in practice) and
+/// `Terminal=true` entries are dropped — launching one without a terminal just
+/// fails, so it is not offered.
+fn desktop_apps() -> Vec<DesktopApp> {
+    let mut apps: Vec<DesktopApp> = Vec::new();
+    for dir in desktop_app_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Some(app) = parse_desktop_app(&text, id)
+                && !apps.iter().any(|a| a.id == app.id)
+            {
+                apps.push(app);
+            }
+        }
+    }
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps
+}
+
+/// The app with this desktop-file id, if it is still installed.
+fn find_desktop_app(id: &str) -> Option<DesktopApp> {
+    for dir in desktop_app_dirs() {
+        let path = dir.join(format!("{id}.desktop"));
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && let Some(app) = parse_desktop_app(&text, id)
+        {
+            return Some(app);
+        }
+    }
+    None
+}
+
+/// The `[Desktop Entry]` fields we need. `None` for anything that should not
+/// appear in a chooser: not an application, hidden by `NoDisplay`, or needing a
+/// terminal.
+fn parse_desktop_app(text: &str, id: &str) -> Option<DesktopApp> {
+    let mut name: Option<String> = None;
+    let mut exec: Option<String> = None;
+    let mut kind: Option<String> = None;
+    let mut in_entry = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            "Type" => kind = Some(value.to_string()),
+            "Name" if name.is_none() && !value.is_empty() => name = Some(value.to_string()),
+            "Exec" if !value.is_empty() => exec = Some(value.to_string()),
+            "NoDisplay" if value.eq_ignore_ascii_case("true") => return None,
+            "Terminal" if value.eq_ignore_ascii_case("true") => return None,
+            _ => {}
+        }
+    }
+    if kind.as_deref() != Some("Application") {
+        return None;
+    }
+    Some(DesktopApp {
+        name: name?,
+        exec: exec?,
+        id: id.to_string(),
+    })
+}
+
+/// Split a desktop `Exec=` line into arguments: spaces separate, double quotes
+/// group, and a backslash escapes the next character.
+fn split_exec(exec: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut has = false;
+    let mut chars = exec.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                has = true;
+                loop {
+                    match chars.next() {
+                        None | Some('"') => break,
+                        Some('\\') => {
+                            if let Some(e) = chars.next() {
+                                cur.push(e);
+                            }
+                        }
+                        Some(n) => cur.push(n),
+                    }
+                }
+            }
+            '\\' => {
+                has = true;
+                cur.push(chars.next().unwrap_or('\\'));
+            }
+            c if c.is_whitespace() => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
+}
+
+/// Turn an `Exec=` template into an argv for opening `path`.
+///
+/// `%f`/`%F`/`%u`/`%U` become the file; `%i`/`%c`/`%k` are dropped and `%%` is a
+/// literal `%`. A template with no file field code gets the path appended, so a
+/// plain `gimp` still opens the file.
+fn exec_argv(exec: &str, path: &Path) -> Vec<String> {
+    let target = path.display().to_string();
+    let mut argv: Vec<String> = Vec::new();
+    let mut used = false;
+    for token in split_exec(exec) {
+        if !token.contains('%') {
+            argv.push(token);
+            continue;
+        }
+        let mut replaced = String::new();
+        let mut chars = token.chars();
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                replaced.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('f' | 'F' | 'u' | 'U') => {
+                    replaced.push_str(&target);
+                    used = true;
+                }
+                Some('%') => replaced.push('%'),
+                Some('i' | 'c' | 'k') => {}
+                Some(other) => {
+                    replaced.push('%');
+                    replaced.push(other);
+                }
+                None => replaced.push('%'),
+            }
+        }
+        if !replaced.is_empty() {
+            argv.push(replaced);
+        }
+    }
+    if !used {
+        argv.push(target);
+    }
+    argv
+}
+
+/// Launch `exec` (a desktop `Exec=` template) on `path`, detached.
+fn launch_open_with(exec: &str, path: &Path) {
+    let argv = exec_argv(exec, path);
+    let Some((prog, args)) = argv.split_first() else {
+        return;
+    };
+    let _ = Command::new(prog)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+/// The remembered application for `path`'s extension as `(id, name)`.
+fn remembered_open_with<'a>(
+    prefs: &'a BTreeMap<String, String>,
+    apps: &'a [DesktopApp],
+    path: &Path,
+) -> Option<(&'a str, &'a str)> {
+    let ext = ext_key(path)?;
+    let id = prefs.get(&ext)?;
+    let app = apps.iter().find(|a| &a.id == id)?;
+    Some((id.as_str(), app.name.as_str()))
+}
+
+/// The lowercase extension used as an `open_with` key (no leading dot).
+fn ext_key(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| !e.is_empty())
+        .map(|e| e.to_ascii_lowercase())
+}
+
 fn resolve_system_font(candidates: &[String], mono: bool) -> Option<Vec<u8>> {
     for family in candidates {
         if let Some(bytes) = fontconfig_file(family, mono) {
@@ -4010,6 +4404,12 @@ fn fontconfig_file(family: &str, mono: bool) -> Option<Vec<u8>> {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.refresh_system_theme(ctx);
+        // Load the application list once at startup, but only if a remembered
+        // “Open with” choice needs its name for a menu label.
+        if !self.open_apps_loaded && !self.prefs.open_with.is_empty() {
+            self.open_apps = desktop_apps();
+            self.open_apps_loaded = true;
+        }
         while let Ok(OutMsg::Done {
             tab,
             ui_query,
@@ -4208,6 +4608,7 @@ impl eframe::App for App {
             || self.show_export
             || self.show_hash
             || self.show_trash
+            || self.open_with_target.is_some()
             || self.rename_target.is_some()
             || self.show_advanced
             || self.show_palette;
@@ -4504,6 +4905,9 @@ impl eframe::App for App {
         }
         if self.rename_target.is_some() {
             self.rename_dialog(ctx);
+        }
+        if self.open_with_target.is_some() {
+            self.open_with_dialog(ctx);
         }
         if self.show_advanced {
             self.advanced_dialog(ctx);
@@ -6225,6 +6629,12 @@ impl App {
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
             PaletteAction::OpenTrash => self.open_trash(),
+            PaletteAction::OpenWith => {
+                if let Some(row) = self.results.get(self.selected) {
+                    let path = row.path.clone();
+                    self.pending_cmds.push(RowCmd::OpenWithDialog(path));
+                }
+            }
             PaletteAction::RenameSelected => {
                 if let Some(row) = self.results.get(self.selected) {
                     let path = row.path.clone();
@@ -7554,6 +7964,29 @@ impl App {
                             self.pending_cmds.push(RowCmd::Terminal(r.path.clone()));
                             ui.close_menu();
                         }
+                        if let Some((id, name)) =
+                            remembered_open_with(&self.prefs.open_with, &self.open_apps, &r.path)
+                        {
+                            if ui
+                                .button(format!("Open with {name}"))
+                                .on_hover_text("The application remembered for this extension")
+                                .clicked()
+                            {
+                                self.pending_cmds.push(RowCmd::OpenWith {
+                                    path: r.path.clone(),
+                                    id: id.to_string(),
+                                });
+                                ui.close_menu();
+                            }
+                        }
+                        if ui
+                            .button("Open with…")
+                            .on_hover_text("Pick an application; it can be remembered per extension")
+                            .clicked()
+                        {
+                            self.pending_cmds.push(RowCmd::OpenWithDialog(r.path.clone()));
+                            ui.close_menu();
+                        }
                         ui.separator();
                         let copy_paths = if multi {
                             format!("Copy {n_sel} paths")
@@ -8732,6 +9165,18 @@ impl App {
             RowCmd::Open(p) => App::open(&p),
             RowCmd::Folder(p) => App::open_folder(&p),
             RowCmd::Terminal(p) => App::open_terminal(&p),
+            RowCmd::OpenWithDialog(p) => {
+                // Refresh on open, so an application installed since startup shows up.
+                self.open_apps = desktop_apps();
+                self.open_apps_loaded = true;
+                self.open_with_filter.clear();
+                self.open_with_remember = true;
+                self.open_with_target = Some(p);
+            }
+            RowCmd::OpenWith { path, id } => {
+                self.open_with_remember = false; // it is already the remembered choice
+                self.open_path_with(&path, &id);
+            }
             RowCmd::CopyPaths { path, selection } => {
                 let mut v: Vec<String> = if selection {
                     self.checked
@@ -12191,6 +12636,76 @@ mod tests {
                 .unwrap()
                 .contains("system")
         );
+    }
+
+    #[test]
+    fn desktop_entries_are_filtered_and_parsed() {
+        let app = parse_desktop_app(
+            "[Desktop Entry]\nType=Application\nName=Evince\nExec=evince %U\n",
+            "org.gnome.Evince",
+        )
+        .unwrap();
+        assert_eq!(app.name, "Evince");
+        assert_eq!(app.exec, "evince %U");
+        assert_eq!(app.id, "org.gnome.Evince");
+
+        // A base `Name=` wins over a localised one, and the section matters.
+        let app = parse_desktop_app(
+            "[Desktop Action Foo]\nName=Nope\n[Desktop Entry]\nType=Application\nName[de]=Bild\nName=Image Viewer\nExec=x %f\n",
+            "v",
+        )
+        .unwrap();
+        assert_eq!(app.name, "Image Viewer");
+
+        // Hidden, terminal-only, non-application and nameless entries are out.
+        assert!(
+            parse_desktop_app(
+                "[Desktop Entry]\nType=Application\nName=X\nExec=x\nNoDisplay=true\n",
+                "h"
+            )
+            .is_none()
+        );
+        assert!(
+            parse_desktop_app(
+                "[Desktop Entry]\nType=Application\nName=X\nExec=x\nTerminal=true\n",
+                "t"
+            )
+            .is_none()
+        );
+        assert!(parse_desktop_app("[Desktop Entry]\nType=Link\nName=X\nExec=x\n", "l").is_none());
+        assert!(parse_desktop_app("[Desktop Entry]\nType=Application\nExec=x\n", "n").is_none());
+    }
+
+    #[test]
+    fn exec_field_codes_become_a_path() {
+        let p = Path::new("/home/a/My Report.pdf");
+        assert_eq!(
+            exec_argv("evince %U", p),
+            ["evince", "/home/a/My Report.pdf"]
+        );
+        assert_eq!(exec_argv("app %f %i", p), ["app", "/home/a/My Report.pdf"]);
+        // No field code: the path is appended so a plain command still works.
+        assert_eq!(exec_argv("gimp", p), ["gimp", "/home/a/My Report.pdf"]);
+        // `%%` is a literal percent; an unknown code is left alone.
+        assert_eq!(
+            exec_argv("app 100%% %f", p),
+            ["app", "100%", "/home/a/My Report.pdf"]
+        );
+    }
+
+    #[test]
+    fn exec_splitting_honours_quotes() {
+        assert_eq!(split_exec("app --flag"), ["app", "--flag"]);
+        assert_eq!(split_exec("app \"a b\" c"), ["app", "a b", "c"]);
+        assert_eq!(split_exec("app \"one\\\"two\""), ["app", "one\"two"]);
+        assert!(split_exec("   ").is_empty());
+    }
+
+    #[test]
+    fn extension_keys_are_lowercase_and_skip_absent_ones() {
+        assert_eq!(ext_key(Path::new("/a/Report.PDF")), Some("pdf".into()));
+        assert_eq!(ext_key(Path::new("/a/README")), None);
+        assert_eq!(ext_key(Path::new("/a/archive.tar.gz")), Some("gz".into()));
     }
 
     #[test]

@@ -95,7 +95,8 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Rename in place** (`F2`) with clobber checks. **Done.**
 - **Restore from Trash** in-app — list trashed items with original paths. **Done**
   (Tools ▸ Restore from Trash…, also in the command palette).
-- **Open with…** — pick an application, remembered per extension.
+- **Open with…** — pick an application, remembered per extension. **Done**
+  (row menu and command palette; the chooser hides hidden/terminal-only entries).
 - **Follow the system theme** — dark/light and the accent colour via the
   freedesktop portal. **Done** (System theme: GNOME `color-scheme`, the
   appearance portal via `gdbus`, then KDE/GTK config; re-checked live. The accent

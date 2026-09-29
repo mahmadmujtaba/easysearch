@@ -128,13 +128,19 @@ of one, otherwise on the row alone:
 
 | Item | Notes |
 |---|---|
-| Open · Open containing folder · Open in terminal | |
+| Open · Open containing folder · Open in terminal · **Open with…** | the chooser remembers an application per extension |
 | Copy path / **Copy N paths** · Copy name / **Copy N names** | one per line, sorted |
 | **Copy as URI** · **Copy shell-escaped** | `file://…` links / quoted for a shell, one per line, sorted |
 | Show in Details panel · Filter to this folder · Search for this name | switch pane / scope to folder / `*stem*` |
 | **Tags…** · Filter by `#tag` · Clear tag filter | see *Tags* |
 | Exclude folder · **Move to Trash…** · Add/Remove selection · Select all · Invert · Clear selection | folder rows / recoverable |
 | **Find duplicates in results…** / **in selection (N)** | the latter needs 2+ checked |
+
+**Open with…** lists the applications the desktop advertises (its `.desktop` entries, hidden
+and terminal-only ones excluded) with a filter box, and a **Remember for this file type** box
+writes the choice to `gui.json`, so that extension opens there next time (a plain **Open with
+<name>** item then appears). Choosing **Clear** forgets it; the remembered app is also reachable
+from the command palette.
 
 Bulk **Select All**, **Invert** and **Copy paths** sit in the view-tab strip; a checked row is
 shown as selected, so **Select All** visibly marks every row, and `Esc` clears the marks (a second
