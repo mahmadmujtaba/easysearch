@@ -111,7 +111,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Command palette** (`Ctrl+Shift+P`) over the app's actions. **Done.**
 - **Editable breadcrumb** path bar with autocomplete over the index.
 - **CLI parity** — `--json` output, the same filters, and `watch "query"` to
-  stream new matches.
+  stream new matches. **Done** (the filters were already there; `search --json`
+  prints one response object, `watch` re-runs on `--interval` and streams new
+  matches as JSONL with `--json`).
 - **Multiple index roots** managed in the UI, each with its own count and status.
 - **Bulk rename** by pattern (find/replace, numbering). **Done** (Tools ▸ Bulk
   rename…: find/replace with case, an optional numbered counter, live preview and

@@ -95,6 +95,8 @@ easysearch                       # the app: starts the host, then opens a window
 easysearch-cli search "*.pdf"
 easysearch-cli search "report 2026 !draft"
 easysearch-cli search TODO --content "TODO"      # search inside files
+easysearch-cli search "*.rs" --json                 # JSON response for scripts
+easysearch-cli watch "TODO" --interval 2           # stream new matches (Ctrl-C to stop)
 easysearch-cli status                            # index state and counts
 
 # Control a running window (bind these to desktop shortcuts)

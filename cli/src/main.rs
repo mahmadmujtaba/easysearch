@@ -4,9 +4,14 @@
 //! answer without starting (or disturbing) the GUI app. Running it while the app
 //! is up opens the same on-disk index read/write; if you only need counts or a
 //! quick lookup, that is fine, but the app remains the only *watcher*.
+//!
+//! `search` runs one query and exits; `watch` re-runs it on a timer and streams
+//! matches it has not printed before. Both accept `--json` for scripting.
 
-use clap::{Parser, Subcommand};
-use easysearch_core::{Backend, Config, Query, State};
+use clap::{Args, Parser, Subcommand};
+use easysearch_core::{Backend, Config, Query, ResultRow, State};
+use std::collections::HashSet;
+use std::io::Write;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -20,63 +25,83 @@ struct Cli {
     command: Command,
 }
 
+/// The filters `search` and `watch` share.
+#[derive(Args)]
+struct SearchArgs {
+    /// Everything-style query: space-separated terms are ANDed,
+    /// `!term` excludes (e.g. "invoice 2026 *.pdf !draft").
+    /// Omit (or pass "") for content-only searches.
+    #[arg(default_value = "")]
+    query: String,
+    /// Treat query terms as regex instead of glob patterns
+    #[arg(long)]
+    regex: bool,
+    /// Also search file contents with this regex pattern
+    /// (combined with the name query: results must match both)
+    #[arg(long, value_name = "PATTERN")]
+    content: Option<String>,
+    /// With --content: match the *name* query OR the content pattern
+    /// instead of requiring both (the GUI's "Full text" scope)
+    #[arg(long)]
+    any: bool,
+    /// Let the content pattern span lines (e.g. --content 'foo\nbar')
+    #[arg(long)]
+    multiline: bool,
+    /// Case-sensitive matching
+    #[arg(long)]
+    case: bool,
+    /// Include hidden files and directories
+    #[arg(long)]
+    hidden: bool,
+    /// Fuzzy (fzf-style) matching: the term's characters in order, anywhere
+    /// (`mtn` finds `meeting-notes.md`). Exclusions (`!term`) stay literal.
+    #[arg(long)]
+    fuzzy: bool,
+    /// Match against the full path instead of the basename
+    #[arg(long)]
+    path: bool,
+    /// Restrict results to this directory subtree
+    #[arg(long, value_name = "DIR")]
+    under: Option<String>,
+    /// Only files with one of these extensions (comma-separated, e.g. pdf,docx,md)
+    #[arg(long, value_name = "LIST")]
+    ext: Option<String>,
+    /// Minimum file size — plain bytes or K/M/G suffix, 1024-based (e.g. 10M)
+    #[arg(long, value_name = "SIZE")]
+    min_size: Option<String>,
+    /// Maximum file size — plain bytes or K/M/G suffix, 1024-based (e.g. 500K)
+    #[arg(long, value_name = "SIZE")]
+    max_size: Option<String>,
+    /// Only files modified within this age (seconds, or s/m/h/d/w suffix, e.g. 7d)
+    #[arg(long, value_name = "DURATION")]
+    modified_within: Option<String>,
+    /// Maximum number of results
+    #[arg(long, default_value_t = 100)]
+    limit: usize,
+    /// Don't wait for the initial index to finish before searching
+    #[arg(long)]
+    no_wait: bool,
+    /// Print JSON instead of plain paths: one response object for `search`,
+    /// one result object per line for `watch`
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Search filenames and/or file contents (realtime, live index)
     Search {
-        /// Everything-style query: space-separated terms are ANDed,
-        /// `!term` excludes (e.g. "invoice 2026 *.pdf !draft").
-        /// Omit (or pass "") for content-only searches.
-        #[arg(default_value = "")]
-        query: String,
-        /// Treat query terms as regex instead of glob patterns
-        #[arg(long)]
-        regex: bool,
-        /// Also search file contents with this regex pattern
-        /// (combined with the name query: results must match both)
-        #[arg(long, value_name = "PATTERN")]
-        content: Option<String>,
-        /// With --content: match the *name* query OR the content pattern
-        /// instead of requiring both (the GUI's "Full text" scope)
-        #[arg(long)]
-        any: bool,
-        /// Let the content pattern span lines (e.g. --content 'foo\nbar')
-        #[arg(long)]
-        multiline: bool,
-        /// Case-sensitive matching
-        #[arg(long)]
-        case: bool,
-        /// Include hidden files and directories
-        #[arg(long)]
-        hidden: bool,
-        /// Fuzzy (fzf-style) matching: the term's characters in order, anywhere
-        /// (`mtn` finds `meeting-notes.md`). Exclusions (`!term`) stay literal.
-        #[arg(long)]
-        fuzzy: bool,
-        /// Match against the full path instead of the basename
-        #[arg(long)]
-        path: bool,
-        /// Restrict results to this directory subtree
-        #[arg(long, value_name = "DIR")]
-        under: Option<String>,
-        /// Only files with one of these extensions (comma-separated, e.g. pdf,docx,md)
-        #[arg(long, value_name = "LIST")]
-        ext: Option<String>,
-        /// Minimum file size — plain bytes or K/M/G suffix, 1024-based (e.g. 10M)
-        #[arg(long, value_name = "SIZE")]
-        min_size: Option<String>,
-        /// Maximum file size — plain bytes or K/M/G suffix, 1024-based (e.g. 500K)
-        #[arg(long, value_name = "SIZE")]
-        max_size: Option<String>,
-        /// Only files modified within this age (seconds, or s/m/h/d/w suffix, e.g. 7d)
-        #[arg(long, value_name = "DURATION")]
-        modified_within: Option<String>,
-        /// Maximum number of results
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-        /// Don't wait for the initial index to finish before searching
-        #[arg(long)]
-        no_wait: bool,
+        #[command(flatten)]
+        args: SearchArgs,
+    },
+    /// Re-run a query on a timer and print newly matching paths as they appear
+    /// (streams the baseline first, then only paths not seen before)
+    Watch {
+        #[command(flatten)]
+        args: SearchArgs,
+        /// Seconds between rescans
+        #[arg(long, default_value_t = 2)]
+        interval: u64,
     },
     /// Show index status (state, counts, watcher mode)
     Status,
@@ -93,133 +118,191 @@ fn main() {
     let backend = Backend::local(Config::load());
 
     match cli.command {
-        Command::Search {
-            query,
-            regex,
-            content,
-            any,
-            multiline,
-            case,
-            hidden,
-            fuzzy,
-            path,
-            under,
-            ext,
-            min_size,
-            max_size,
-            modified_within,
-            limit,
-            no_wait,
-        } => {
-            if !no_wait {
-                backend.wait_live(Duration::from_secs(120));
-            }
-            let extensions = ext
-                .as_deref()
-                .map(|list| {
-                    list.split(',')
-                        .map(|e| e.trim().to_string())
-                        .filter(|e| !e.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let min_size = min_size
-                .as_deref()
-                .map(|s| parse_or_exit("--min-size", s, parse_size));
-            let max_size = max_size
-                .as_deref()
-                .map(|s| parse_or_exit("--max-size", s, parse_size));
-            let modified_within_secs = modified_within
-                .as_deref()
-                .map(|s| parse_or_exit("--modified-within", s, parse_duration_secs));
-            let q = Query {
-                name: query,
-                regex_mode: regex,
-                case_sensitive: case,
-                include_hidden: hidden,
-                full_path: path,
-                content,
-                category: easysearch_core::Category::All,
-                include_dirs: true,
-                under,
-                extensions,
-                min_size,
-                max_size,
-                modified_within_secs,
-                fuzzy,
-                multiline,
-                content_or_name: any,
-                limit,
-            };
-            match backend.search(&q) {
-                Ok(resp) => {
-                    for r in &resp.results {
-                        println!("{}", r.path.display());
+        Command::Search { args } => run_search(&backend, &args),
+        Command::Watch { args, interval } => run_watch(&backend, &args, interval),
+        Command::Status | Command::Index => print_status(&backend),
+    }
+}
+
+/// Build the [`Query`] the shared flags describe.
+fn build_query(args: &SearchArgs) -> Result<Query, String> {
+    let extensions = args
+        .ext
+        .as_deref()
+        .map(|list| {
+            list.split(',')
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Query {
+        name: args.query.clone(),
+        regex_mode: args.regex,
+        case_sensitive: args.case,
+        include_hidden: args.hidden,
+        full_path: args.path,
+        content: args.content.clone(),
+        category: easysearch_core::Category::All,
+        include_dirs: true,
+        under: args.under.clone(),
+        extensions,
+        min_size: args
+            .min_size
+            .as_deref()
+            .map(|s| parse_or_exit("--min-size", s, parse_size)),
+        max_size: args
+            .max_size
+            .as_deref()
+            .map(|s| parse_or_exit("--max-size", s, parse_size)),
+        modified_within_secs: args
+            .modified_within
+            .as_deref()
+            .map(|s| parse_or_exit("--modified-within", s, parse_duration_secs)),
+        fuzzy: args.fuzzy,
+        multiline: args.multiline,
+        content_or_name: args.any,
+        limit: args.limit,
+    })
+}
+
+fn run_search(backend: &Backend, args: &SearchArgs) {
+    if !args.no_wait {
+        backend.wait_live(Duration::from_secs(120));
+    }
+    let q = match build_query(args) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    match backend.search(&q) {
+        Ok(resp) => {
+            if args.json {
+                match serde_json::to_string(&resp) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => {
+                        eprintln!("error: could not encode JSON: {e}");
+                        std::process::exit(1);
                     }
-                    eprintln!(
-                        "{} result(s){} in {} ms ({} files indexed)",
-                        resp.results.len(),
-                        if resp.truncated { ", truncated" } else { "" },
-                        resp.elapsed_ms,
-                        resp.indexed,
-                    );
                 }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Command::Status | Command::Index => {
-            backend.wait_live(Duration::from_secs(120));
-            let s = backend.status_snapshot();
-            let (files, dirs) = backend.counts();
-            println!("state:          {:?}", s.state);
-            println!("files:          {files}");
-            println!("dirs:           {dirs}");
-            if s.base_entries > 0 {
-                println!(
-                    "index:          disk-backed ({} entries, {} files / {} dirs in base)",
-                    s.base_entries, s.base_files, s.base_dirs
-                );
             } else {
-                println!("index:          in-memory (RAM-only mode)");
-            }
-            println!("overlay:        {} pending change(s)", s.overlay_pending);
-            println!(
-                "watcher:        {}",
-                if s.degraded {
-                    "degraded (periodic rebuild)"
-                } else {
-                    "live (inotify)"
+                for r in &resp.results {
+                    println!("{}", r.path.display());
                 }
+            }
+            eprintln!(
+                "{} result(s){} in {} ms ({} files indexed)",
+                resp.results.len(),
+                if resp.truncated { ", truncated" } else { "" },
+                resp.elapsed_ms,
+                resp.indexed,
             );
-            if s.watch_failures > 0 {
-                println!(
-                    "unwatchable:    {} dir(s) (covered by periodic rebuild)",
-                    s.watch_failures
-                );
-            }
-            println!("skipped dirs:   {}", s.skipped);
-            match &s.content_index {
-                easysearch_core::ContentIndexStatus::Disabled => {
-                    println!("content index:  disabled")
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Re-run the query every `interval` seconds and print paths not seen before.
+/// Runs until interrupted (`Ctrl-C`).
+fn run_watch(backend: &Backend, args: &SearchArgs, interval: u64) {
+    backend.wait_live(Duration::from_secs(120));
+    let q = match build_query(args) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let every = Duration::from_secs(interval.max(1));
+    loop {
+        match backend.search(&q) {
+            Ok(resp) => {
+                for row in &resp.results {
+                    let key = row.path.display().to_string();
+                    if seen.insert(key) {
+                        print_row(row, args.json);
+                    }
                 }
-                easysearch_core::ContentIndexStatus::Enabled {
-                    entries,
-                    bytes,
-                    pending,
-                } => {
-                    println!(
-                        "content index:  enabled ({entries} files, {} MiB, {pending} pending)",
-                        bytes / (1024 * 1024)
-                    );
-                }
             }
-            if s.state != State::Live {
-                eprintln!("warning: index did not reach Live state");
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
             }
         }
+        // Flush so a pipe sees each match as it appears, not at exit.
+        let _ = std::io::stdout().flush();
+        std::thread::sleep(every);
+    }
+}
+
+/// One match: a path, or (with `--json`) a JSON object per line.
+fn print_row(row: &ResultRow, json: bool) {
+    if json {
+        match serde_json::to_string(row) {
+            Ok(s) => println!("{s}"),
+            Err(e) => eprintln!("error: could not encode JSON: {e}"),
+        }
+    } else {
+        println!("{}", row.path.display());
+    }
+}
+
+fn print_status(backend: &Backend) {
+    backend.wait_live(Duration::from_secs(120));
+    let s = backend.status_snapshot();
+    let (files, dirs) = backend.counts();
+    println!("state:          {:?}", s.state);
+    println!("files:          {files}");
+    println!("dirs:           {dirs}");
+    if s.base_entries > 0 {
+        println!(
+            "index:          disk-backed ({} entries, {} files / {} dirs in base)",
+            s.base_entries, s.base_files, s.base_dirs
+        );
+    } else {
+        println!("index:          in-memory (RAM-only mode)");
+    }
+    println!("overlay:        {} pending change(s)", s.overlay_pending);
+    println!(
+        "watcher:        {}",
+        if s.degraded {
+            "degraded (periodic rebuild)"
+        } else {
+            "live (inotify)"
+        }
+    );
+    if s.watch_failures > 0 {
+        println!(
+            "unwatchable:    {} dir(s) (covered by periodic rebuild)",
+            s.watch_failures
+        );
+    }
+    println!("skipped dirs:   {}", s.skipped);
+    println!("paused:         {}", s.paused);
+    if s.last_index_at > 0 {
+        println!("last indexed:   {} (unix)", s.last_index_at);
+    }
+    match &s.content_index {
+        easysearch_core::ContentIndexStatus::Disabled => println!("content index:  disabled"),
+        easysearch_core::ContentIndexStatus::Enabled {
+            entries,
+            bytes,
+            pending,
+        } => {
+            println!(
+                "content index:  enabled ({entries} files, {} MiB, {pending} pending)",
+                bytes / (1024 * 1024)
+            );
+        }
+    }
+    if s.state != State::Live {
+        eprintln!("warning: index did not reach Live state");
     }
 }
 
@@ -304,5 +387,48 @@ mod tests {
         assert_eq!(parse_duration_secs("2w").unwrap(), 1_209_600);
         assert!(parse_duration_secs("7q").is_err());
         assert!(parse_duration_secs("").is_err());
+    }
+
+    #[test]
+    fn cli_parses_search_and_watch_json() {
+        // `--json` and the shared filters reach both subcommands.
+        let cli = Cli::try_parse_from([
+            "easysearch-cli",
+            "search",
+            "report",
+            "--ext",
+            "pdf,md",
+            "--limit",
+            "5",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Search { args } => {
+                assert_eq!(args.query, "report");
+                assert_eq!(args.ext.as_deref(), Some("pdf,md"));
+                assert_eq!(args.limit, 5);
+                assert!(args.json);
+            }
+            _ => panic!("expected a search"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "easysearch-cli",
+            "watch",
+            "TODO",
+            "--interval",
+            "9",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Watch { args, interval } => {
+                assert_eq!(args.query, "TODO");
+                assert_eq!(interval, 9);
+                assert!(args.json);
+            }
+            _ => panic!("expected a watch"),
+        }
     }
 }

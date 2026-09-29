@@ -1091,6 +1091,7 @@ version = "0.50.0"
 dependencies = [
  "clap",
  "easysearch-core",
+ "serde_json",
 ]
 
 [[package]]
