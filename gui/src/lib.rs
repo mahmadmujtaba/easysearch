@@ -952,6 +952,40 @@ impl ExportFormat {
     }
 }
 
+/// A command offered by the palette (see [`palette_actions`]).
+#[derive(Clone, Copy, PartialEq)]
+enum PaletteAction {
+    FocusSearch,
+    NewTab,
+    CloseTab,
+    ClearResults,
+    FreeMemory,
+    ResetDefaults,
+    RebuildIndex,
+    Advanced,
+    FindHash,
+    Export,
+    RenameSelected,
+    TogglePreview,
+    ToggleCozy,
+    SortRelevance,
+    SortName,
+    SortSize,
+    SortModified,
+    SortCreated,
+    ViewResults,
+    ViewPreview,
+    ViewDetails,
+    ViewHistory,
+    ThemeDark,
+    ThemeLight,
+    ThemeBrand,
+    Zoom(f32),
+    OpenSettings,
+    OpenShortcuts,
+    OpenAbout,
+}
+
 impl ViewTab {
     const ALL: &'static [ViewTab] = &[
         ViewTab::Results,
@@ -1152,6 +1186,10 @@ struct App {
     adv_max: String,
     adv_modified: usize,
     adv_under: String,
+    /// The command palette (Ctrl+Shift+P).
+    show_palette: bool,
+    palette_query: String,
+    palette_index: usize,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1430,6 +1468,9 @@ impl App {
             adv_max: String::new(),
             adv_modified: 0,
             adv_under: String::new(),
+            show_palette: false,
+            palette_query: String::new(),
+            palette_index: 0,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -1967,6 +2008,74 @@ impl App {
 
 fn search_id() -> egui::Id {
     egui::Id::new("search_input")
+}
+
+fn palette_id() -> egui::Id {
+    egui::Id::new("palette_input")
+}
+
+/// Score a command-palette query against a label: `None` when the query's
+/// characters do not all appear in order; otherwise lower is better (the index
+/// of the first matched character).
+fn palette_score(query: &str, label: &str) -> Option<usize> {
+    let query: Vec<char> = query
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if query.is_empty() {
+        return Some(0);
+    }
+    let mut matched = 0usize;
+    let mut first = 0usize;
+    for (i, ch) in label.to_lowercase().chars().enumerate() {
+        if matched < query.len() && ch == query[matched] {
+            if matched == 0 {
+                first = i;
+            }
+            matched += 1;
+        }
+    }
+    (matched == query.len()).then_some(first)
+}
+
+/// The commands the palette offers: a label and the action it runs.
+fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
+    use PaletteAction::*;
+    vec![
+        ("Focus the search box", FocusSearch),
+        ("New tab", NewTab),
+        ("Close tab", CloseTab),
+        ("Clear results", ClearResults),
+        ("Free memory", FreeMemory),
+        ("Reset defaults", ResetDefaults),
+        ("Rebuild index", RebuildIndex),
+        ("Advanced search…", Advanced),
+        ("Find files by hash…", FindHash),
+        ("Export results…", Export),
+        ("Rename selected file", RenameSelected),
+        ("Toggle preview pane", TogglePreview),
+        ("Toggle row density", ToggleCozy),
+        ("Sort by relevance", SortRelevance),
+        ("Sort by name", SortName),
+        ("Sort by size", SortSize),
+        ("Sort by modified", SortModified),
+        ("Sort by created", SortCreated),
+        ("Show results", ViewResults),
+        ("Show preview", ViewPreview),
+        ("Show details", ViewDetails),
+        ("Show search history", ViewHistory),
+        ("Theme: dark", ThemeDark),
+        ("Theme: light", ThemeLight),
+        ("Theme: brand", ThemeBrand),
+        ("Zoom 95%", Zoom(0.95)),
+        ("Zoom 100%", Zoom(1.0)),
+        ("Zoom 110%", Zoom(1.1)),
+        ("Zoom 125%", Zoom(1.25)),
+        ("Settings…", OpenSettings),
+        ("Keyboard shortcuts", OpenShortcuts),
+        ("About", OpenAbout),
+    ]
 }
 
 /// Bring the window to the front. The window only exists while it is shown (the
@@ -3911,7 +4020,8 @@ impl eframe::App for App {
             || self.show_export
             || self.show_hash
             || self.rename_target.is_some()
-            || self.show_advanced;
+            || self.show_advanced
+            || self.show_palette;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -3970,7 +4080,7 @@ impl eframe::App for App {
                     None => {}
                 }
             }
-        } else if !search_focused {
+        } else if !search_focused && !self.show_palette {
             // Alt+↑ is a separate shortcut (parent location); keep the plain
             // arrows from also firing on it.
             let (up, down, pgup, pgdn) = ctx.input(|i| {
@@ -4056,6 +4166,12 @@ impl eframe::App for App {
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A))
         {
             self.checked = self.results.iter().map(|r| r.path.clone()).collect();
+        }
+        if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::P)) {
+            self.palette_query.clear();
+            self.palette_index = 0;
+            self.show_palette = true;
+            ctx.memory_mut(|m| m.request_focus(palette_id()));
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::T)) {
             self.new_tab();
@@ -4201,6 +4317,9 @@ impl eframe::App for App {
         }
         if self.show_advanced {
             self.advanced_dialog(ctx);
+        }
+        if self.show_palette {
+            self.palette_dialog(ctx);
         }
     }
 
@@ -4500,6 +4619,7 @@ impl App {
                     ("F5", "Re-run the search"),
                     ("Alt+↑", "Go to the parent location"),
                     ("F2", "Rename the selected file"),
+                    ("Ctrl+Shift+P", "Command palette"),
                     ("Double-click", "Open a result"),
                     ("Esc", "Clear the row selection, then the search"),
                     ("Ctrl+F", "Focus the search box"),
@@ -4746,6 +4866,13 @@ impl App {
                         |ui| {
                             if ui.button("About").clicked() {
                                 self.show_about = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Command palette…").clicked() {
+                                self.palette_query.clear();
+                                self.palette_index = 0;
+                                self.show_palette = true;
+                                ctx.memory_mut(|m| m.request_focus(palette_id()));
                                 ui.close_menu();
                             }
                             if ui.button("Keyboard shortcuts").clicked() {
@@ -5800,6 +5927,157 @@ impl App {
         if run {
             self.run_hash_search();
         }
+    }
+
+    // --- command palette --------------------------------------------------
+
+    fn palette_dialog(&mut self, ctx: &egui::Context) {
+        // Read (and consume) the navigation keys before the field is drawn, so
+        // they drive the list instead of the caret.
+        let (up, down, enter, escape) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
+        let mut run: Option<PaletteAction> = None;
+        let actions = palette_actions();
+        egui::Window::new("Command palette")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(460.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.palette_query)
+                        .id(palette_id())
+                        .hint_text("Type a command…")
+                        .desired_width(f32::INFINITY),
+                );
+                if resp.changed() {
+                    self.palette_index = 0;
+                }
+                let mut matches: Vec<(&'static str, PaletteAction)> = actions
+                    .iter()
+                    .filter(|(label, _)| palette_score(&self.palette_query, label).is_some())
+                    .map(|(label, action)| (*label, *action))
+                    .collect();
+                matches.sort_by_key(|(label, _)| palette_score(&self.palette_query, label));
+                if !matches.is_empty() {
+                    self.palette_index = self.palette_index.min(matches.len() - 1);
+                }
+                if !matches.is_empty() {
+                    if down {
+                        self.palette_index = (self.palette_index + 1) % matches.len();
+                    }
+                    if up {
+                        self.palette_index =
+                            (self.palette_index + matches.len() - 1) % matches.len();
+                    }
+                }
+                if enter && let Some((_, action)) = matches.get(self.palette_index) {
+                    run = Some(*action);
+                }
+                if escape {
+                    self.show_palette = false;
+                }
+                ui.add_space(4.0);
+                if matches.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No matching command")
+                            .small()
+                            .color(self.fg_dim()),
+                    );
+                }
+                for (i, (label, _)) in matches.iter().enumerate().take(12) {
+                    if ui
+                        .selectable_label(i == self.palette_index, *label)
+                        .clicked()
+                    {
+                        run = matches.get(i).map(|(_, a)| *a);
+                    }
+                }
+            });
+        if let Some(action) = run {
+            self.show_palette = false;
+            self.run_palette(action, ctx);
+        }
+    }
+
+    /// Run one palette command.
+    fn run_palette(&mut self, action: PaletteAction, ctx: &egui::Context) {
+        match action {
+            PaletteAction::FocusSearch => ctx.memory_mut(|m| m.request_focus(search_id())),
+            PaletteAction::NewTab => {
+                self.new_tab();
+                ctx.memory_mut(|m| m.request_focus(search_id()));
+            }
+            PaletteAction::CloseTab => {
+                let active = self.active_tab;
+                self.close_tab(active);
+            }
+            PaletteAction::ClearResults => self.clear_results(),
+            PaletteAction::FreeMemory => self.free_memory(),
+            PaletteAction::ResetDefaults => self.reset_defaults(ctx),
+            PaletteAction::RebuildIndex => self.engine.rebuild(),
+            PaletteAction::Advanced => self.open_advanced(),
+            PaletteAction::FindHash => self.open_hash(),
+            PaletteAction::Export => self.open_export(),
+            PaletteAction::RenameSelected => {
+                if let Some(row) = self.results.get(self.selected) {
+                    let path = row.path.clone();
+                    self.rename_value = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.rename_error = None;
+                    self.rename_target = Some(path);
+                }
+            }
+            PaletteAction::TogglePreview => {
+                self.prefs.show_preview = !self.prefs.show_preview;
+                self.prefs.save();
+            }
+            PaletteAction::ToggleCozy => {
+                self.density = if self.density == Density::Compact {
+                    Density::Comfortable
+                } else {
+                    Density::Compact
+                };
+                self.prefs.compact_rows = self.density == Density::Compact;
+                self.prefs.save();
+            }
+            PaletteAction::SortRelevance => self.set_sort(Sort::Relevance(false)),
+            PaletteAction::SortName => self.set_sort(Sort::Name(true)),
+            PaletteAction::SortSize => self.set_sort(Sort::Size(false)),
+            PaletteAction::SortModified => self.set_sort(Sort::Mtime(false)),
+            PaletteAction::SortCreated => self.set_sort(Sort::Created(false)),
+            PaletteAction::ViewResults => self.view = ViewTab::Results,
+            PaletteAction::ViewPreview => self.view = ViewTab::Preview,
+            PaletteAction::ViewDetails => self.view = ViewTab::Details,
+            PaletteAction::ViewHistory => self.view = ViewTab::History,
+            PaletteAction::ThemeDark => self.set_theme(ThemeChoice::Dark, ctx),
+            PaletteAction::ThemeLight => self.set_theme(ThemeChoice::Light, ctx),
+            PaletteAction::ThemeBrand => self.set_theme(ThemeChoice::Brand, ctx),
+            PaletteAction::Zoom(level) => {
+                self.prefs.zoom = level;
+                ctx.set_zoom_factor(level);
+                self.prefs.save();
+            }
+            PaletteAction::OpenSettings => self.show_settings = true,
+            PaletteAction::OpenShortcuts => self.show_shortcuts = true,
+            PaletteAction::OpenAbout => self.show_about = true,
+        }
+    }
+
+    /// Switch theme and re-apply the style.
+    fn set_theme(&mut self, choice: ThemeChoice, ctx: &egui::Context) {
+        self.prefs.theme = choice;
+        self.theme = choice;
+        self.apply_style(ctx);
+        self.prefs.save();
     }
 
     // --- advanced search --------------------------------------------------
@@ -11428,6 +11706,14 @@ mod tests {
             "report ext:pdf,doc size:>=1MB size:<=100MB modified:week in:/home/a"
         );
         assert_eq!(build_advanced_query("", "", "", "", 0, ""), "");
+    }
+
+    #[test]
+    fn palette_scores_subsequences() {
+        assert_eq!(palette_score("", "Open settings"), Some(0));
+        assert!(palette_score("op", "Open settings").is_some());
+        assert!(palette_score("stg", "Open settings").is_some());
+        assert!(palette_score("xyz", "Open settings").is_none());
     }
 
     #[test]

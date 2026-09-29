@@ -293,6 +293,7 @@ The first `--toggle`, `--show` or `--search` **starts** the app when nothing is 
 | `Esc` | Clear the row selection, then the search |
 | `Ctrl+F` | Focus the search box |
 | `Ctrl+A` | Select all result rows (marks them) |
+| `Ctrl+Shift+P` | Command palette |
 | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
 | `Ctrl+Tab` / `Ctrl+1…9` | Next tab / select tab |
 | `↑` `↓` in an empty search box | Cycle search history |

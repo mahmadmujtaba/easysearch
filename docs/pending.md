@@ -100,7 +100,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Index diagnostics** — last scan, watcher health, and paths skipped for
   permissions.
 - **Pause indexing** plus battery/thermal throttling (UI + tray).
-- **Command palette** (`Ctrl+Shift+P`) over the app's actions.
+- **Command palette** (`Ctrl+Shift+P`) over the app's actions. **Done.**
 - **Editable breadcrumb** path bar with autocomplete over the index.
 - **CLI parity** — `--json` output, the same filters, and `watch "query"` to
   stream new matches.
