@@ -143,19 +143,17 @@ pub fn run_daemon() -> Result<(), String> {
 
     // System tray (best effort: some desktops have no StatusNotifier host).
     let history = Arc::new(Mutex::new(easysearch_gui::recent_searches()));
-    let _tray = match easysearch_gui::tray::spawn_tray(
-        &easysearch_gui::app_title(),
-        Arc::clone(&history),
-    ) {
-        Ok((tray_rx, handle)) => {
-            forward_tray(tray_rx, tx.clone());
-            Some(handle)
-        }
-        Err(e) => {
-            eprintln!("easysearch: system tray unavailable: {e}");
-            None
-        }
-    };
+    let _tray =
+        match easysearch_gui::tray::spawn_tray(easysearch_gui::APP_NAME, Arc::clone(&history)) {
+            Ok((tray_rx, handle)) => {
+                forward_tray(tray_rx, tx.clone());
+                Some(handle)
+            }
+            Err(e) => {
+                eprintln!("easysearch: system tray unavailable: {e}");
+                None
+            }
+        };
 
     // Control socket: `easysearch --toggle|--show|--hide|--search|--quit`.
     {
@@ -221,10 +219,15 @@ pub fn run_daemon() -> Result<(), String> {
                     Some(w) => w.send(Event::Search { query: q }),
                     None => window = Some(Window::spawn(Arc::clone(&daemon), Some(q))),
                 },
-                DaemonMsg::Toggle => match &window {
-                    Some(w) => w.send(Event::Hide),
-                    None => window = Some(Window::spawn(Arc::clone(&daemon), None)),
-                },
+                // Left-click (and middle-click) flip the window: hidden → show it
+                // ready to search; visible → hide it.
+                DaemonMsg::Toggle => {
+                    if let Some(w) = &window {
+                        w.send(Event::Hide);
+                    } else {
+                        to_window(&mut window, &daemon, Event::FocusSearch);
+                    }
+                }
                 DaemonMsg::Hide => {
                     if let Some(w) = &window {
                         w.send(Event::Hide);
@@ -373,6 +376,18 @@ pub fn run_app() -> Result<(), String> {
         Ok(false) => Err("the background process is not listening".into()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The login-autostart entry point (`easysearch --hidden`): make sure the
+/// background host (tray + engine) is running, but never open a window.
+pub fn start_hidden() -> Result<(), String> {
+    // A running host answers `Hide` — a no-op with no window, which is the state
+    // at login — so this is also the liveness check; if nothing answers, start
+    // the host. A window is never opened either way.
+    if gui_ipc::send(&gui_ipc::Command::Hide).unwrap_or(false) {
+        return Ok(());
+    }
+    ensure_host()
 }
 
 /// Start the background host detached from this process, and wait until its

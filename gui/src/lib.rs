@@ -47,6 +47,9 @@ const HISTORY_CAP: usize = 20;
 /// `packaging/` (desktop entry, AppStream metainfo, Flatpak manifest) so the
 /// window, the launcher entry and the icon all agree.
 const APP_ID: &str = "io.github.easysearch.EasySearch";
+/// The product name without a version. Used where the build stamp would be noise
+/// (the tray), so the version only ever appears in the app window.
+pub const APP_NAME: &str = "EasySearch";
 /// Selectable UI zoom levels (1.0 = 100%).
 const ZOOM_LEVELS: &[f32] = &[0.95, 1.0, 1.1, 1.25];
 
@@ -596,7 +599,7 @@ pub fn version_stamp() -> String {
 
 /// The window (and app) title: the name and the version/build stamp.
 pub fn app_title() -> String {
-    format!("EasySearch {}", version_stamp())
+    format!("{APP_NAME} {}", version_stamp())
 }
 
 /// The standalone `easysearch-gui` development binary: one window, no host.
@@ -3299,7 +3302,7 @@ fn autostart_entry() -> String {
          Type=Application\n\
          Name=EasySearch\n\
          Comment=Realtime filename and content search\n\
-         Exec=easysearch --daemon\n\
+         Exec=easysearch --hidden\n\
          Icon={APP_ID}\n\
          Terminal=false\n\
          X-GNOME-Autostart-enabled=true\n"
@@ -4353,7 +4356,7 @@ impl App {
                 if ui
                     .checkbox(&mut autostart, "Start EasySearch at login (background)")
                     .on_hover_text(
-                        "Writes an XDG autostart entry that runs `easysearch --daemon`, so the \
+                        "Writes an XDG autostart entry that runs `easysearch --hidden`, so the \
                          tray and the index are ready without opening a window.",
                     )
                     .changed()
@@ -11106,7 +11109,7 @@ mod tests {
     fn autostart_entry_runs_the_daemon() {
         let entry = autostart_entry();
         assert!(entry.starts_with("[Desktop Entry]\n"));
-        assert!(entry.contains("Exec=easysearch --daemon\n"));
+        assert!(entry.contains("Exec=easysearch --hidden\n"));
         assert!(entry.contains(&format!("Icon={APP_ID}\n")));
     }
 

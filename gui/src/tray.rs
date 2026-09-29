@@ -11,9 +11,9 @@
 //! system dependencies beyond the session D-Bus.
 //!
 //! Clicking:
-//! - **left click** opens the app ready to search — the window is shown and the
-//!   search box is focused ([`TrayMsg::Open`]);
-//! - **middle click** flips the window on and off ([`TrayMsg::Toggle`]); and
+//! - **left click** flips the window — shows it ready to search, or hides it
+//!   again ([`TrayMsg::Toggle`]);
+//! - **middle click** does the same ([`TrayMsg::Toggle`]); and
 //! - **right click** opens the full menu below.
 
 use ksni::blocking::TrayMethods;
@@ -96,10 +96,8 @@ impl Tray for AppTray {
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
             title: self.title.clone(),
-            description: format!(
-                "Realtime file & content search · v{}",
-                env!("CARGO_PKG_VERSION")
-            ),
+            // No version here: the build stamp belongs to the app window only.
+            description: "Realtime file & content search".to_string(),
             icon_name: String::new(),
             icon_pixmap: self.icon_pixmap(),
         }
@@ -159,9 +157,9 @@ impl Tray for AppTray {
         items
     }
 
-    /// Left-click: open the app ready to search (show + focus the search box).
+    /// Left-click: flip the window — show it ready to search, or hide it again.
     fn activate(&mut self, _x: i32, _y: i32) {
-        let _ = self.tx.send(TrayMsg::Open);
+        let _ = self.tx.send(TrayMsg::Toggle);
     }
 
     /// Middle-click: flip the window on and off. Hosts differ on which click they
@@ -277,7 +275,17 @@ mod tests {
     }
 
     #[test]
-    fn clicking_opens_and_the_other_button_toggles() {
+    fn the_tray_never_shows_the_version() {
+        let t = tray(vec![]);
+        assert_eq!(t.tool_tip().description, "Realtime file & content search");
+        // The menu labels carry the name only, never a build stamp.
+        for label in labels(t.menu()) {
+            assert!(!label.contains("v0."), "{label:?} leaked the version");
+        }
+    }
+
+    #[test]
+    fn clicking_flips_the_window() {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut t = AppTray {
             tx,
@@ -286,7 +294,9 @@ mod tests {
         };
         t.activate(0, 0);
         t.secondary_activate(0, 0);
-        assert_eq!(rx.try_recv().unwrap(), TrayMsg::Open);
+        // Both a left and a middle click flip the window, so a second click on a
+        // visible window hides it.
+        assert_eq!(rx.try_recv().unwrap(), TrayMsg::Toggle);
         assert_eq!(rx.try_recv().unwrap(), TrayMsg::Toggle);
     }
 }

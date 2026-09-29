@@ -35,6 +35,8 @@ CONTROL (talk to the running instance — bind these to desktop shortcuts):
     --toggle             show a window if none is open, close it otherwise
     --show / --hide      open / close the window
     --search <QUERY>     open a window and run a search
+    --hidden             start the tray and engine only, never a window (the
+                          login-autostart entry point)
     --quit               stop the window, the tray and the engine
 
 INTERNAL (not for humans):
@@ -87,6 +89,17 @@ fn main() -> ExitCode {
     // The background host: engine + tray + control socket.
     if args.iter().any(|a| a == "--daemon") {
         return match easysearch_app::run_daemon() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("easysearch: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    // Autostart: bring up the background host (tray + engine), never a window.
+    if args.iter().any(|a| a == "--hidden") {
+        return match easysearch_app::start_hidden() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("easysearch: {e}");
