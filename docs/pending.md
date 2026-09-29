@@ -3,7 +3,8 @@
 Open, unresolved items only — shipped work lives in
 [`../CHANGELOG.md`](../CHANGELOG.md), and the design is in
 [`scope.md`](scope.md). Each entry is something we know is *unverified*,
-*deliberately deferred*, or a *known rough edge* — not a wishlist.
+*deliberately deferred*, or a *known rough edge*. The **feature backlog** near
+the end is the one exception — a requested wishlist, kept deliberately separate.
 
 ## Packaging
 
@@ -59,6 +60,63 @@ missing, so `make packages` degrades cleanly. Details:
 - **SQLite FTS5** for content search — the natural next step for the index.
 - A **tag/ignore** picker for paths outside the results (today you tag from a
   result row).
+
+## Feature backlog (wishlist, shortest first)
+
+Requested additions, ordered roughly from the smallest to the largest. None need
+a network or a model — everything is local. Sizes are focused-work estimates with
+tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
+
+### S — small
+
+- **Copy as…** — copy the paths as `file://` URIs or shell-escaped. **Done.**
+- Keyboard extras on the results: `Ctrl+Enter` open containing folder, `F5` re-run
+  the search, `Alt+↑` go to the parent location.
+- Export the current results as CSV / TSV / JSON.
+- **Open at login** — a toggle that writes an XDG autostart entry (or a systemd
+  user unit).
+- **Find by hash** — paste a SHA-256 to locate the file.
+- Extra cleanup filters — empty files/folders and broken symlinks.
+- Duplicate finder: ignore hardlinks / same-inode files.
+
+### M — medium
+
+- **Filter-within-results** box — narrow the visible list without re-querying.
+- **Query tokens** — `ext:pdf size:>10MB modified:today folder: parent: file:`,
+  plus `|` (OR) and quoted phrases; most map onto fields `Query` already has.
+- **Advanced Search** dialog — a builder that composes those tokens.
+- **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
+  Permissions / Inode / Link count, persisted per tab.
+- **Rename in place** (`F2`) with clobber checks.
+- **Restore from Trash** in-app — list trashed items with original paths.
+- **Open with…** — pick an application, remembered per extension.
+- **Follow the system theme** — dark/light and the accent colour via the
+  freedesktop portal.
+- **Index diagnostics** — last scan, watcher health, and paths skipped for
+  permissions.
+- **Pause indexing** plus battery/thermal throttling (UI + tray).
+- **Command palette** (`Ctrl+Shift+P`) over the app's actions.
+- **Editable breadcrumb** path bar with autocomplete over the index.
+- **CLI parity** — `--json` output, the same filters, and `watch "query"` to
+  stream new matches.
+- **Multiple index roots** managed in the UI, each with its own count and status.
+- **Bulk rename** by pattern (find/replace, numbering).
+- **Two-pane copy/move**.
+- **Drag rows out** to a file manager or another app (XDG drag-and-drop).
+
+### L — large
+
+- **Global hotkey** via the XDG `GlobalShortcuts` portal (Wayland) plus a native
+  X11 grab — today the CLI is hand-bound by the user.
+- **Structured viewers** — CSV/TSV tables, JSON/XML trees, and a hex view for
+  binaries.
+- **Removable-media indexing** — detect mounts, index on mount, drop on unmount.
+- **Browse and search inside archives** (zip/tar/7z) without extracting.
+- **Font preview** and first-page thumbnails for documents.
+- **Accessibility sweep** — screen-reader labels (accesskit), high-contrast and
+  reduced-motion options.
+- **Live-updating results** — add/remove rows as the index changes while a query
+  is open.
 
 ## Repo & tooling
 

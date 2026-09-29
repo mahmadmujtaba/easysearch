@@ -100,6 +100,7 @@ of one, otherwise on the row alone:
 |---|---|
 | Open · Open containing folder · Open in terminal | |
 | Copy path / **Copy N paths** · Copy name / **Copy N names** | one per line, sorted |
+| **Copy as URI** · **Copy shell-escaped** | `file://…` links / quoted for a shell, one per line, sorted |
 | Show in Details panel · Filter to this folder · Search for this name | switch pane / scope to folder / `*stem*` |
 | **Tags…** · Filter by `#tag` · Clear tag filter | see *Tags* |
 | Exclude folder · **Move to Trash…** · Add/Remove selection · Select all · Invert · Clear selection | folder rows / recoverable |

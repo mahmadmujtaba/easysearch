@@ -3065,6 +3065,16 @@ enum RowCmd {
         path: PathBuf,
         selection: bool,
     },
+    /// Copy the paths as `file://` URIs, one per line.
+    CopyUris {
+        path: PathBuf,
+        selection: bool,
+    },
+    /// Copy the paths quoted for pasting into a POSIX shell, one per line.
+    CopyShell {
+        path: PathBuf,
+        selection: bool,
+    },
     Details(PathBuf),
     FilterTo(PathBuf),
     SearchName(PathBuf),
@@ -3091,6 +3101,36 @@ enum RowCmd {
     FindDuplicates {
         selection: bool,
     },
+}
+
+/// A `file://` URI for a path, percent-encoding every byte outside the RFC 3986
+/// unreserved set (leaving `/` alone), so it is a valid, paste-anywhere link even
+/// when the path has spaces or non-UTF-8 bytes.
+fn file_uri(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Quote a path for pasting into a POSIX shell: bare when every character is
+/// safe, otherwise single-quoted with embedded quotes escaped (`'` → `'\''`).
+fn shell_escape(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.:/=+,@%^".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
 
 /// `rwxr-xr-x (0755)` for a path, or `—` when it cannot be read.
@@ -6081,6 +6121,34 @@ impl App {
                             });
                             ui.close_menu();
                         }
+                        let copy_uris = if multi {
+                            format!("Copy {n_sel} as URIs")
+                        } else {
+                            "Copy as URI".to_string()
+                        };
+                        if ui.button(copy_uris).clicked() {
+                            self.pending_cmds.push(RowCmd::CopyUris {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
+                        }
+                        let copy_shell = if multi {
+                            format!("Copy {n_sel} shell-escaped")
+                        } else {
+                            "Copy shell-escaped".to_string()
+                        };
+                        if ui
+                            .button(copy_shell)
+                            .on_hover_text("Quoted for pasting into a shell")
+                            .clicked()
+                        {
+                            self.pending_cmds.push(RowCmd::CopyShell {
+                                path: r.path.clone(),
+                                selection: multi,
+                            });
+                            ui.close_menu();
+                        }
                         ui.separator();
                         if ui.button("Show in Details panel").clicked() {
                             self.pending_cmds.push(RowCmd::Details(r.path.clone()));
@@ -7218,6 +7286,27 @@ impl App {
                     self.checked.iter().map(|p| file_name(p)).collect()
                 } else {
                     vec![file_name(&path)]
+                };
+                v.sort();
+                ctx.copy_text(v.join("\n"));
+            }
+            RowCmd::CopyUris { path, selection } => {
+                let mut v: Vec<String> = if selection {
+                    self.checked.iter().map(|p| file_uri(p)).collect()
+                } else {
+                    vec![file_uri(&path)]
+                };
+                v.sort();
+                ctx.copy_text(v.join("\n"));
+            }
+            RowCmd::CopyShell { path, selection } => {
+                let mut v: Vec<String> = if selection {
+                    self.checked
+                        .iter()
+                        .map(|p| shell_escape(&p.to_string_lossy()))
+                        .collect()
+                } else {
+                    vec![shell_escape(&path.to_string_lossy())]
                 };
                 v.sort();
                 ctx.copy_text(v.join("\n"));
@@ -10401,6 +10490,23 @@ mod tests {
         );
         // A file at the root shows just the root.
         assert_eq!(short_dir(Path::new("/file.txt")), "/");
+    }
+
+    #[test]
+    fn file_uri_percent_encodes_specials() {
+        assert_eq!(
+            file_uri(Path::new("/home/a b/c.txt")),
+            "file:///home/a%20b/c.txt"
+        );
+        assert_eq!(file_uri(Path::new("/tmp/x#y")), "file:///tmp/x%23y");
+    }
+
+    #[test]
+    fn shell_escape_quotes_only_when_needed() {
+        assert_eq!(shell_escape("/home/a/b.txt"), "/home/a/b.txt");
+        assert_eq!(shell_escape("/home/My Docs"), "'/home/My Docs'");
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+        assert_eq!(shell_escape(""), "''");
     }
 
     #[test]
