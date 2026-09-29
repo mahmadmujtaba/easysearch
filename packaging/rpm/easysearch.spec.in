@@ -38,10 +38,12 @@ Requires:       libXcursor.so.1()(64bit)
 Requires:       libXi.so.6()(64bit)
 Requires:       libXrender.so.1()(64bit)
 
-# Open / Reveal / Open-in-terminal shell out to xdg-open, and the media
-# previews use ffprobe/ffmpeg; both are best-effort (the app degrades
-# gracefully), so they are soft dependencies, not requirements.
+# Open / Reveal / Open-in-terminal shell out to xdg-open, the quick-action
+# notifications shell out to notify-send (libnotify), and the media previews use
+# ffprobe/ffmpeg; all are best-effort (the app degrades gracefully), so they are
+# soft dependencies, not requirements.
 Recommends:     xdg-utils
+Recommends:     libnotify
 Suggests:       ffmpeg
 
 %description

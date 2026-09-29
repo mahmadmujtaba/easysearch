@@ -7,7 +7,7 @@ Maintainer: @MAINTAINER@
 Homepage: https://github.com/mahmadmujtaba/easysearch
 Bugs: https://github.com/mahmadmujtaba/easysearch/issues
 Depends: @DEPENDS@
-Recommends: xdg-utils
+Recommends: xdg-utils, libnotify-bin
 Suggests: ffmpeg
 Multi-Arch: foreign
 Rules-Requires-Root: no

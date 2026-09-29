@@ -105,9 +105,10 @@ declared explicitly: package names in the deb (`GUI_DEPENDS` in
 loaded this way must be added in **both** places, or the two formats drift.
 
 Two *optional* tools are soft dependencies, declared in both formats: the deb
-`Recommends: xdg-utils` (Open / Reveal / Open-in-terminal shell out to `xdg-open`)
-and `Suggests: ffmpeg` (media previews), matching the rpm `Recommends:` and
-`Suggests:`.
+`Recommends: xdg-utils, libnotify-bin` (Open / Reveal / Open-in-terminal shell
+out to `xdg-open`, and the quick-action notifications shell out to `notify-send`)
+and `Suggests: ffmpeg` (media previews), matching the rpm `Recommends: xdg-utils`,
+`Recommends: libnotify` and `Suggests: ffmpeg`.
 
 ## Continuous integration
 

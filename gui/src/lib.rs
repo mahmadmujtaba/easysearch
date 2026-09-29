@@ -21,7 +21,7 @@ use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -48,7 +48,7 @@ const HISTORY_CAP: usize = 20;
 /// window, the launcher entry and the icon all agree.
 const APP_ID: &str = "io.github.easysearch.EasySearch";
 /// Selectable UI zoom levels (1.0 = 100%).
-const ZOOM_LEVELS: &[f32] = &[1.0, 1.1, 1.25];
+const ZOOM_LEVELS: &[f32] = &[0.95, 1.0, 1.1, 1.25];
 
 /// The colour scheme the user picked, stored by name in `gui.json`.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1080,12 +1080,6 @@ struct App {
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
-    /// The “Free memory” confirmation dialog is open (the top-right button).
-    show_free_memory: bool,
-    /// The “Reset to defaults” confirmation dialog is open.
-    show_reset: bool,
-    /// One-line outcome of a quick action, shown in a small dialog.
-    notice: Option<String>,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1342,9 +1336,6 @@ impl App {
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
-            show_free_memory: false,
-            show_reset: false,
-            notice: None,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -1889,6 +1880,32 @@ fn search_id() -> egui::Id {
 fn show_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+}
+
+/// Pop a desktop notification that the session's notification service dismisses
+/// after five seconds — the OS-level replacement for the old in-app dialogs.
+///
+/// Best effort, like the other external helpers: it shells out to `notify-send`
+/// (libnotify), which is present on essentially every Linux desktop. If it is
+/// missing nothing appears, but the action it reports has already been done, so
+/// a silent failure is fine. Output is discarded: this process talks to its host
+/// over stdout, which must not be polluted.
+fn notify_desktop(summary: &str, body: &str) {
+    let hint = format!("string:desktop-entry:{APP_ID}");
+    let _ = Command::new("notify-send")
+        .args([
+            "-a",
+            APP_ID,
+            "-h",
+            hint.as_str(),
+            "-t",
+            "5000",
+            summary,
+            body,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 /// Icons painted by hand (no icon font, no emoji) so they look identical in
@@ -3529,10 +3546,16 @@ impl eframe::App for App {
                 App::open(&row.path);
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.query.is_empty() {
-            self.query.clear();
-            self.history_idx = None;
-            self.send_query();
+        // Escape first drops the bulk selection (unmarking every row); with
+        // nothing selected it clears the search, as before.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if !self.checked.is_empty() {
+                self.checked.clear();
+            } else if !self.query.is_empty() {
+                self.query.clear();
+                self.history_idx = None;
+                self.send_query();
+            }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             ctx.memory_mut(|m| m.request_focus(search_id()));
@@ -3667,13 +3690,6 @@ impl eframe::App for App {
         if self.show_shortcuts {
             self.shortcuts_dialog(ctx);
         }
-        if self.show_free_memory {
-            self.free_memory_dialog(ctx);
-        }
-        if self.show_reset {
-            self.reset_defaults_dialog(ctx);
-        }
-        self.notice_dialog(ctx);
         if self.show_content_warning {
             self.content_warning_dialog(ctx);
         }
@@ -3960,7 +3976,7 @@ impl App {
                     ("↑ / ↓ / PgUp / PgDn", "Navigate results"),
                     ("Enter", "Open the selected file"),
                     ("Double-click", "Open a result"),
-                    ("Esc", "Clear the search"),
+                    ("Esc", "Clear the row selection, then the search"),
                     ("Ctrl+F", "Focus the search box"),
                     ("Ctrl+A", "Select all results"),
                     ("Ctrl+T", "New tab"),
@@ -4181,11 +4197,12 @@ impl App {
                             Icon::Reset,
                             "Reset defaults",
                             t.warn,
-                            "Reset every setting, filter, tab and saved search to its default.",
+                            "Reset every search setting, filter, tab and saved search to its \
+                             default. Your theme and zoom are kept.",
                         )
                         .clicked()
                         {
-                            self.show_reset = true;
+                            self.reset_defaults(ctx);
                         }
                         if quick_button(
                             ui,
@@ -4197,7 +4214,7 @@ impl App {
                         )
                         .clicked()
                         {
-                            self.show_free_memory = true;
+                            self.free_memory();
                         }
                     });
                 });
@@ -4964,17 +4981,27 @@ impl App {
         } else {
             ""
         };
-        self.notice = Some(format!(
-            "{extra}Cleared the current results and asked the engine to return freed pages to \
-             the operating system. The index on disk is untouched — press Enter to run the \
-             search again."
-        ));
+        notify_desktop(
+            "Memory freed",
+            &format!(
+                "{extra}Cleared the results and asked the engine to return freed pages to the \
+                 operating system. The index is untouched — press Enter to run the search again."
+            ),
+        );
     }
 
-    /// Put every setting, filter and tab back to its default (the *Reset defaults*
-    /// button). The index, tags and files on disk are left alone.
+    /// Put every search setting, filter and tab back to its default (the *Reset
+    /// defaults* button). The user's theme and zoom are kept; the index, tags and
+    /// files on disk are left alone.
     fn reset_defaults(&mut self, ctx: &egui::Context) {
+        // The appearance choices are the user's, not a default: keep the current
+        // theme and zoom across a reset, and put only the search-related settings
+        // back to their defaults.
+        let theme = self.theme;
+        let zoom = self.prefs.zoom;
         self.prefs = GuiPrefs::default();
+        self.prefs.theme = theme;
+        self.prefs.zoom = zoom;
 
         // Live tab state, back to the defaults the fresh-start window would have.
         self.query.clear();
@@ -5015,95 +5042,18 @@ impl App {
         self.tabs = vec![TabState::default()];
         self.active_tab = 0;
 
-        // Appearance, then persist it exactly as a fresh window would.
+        // Persist the result exactly as a fresh window would, with the user's
+        // theme and zoom kept.
         self.theme = self.prefs.theme;
         ctx.set_zoom_factor(self.prefs.zoom);
         self.apply_style(ctx);
         self.save_prefs();
         self.send_query();
-        self.notice = Some("All settings were reset to their defaults.".into());
-    }
-
-    fn free_memory_dialog(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Free memory")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Free up as much memory as possible?").strong());
-                ui.add_space(4.0);
-                ui.label(
-                    "This clears the current results — the largest thing EasySearch holds, \
-                     especially after a content search — and then asks the engine to return \
-                     freed pages to the operating system. Your index, tags and settings are \
-                     not touched, and you can run the search again at any time.",
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Free memory").clicked() {
-                        self.free_memory();
-                        self.show_free_memory = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.show_free_memory = false;
-                    }
-                });
-            });
-    }
-
-    fn reset_defaults_dialog(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Reset to defaults")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Reset every setting to its default?").strong());
-                ui.add_space(4.0);
-                ui.label(
-                    "The theme (Dark), zoom, filters, the content/regex/fuzzy switches, result \
-                     density, tabs, saved searches and the recent-search history all go back to \
-                     their defaults.",
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(
-                        "The index, your tags and the files on disk are not changed.",
-                    )
-                    .small()
-                    .color(self.fg_dim()),
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Reset everything").clicked() {
-                        self.reset_defaults(ctx);
-                        self.show_reset = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.show_reset = false;
-                    }
-                });
-            });
-    }
-
-    /// A small dialog reporting the outcome of a quick action.
-    fn notice_dialog(&mut self, ctx: &egui::Context) {
-        let Some(text) = self.notice.clone() else {
-            return;
-        };
-        egui::Window::new("EasySearch")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.label(text);
-                ui.add_space(10.0);
-                if ui.button("OK").clicked() {
-                    self.notice = None;
-                }
-            });
+        notify_desktop(
+            "Settings reset",
+            "Search settings, filters, tabs and saved searches are back to their defaults. \
+             Your theme and zoom were kept.",
+        );
     }
 
     fn category_label(&self) -> String {
@@ -5714,8 +5664,10 @@ impl App {
                 let row_h = self.density.row_height();
                 body.rows(row_h, rows, |mut row| {
                     let i = row.index();
-                    row.set_selected(i == selected);
                     let r = &self.results[i];
+                    // A row reads as selected when it is the cursor row *or* part of
+                    // the bulk selection, so "Select all" visibly marks every row.
+                    row.set_selected(i == selected || self.checked.contains(&r.path));
                     let rel = relevance_score(&r.path, &needle, self.prefs.fuzzy);
                     let terms = matched_terms(&r.path, &needle, self.prefs.fuzzy);
                     let name = r

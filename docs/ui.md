@@ -28,10 +28,12 @@ lights up in the accent on hover.
 icon buttons: **Free memory** (a broom, teal) stops a running content search,
 clears the current results — the largest thing the window holds — and asks the
 engine to return freed pages to the operating system; **Reset defaults** (a
-circular arrow, amber) puts every setting, filter, tab and saved search back to
-its default. Each opens a confirmation first and then reports what happened, and
-the index, tags and files are never touched. The window title carries the version
-and build stamp — `EasySearch v0.46.0-20260927` — as does the logo's tooltip.
+circular arrow, amber) puts every search setting, filter, tab and saved search
+back to its default while keeping the theme and zoom you picked. Both act
+immediately and report through a desktop notification that dismisses itself after
+five seconds (via `notify-send`), not a dialog; the index, tags and files are
+never touched. The window title carries the version and build stamp —
+`EasySearch v0.47.0-20260929` — as does the logo's tooltip.
 
 ## Searching
 
@@ -95,7 +97,9 @@ of one, otherwise on the row alone:
 | Exclude folder · **Move to Trash…** · Add/Remove selection · Select all · Invert · Clear selection | folder rows / recoverable |
 | **Find duplicates in results…** / **in selection (N)** | the latter needs 2+ checked |
 
-Bulk **Select All**, **Invert** and **Copy paths** sit in the view-tab strip.
+Bulk **Select All**, **Invert** and **Copy paths** sit in the view-tab strip; a checked row is
+shown as selected, so **Select All** visibly marks every row, and `Esc` clears the marks (a second
+`Esc` clears the search).
 
 ## Sidebar
 
@@ -123,7 +127,7 @@ Copy path · Terminal · **Tag**.
 ## Status bar and tabs
 
 The status bar shows live index state (`Indexing: idle (86,100 files)` or a spinner), a
-content-search warning while active, **CPU**, **RAM**, a **UI zoom** dropdown (100 / 110 / 125 %,
+content-search warning while active, **CPU**, **RAM**, a **UI zoom** dropdown (95 / 100 / 110 / 125 %,
 on the right), keyboard hints, and the running **version** at the far right, plus `Entries:`,
 `Search time:` and `Query: N results`. The **view tabs** at the bottom of the window —
 **Results**, **Preview**, **Details** and **Search History** — switch what fills the central area
@@ -237,9 +241,9 @@ The first `--toggle`, `--show` or `--search` **starts** the app when nothing is 
 |---|---|
 | `↑` `↓` `PgUp` `PgDn` | Navigate results |
 | `Enter` / double-click | Open the selected result |
-| `Esc` | Clear the search |
+| `Esc` | Clear the row selection, then the search |
 | `Ctrl+F` | Focus the search box |
-| `Ctrl+A` | Select all result rows |
+| `Ctrl+A` | Select all result rows (marks them) |
 | `Ctrl+T` / `Ctrl+W` | New tab / close tab |
 | `Ctrl+Tab` / `Ctrl+1…9` | Next tab / select tab |
 | `↑` `↓` in an empty search box | Cycle search history |
