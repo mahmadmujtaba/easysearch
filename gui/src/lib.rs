@@ -919,6 +919,33 @@ enum MatchMode {
     Fuzzy,
 }
 
+/// Output format for “Export results…”.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ExportFormat {
+    #[default]
+    Csv,
+    Tsv,
+    Json,
+}
+
+impl ExportFormat {
+    fn label(self) -> &'static str {
+        match self {
+            ExportFormat::Csv => "CSV",
+            ExportFormat::Tsv => "TSV",
+            ExportFormat::Json => "JSON",
+        }
+    }
+
+    fn ext(self) -> &'static str {
+        match self {
+            ExportFormat::Csv => "csv",
+            ExportFormat::Tsv => "tsv",
+            ExportFormat::Json => "json",
+        }
+    }
+}
+
 impl ViewTab {
     const ALL: &'static [ViewTab] = &[
         ViewTab::Results,
@@ -1093,6 +1120,11 @@ struct App {
     show_about: bool,
     show_settings: bool,
     show_shortcuts: bool,
+    /// The “Export results…” popup.
+    show_export: bool,
+    export_path: String,
+    export_format: ExportFormat,
+    export_error: Option<String>,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1350,6 +1382,10 @@ impl App {
             show_about: false,
             show_settings: false,
             show_shortcuts: false,
+            show_export: false,
+            export_path: String::new(),
+            export_format: ExportFormat::default(),
+            export_error: None,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -3137,6 +3173,64 @@ fn shell_escape(s: &str) -> String {
     }
 }
 
+/// Serialise the rows to CSV, TSV or JSON for “Export results…”.
+fn export_text(results: &[ResultRow], format: ExportFormat) -> String {
+    let name_of = |r: &ResultRow| {
+        r.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    match format {
+        ExportFormat::Csv | ExportFormat::Tsv => {
+            let sep = if format == ExportFormat::Csv {
+                ','
+            } else {
+                '\t'
+            };
+            let esc = |s: &str| {
+                if s.contains(sep) || s.contains('"') || s.contains('\n') || s.contains('\r') {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    s.to_string()
+                }
+            };
+            let mut out = String::from("name");
+            for col in ["path", "size", "modified"] {
+                out.push(sep);
+                out.push_str(col);
+            }
+            out.push('\n');
+            for r in results {
+                out.push_str(&esc(&name_of(r)));
+                out.push(sep);
+                out.push_str(&esc(&r.path.to_string_lossy()));
+                out.push(sep);
+                out.push_str(&r.size.to_string());
+                out.push(sep);
+                out.push_str(&r.mtime.to_string());
+                out.push('\n');
+            }
+            out
+        }
+        ExportFormat::Json => {
+            let rows: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "name": name_of(r),
+                        "path": r.path.to_string_lossy(),
+                        "size": r.size,
+                        "modified": r.mtime,
+                        "is_dir": r.is_dir,
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
+        }
+    }
+}
+
 /// Does a result path contain `needle` (already lower-cased)? Powers the
 /// results-header “Filter results…” box; an empty needle matches everything.
 fn path_contains(path: &Path, needle: &str) -> bool {
@@ -3659,7 +3753,8 @@ impl eframe::App for App {
             || self.show_tags
             || self.show_excludes
             || !self.trash_confirm.is_empty()
-            || self.show_ignore;
+            || self.show_ignore
+            || self.show_export;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -3926,6 +4021,9 @@ impl eframe::App for App {
         self.excludes_dialog(ctx);
         self.trash_confirm_dialog(ctx);
         self.ignore_dialog(ctx);
+        if self.show_export {
+            self.export_dialog(ctx);
+        }
     }
 
     /// Persist open tabs and history on shutdown (eframe calls this on exit and
@@ -4267,6 +4365,14 @@ impl App {
                             .clicked()
                         {
                             self.engine.rebuild();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button("Export results…")
+                            .on_hover_text("Write the visible rows to a CSV, TSV or JSON file")
+                            .clicked()
+                        {
+                            self.open_export();
                             ui.close_menu();
                         }
                         ui.separator();
@@ -5367,6 +5473,98 @@ impl App {
             "Search settings, filters, tabs and saved searches are back to their defaults. \
              Your theme and zoom were kept.",
         );
+    }
+
+    // --- export -----------------------------------------------------------
+
+    /// Open the “Export results…” dialog with a sensible default path.
+    fn open_export(&mut self) {
+        self.export_path = self
+            .home_path()
+            .join(format!("easysearch-results.{}", self.export_format.ext()))
+            .to_string_lossy()
+            .into_owned();
+        self.export_error = None;
+        self.show_export = true;
+    }
+
+    fn export_dialog(&mut self, ctx: &egui::Context) {
+        let mut export = false;
+        egui::Window::new("Export results")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Format");
+                    for fmt in [ExportFormat::Csv, ExportFormat::Tsv, ExportFormat::Json] {
+                        if ui.radio(self.export_format == fmt, fmt.label()).clicked() {
+                            // Keep the file's extension in step with the format.
+                            let new_ext = fmt.ext();
+                            for old in ["csv", "tsv", "json"] {
+                                if let Some(stem) =
+                                    self.export_path.strip_suffix(&format!(".{old}"))
+                                {
+                                    self.export_path = format!("{stem}.{new_ext}");
+                                    break;
+                                }
+                            }
+                            self.export_format = fmt;
+                            self.export_error = None;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label("File");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.export_path)
+                        .desired_width(380.0)
+                        .hint_text("Where to write the file"),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("{} rows will be written.", self.results.len()))
+                        .small()
+                        .color(self.fg_dim()),
+                );
+                if let Some(err) = &self.export_error {
+                    ui.add_space(4.0);
+                    ui.colored_label(ui.visuals().error_fg_color, err);
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Export").clicked() {
+                        export = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_export = false;
+                    }
+                });
+            });
+        if export {
+            self.run_export();
+        }
+    }
+
+    /// Write the visible rows to `export_path`, or report the failure in the dialog.
+    fn run_export(&mut self) {
+        let path = PathBuf::from(self.export_path.trim());
+        if path.as_os_str().is_empty() {
+            self.export_error = Some("Enter a file path.".to_string());
+            return;
+        }
+        match std::fs::write(&path, export_text(&self.results, self.export_format)) {
+            Ok(()) => {
+                self.show_export = false;
+                self.export_error = None;
+                notify_desktop(
+                    "Results exported",
+                    &format!("{} rows written to {}", self.results.len(), path.display()),
+                );
+            }
+            Err(e) => self.export_error = Some(format!("Could not write {}: {e}", path.display())),
+        }
     }
 
     fn category_label(&self) -> String {
@@ -10592,6 +10790,27 @@ mod tests {
         assert!(path_contains(Path::new("/home/a/Report.pdf"), "/home/"));
         assert!(path_contains(Path::new("/home/a/Report.pdf"), ""));
         assert!(!path_contains(Path::new("/home/a/Report.pdf"), "draft"));
+    }
+
+    #[test]
+    fn export_covers_csv_tsv_and_json() {
+        let rows = vec![ResultRow {
+            path: PathBuf::from("/home/a/My Report, v2.pdf"),
+            size: 10,
+            mtime: 5,
+            is_dir: false,
+        }];
+        let csv = export_text(&rows, ExportFormat::Csv);
+        assert!(csv.starts_with("name,path,size,modified\n"));
+        assert!(csv.contains("\"My Report, v2.pdf\""), "{csv}");
+        let tsv = export_text(&rows, ExportFormat::Tsv);
+        assert!(tsv.starts_with("name\tpath\tsize\tmodified\n"));
+        // A comma inside a field must not be quoted in TSV.
+        assert!(tsv.contains("My Report, v2.pdf"), "{tsv}");
+        let json = export_text(&rows, ExportFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed[0]["name"], "My Report, v2.pdf");
+        assert_eq!(parsed[0]["size"], 10);
     }
 
     #[test]

@@ -18,7 +18,7 @@ results header  N results · M files indexed · T ms   [ Filter results… ]   S
 panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
 
-**Menus:** File (tabs, focus, reload, hide, quit) · Search (content, regex, fuzzy, multiline, case,
+**Menus:** File (tabs, focus, reload, export, hide, quit) · Search (content, regex, fuzzy, multiline, case,
 hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
 excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
@@ -95,7 +95,9 @@ cycle ascending → descending → off); **Cozy**/**Compact** switch density; do
 
 Above the table, the **Filter results…** box narrows the visible rows by name or path
 (case-insensitive) **without re-querying** the index — handy for pruning a large result set —
-and the ✕ beside it clears the filter.
+and the ✕ beside it clears the filter. **File ▸ Export results…** writes the visible rows to a
+CSV, TSV or JSON file of your choosing (`name`, `path`, `size`, `modified`, plus `is_dir` in
+JSON), and reports the destination through a desktop notification.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:

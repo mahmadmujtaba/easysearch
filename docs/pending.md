@@ -72,7 +72,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Copy as…** — copy the paths as `file://` URIs or shell-escaped. **Done.**
 - Keyboard extras on the results: `Ctrl+Enter` open containing folder, `F5` re-run
   the search, `Alt+↑` go to the parent location.
-- Export the current results as CSV / TSV / JSON.
+- Export the current results as CSV / TSV / JSON. **Done.**
 - **Open at login** — a toggle that writes an XDG autostart entry (or a systemd
   user unit).
 - **Find by hash** — paste a SHA-256 to locate the file.
