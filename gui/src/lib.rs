@@ -3083,22 +3083,29 @@ fn type_pill(ui: &mut egui::Ui, t: &Theme, path: &Path, is_dir: bool) -> egui::R
 }
 
 /// The parent directory of a path, shortened to its last two components so it
-/// fits a narrow column (`…/SAB/SDD`).
+/// fits a narrow column (`…/SAB/SDD`). An absolute path keeps its leading slash
+/// without doubling it.
 fn short_dir(path: &Path) -> String {
     let Some(parent) = path.parent() else {
         return String::new();
     };
+    let absolute = parent.is_absolute();
     let comps: Vec<String> = parent
         .components()
         .filter_map(|c| match c {
             std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-            std::path::Component::RootDir => Some("/".to_string()),
+            std::path::Component::ParentDir => Some("..".to_string()),
             _ => None,
         })
         .collect();
+    // The root component is not collected (it is re-added as a single leading
+    // slash below), so a parent directly under `/` no longer renders as `//home`.
+    let slash = if absolute { "/" } else { "" };
     match comps.len() {
+        0 if absolute => "/".to_string(),
         0 => String::new(),
-        1 | 2 => comps.join("/"),
+        1 => format!("{slash}{}", comps[0]),
+        2 => format!("{slash}{}/{}", comps[0], comps[1]),
         n => format!("…/{}/{}", comps[n - 2], comps[n - 1]),
     }
 }
@@ -10186,6 +10193,21 @@ mod tests {
         assert_eq!(location_label("/home/a/Documents"), "Documents");
         assert_eq!(location_label("Documents"), "Documents");
         assert_eq!(location_label("/"), "/");
+    }
+
+    #[test]
+    fn short_dir_never_doubles_the_root_slash() {
+        // A parent one level under the root used to render as `//home`.
+        assert_eq!(short_dir(Path::new("/home/file.txt")), "/home");
+        assert_eq!(short_dir(Path::new("/etc/hosts")), "/etc");
+        // Two components fit whole; deeper paths are collapsed to the last two.
+        assert_eq!(short_dir(Path::new("/home/a/file.txt")), "/home/a");
+        assert_eq!(
+            short_dir(Path::new("/home/a/Documents/file.txt")),
+            "…/a/Documents"
+        );
+        // A file at the root shows just the root.
+        assert_eq!(short_dir(Path::new("/file.txt")), "/");
     }
 
     #[test]
