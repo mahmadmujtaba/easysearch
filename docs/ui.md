@@ -14,7 +14,7 @@ search tabs     one pill per open search (restored on restart)               [ +
 toolbar         [ < │ > ]  Home  Index  [ Simple │ Regex │ Fuzzy ]  Recent  Saved   (left-aligned)
 search row      [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden  [ ✕ Clear Filters ]
-results header  N results · M files indexed · T ms      Sort by ▾  Cozy Compact
+results header  N results · M files indexed · T ms   [ Filter results… ]   Sort by ▾  Cozy Compact
 panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
 
@@ -92,6 +92,10 @@ live; `—` when the filesystem records none) · **Match** (query terms satisfie
 beats substring, short names score higher, and a query with no positive terms scores everything
 equally. **Sort by** offers Relevance (default), Name, Size, Modified or Created (header clicks
 cycle ascending → descending → off); **Cozy**/**Compact** switch density; double-click opens.
+
+Above the table, the **Filter results…** box narrows the visible rows by name or path
+(case-insensitive) **without re-querying** the index — handy for pruning a large result set —
+and the ✕ beside it clears the filter.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:

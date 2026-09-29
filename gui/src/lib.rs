@@ -1028,6 +1028,9 @@ struct App {
     extensions: Vec<String>,
     /// Text in the sidebar's own filter box (filters the sidebar lists).
     sidebar_filter: String,
+    /// Text in the results header's “Filter results…” box: narrows the visible
+    /// rows without re-querying (`all_results` keeps the full set).
+    result_filter: String,
     // --- view state -------------------------------------------------------
     density: Density,
     /// Which view fills the central area (Results / Preview / Details / History).
@@ -1303,6 +1306,7 @@ impl App {
             modified: start.modified,
             extensions: start.extensions,
             sidebar_filter: String::new(),
+            result_filter: String::new(),
             density,
             view: ViewTab::Results,
             panel_tab: PanelTab::Preview,
@@ -3131,6 +3135,12 @@ fn shell_escape(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
+}
+
+/// Does a result path contain `needle` (already lower-cased)? Powers the
+/// results-header “Filter results…” box; an empty needle matches everything.
+fn path_contains(path: &Path, needle: &str) -> bool {
+    needle.is_empty() || path.to_string_lossy().to_lowercase().contains(needle)
 }
 
 /// `rwxr-xr-x (0755)` for a path, or `—` when it cannot be read.
@@ -5060,6 +5070,31 @@ impl App {
                             self.set_tag_filter(None);
                         }
                     }
+                    // Narrow the visible rows without re-querying the index.
+                    ui.add_space(8.0);
+                    let filter_resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.result_filter)
+                            .hint_text(
+                                egui::RichText::new("Filter results…")
+                                    .size(11.0)
+                                    .color(t.faint),
+                            )
+                            .font(egui::FontId::new(11.5, egui::FontFamily::Proportional))
+                            .desired_width(150.0)
+                            .margin(egui::vec2(3.0, 2.0)),
+                    );
+                    if filter_resp.changed() {
+                        self.apply_tag_filter();
+                    }
+                    if !self.result_filter.is_empty()
+                        && ui
+                            .small_button("✕")
+                            .on_hover_text("Clear the result filter")
+                            .clicked()
+                    {
+                        self.result_filter.clear();
+                        self.apply_tag_filter();
+                    }
                     if let Some(msg) = &self.trash_msg {
                         ui.label(
                             egui::RichText::new(format!("• {msg}"))
@@ -5239,6 +5274,7 @@ impl App {
         self.all_results.clear();
         self.all_results.shrink_to_fit();
         self.checked.clear();
+        self.result_filter.clear();
         self.truncated = false;
         self.error = None;
         self.elapsed_ms = 0;
@@ -5307,6 +5343,7 @@ impl App {
         self.dup_checked.clear();
         self.dup_progress = None;
         self.sidebar_filter.clear();
+        self.result_filter.clear();
         self.selected = 0;
         self.truncated = false;
         self.error = None;
@@ -5365,6 +5402,7 @@ impl App {
         self.results.clear();
         self.all_results.clear();
         self.checked.clear();
+        self.result_filter.clear();
         self.truncated = false;
         self.error = None;
         self.elapsed_ms = 0;
@@ -7139,17 +7177,20 @@ impl App {
 
     // --- tags -------------------------------------------------------------
 
-    /// Rebuild the displayed results from the raw set, applying the tag filter.
+    /// Rebuild the displayed results from the raw set, applying the active tag
+    /// filter and the results-header “Filter results…” text box.
     fn apply_tag_filter(&mut self) {
-        self.results = match &self.tag_filter {
-            Some(tag) => self
-                .all_results
-                .iter()
-                .filter(|r| self.tags.has(&r.path, tag))
-                .cloned()
-                .collect(),
-            None => self.all_results.clone(),
-        };
+        let needle = self.result_filter.trim().to_lowercase();
+        self.results = self
+            .all_results
+            .iter()
+            .filter(|r| match &self.tag_filter {
+                Some(tag) => self.tags.has(&r.path, tag),
+                None => true,
+            })
+            .filter(|r| path_contains(&r.path, &needle))
+            .cloned()
+            .collect();
         if self.selected >= self.results.len() {
             self.selected = self.results.len().saturating_sub(1);
         }
@@ -10543,6 +10584,14 @@ mod tests {
         assert_eq!(shell_escape("/home/My Docs"), "'/home/My Docs'");
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
         assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn result_filter_matches_name_or_path() {
+        assert!(path_contains(Path::new("/home/a/Report.pdf"), "report"));
+        assert!(path_contains(Path::new("/home/a/Report.pdf"), "/home/"));
+        assert!(path_contains(Path::new("/home/a/Report.pdf"), ""));
+        assert!(!path_contains(Path::new("/home/a/Report.pdf"), "draft"));
     }
 
     #[test]
