@@ -965,6 +965,7 @@ enum PaletteAction {
     Advanced,
     FindHash,
     Export,
+    OpenTrash,
     RenameSelected,
     TogglePreview,
     ToggleCozy,
@@ -1227,6 +1228,10 @@ struct App {
     trash_confirm: Vec<PathBuf>,
     /// Outcome of the last move-to-trash, shown briefly.
     trash_msg: Option<String>,
+    /// The “Restore from Trash” window, the entries it lists, and a status line.
+    show_trash: bool,
+    trash_items: Vec<easysearch_core::trash::TrashedItem>,
+    trash_restore_msg: Option<String>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1493,6 +1498,9 @@ impl App {
             dup_checked: HashSet::new(),
             trash_confirm: Vec::new(),
             trash_msg: None,
+            show_trash: false,
+            trash_items: Vec::new(),
+            trash_restore_msg: None,
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -2053,6 +2061,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
+        ("Restore from Trash…", OpenTrash),
         ("Rename selected file", RenameSelected),
         ("Toggle preview pane", TogglePreview),
         ("Toggle row density", ToggleCozy),
@@ -4019,6 +4028,7 @@ impl eframe::App for App {
             || self.show_ignore
             || self.show_export
             || self.show_hash
+            || self.show_trash
             || self.rename_target.is_some()
             || self.show_advanced
             || self.show_palette;
@@ -4305,6 +4315,7 @@ impl eframe::App for App {
         self.tags_dialog(ctx);
         self.excludes_dialog(ctx);
         self.trash_confirm_dialog(ctx);
+        self.trash_window(ctx);
         self.ignore_dialog(ctx);
         if self.show_export {
             self.export_dialog(ctx);
@@ -4835,6 +4846,15 @@ impl App {
                             }
                             if ui.button("Saved searches…").clicked() {
                                 self.show_saved = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui
+                                .button("Restore from Trash…")
+                                .on_hover_text("List the files you trashed and put them back.")
+                                .clicked()
+                            {
+                                self.open_trash();
                                 ui.close_menu();
                             }
                         },
@@ -6025,6 +6045,7 @@ impl App {
             PaletteAction::Advanced => self.open_advanced(),
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
+            PaletteAction::OpenTrash => self.open_trash(),
             PaletteAction::RenameSelected => {
                 if let Some(row) = self.results.get(self.selected) {
                     let path = row.path.clone();
@@ -6363,6 +6384,160 @@ impl App {
                 );
             }
             Err(e) => self.export_error = Some(format!("Could not write {}: {e}", path.display())),
+        }
+    }
+
+    // --- restore from trash ----------------------------------------------
+
+    /// Open the “Restore from Trash” window, refreshed from disk.
+    fn open_trash(&mut self) {
+        self.trash_restore_msg = None;
+        self.reload_trash();
+        self.show_trash = true;
+    }
+
+    /// Re-read the freedesktop trash (entries also come from the file manager).
+    fn reload_trash(&mut self) {
+        self.trash_items = easysearch_core::trash::list_trashed();
+    }
+
+    /// List the files sitting in the freedesktop trash and put one (or all) back.
+    fn trash_window(&mut self, ctx: &egui::Context) {
+        if !self.show_trash {
+            return;
+        }
+        let t = self.theme();
+        let mut open = true;
+        let mut restore: Option<String> = None;
+        let mut restore_all = false;
+        let mut refresh = false;
+        egui::Window::new("Restore from Trash")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(680.0)
+            .default_height(440.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Files you moved to the Trash, with where they came from. Restoring puts a \
+                         file back; a name that is already taken gets a numeric suffix.",
+                    )
+                    .size(12.0)
+                    .color(t.dim),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Refresh")
+                        .on_hover_text("Re-read the Trash from disk.")
+                        .clicked()
+                    {
+                        refresh = true;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("{} item(s)", self.trash_items.len()))
+                            .size(11.5)
+                            .color(t.faint),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !self.trash_items.is_empty()
+                            && ui
+                                .button("Restore all")
+                                .on_hover_text("Put every item back where it came from.")
+                                .clicked()
+                        {
+                            restore_all = true;
+                        }
+                    });
+                });
+                if let Some(msg) = &self.trash_restore_msg {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(msg).size(12.0).color(t.good));
+                }
+                ui.add_space(4.0);
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.trash_items.is_empty() {
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new("The Trash is empty.").color(t.faint));
+                            return;
+                        }
+                        for item in &self.trash_items {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("Restore")
+                                    .on_hover_text(format!(
+                                        "Restore to {}",
+                                        item.original_path.display()
+                                    ))
+                                    .clicked()
+                                {
+                                    restore = Some(item.name.clone());
+                                }
+                                ui.vertical(|ui| {
+                                    let file_name = item
+                                        .original_path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| item.name.clone());
+                                    ui.label(egui::RichText::new(file_name).strong().color(t.text));
+                                    let parent = item
+                                        .original_path
+                                        .parent()
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_default();
+                                    let stamp = if item.deletion_date.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("  •  {}", item.deletion_date)
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(format!("{parent}{stamp}"))
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(t.faint),
+                                    );
+                                });
+                            });
+                            ui.add_space(2.0);
+                        }
+                    });
+            });
+        if refresh {
+            self.reload_trash();
+        }
+        let mut msg: Option<String> = None;
+        if let Some(name) = restore {
+            msg = Some(match easysearch_core::trash::restore(&name) {
+                Ok(path) => format!("Restored {}", path.display()),
+                Err(e) => format!("Could not restore: {e}"),
+            });
+        } else if restore_all {
+            let names: Vec<String> = self.trash_items.iter().map(|i| i.name.clone()).collect();
+            let (mut ok, mut fail) = (0usize, 0usize);
+            for name in &names {
+                match easysearch_core::trash::restore(name) {
+                    Ok(_) => ok += 1,
+                    Err(_) => fail += 1,
+                }
+            }
+            msg = Some(if fail == 0 {
+                format!("Restored {ok} item(s).")
+            } else {
+                format!("Restored {ok} item(s); {fail} failed.")
+            });
+        }
+        if msg.is_some() {
+            self.trash_restore_msg = msg;
+            self.reload_trash();
+        }
+        if !open {
+            self.show_trash = false;
+            self.trash_items.clear();
+            self.trash_restore_msg = None;
         }
     }
 
@@ -11689,6 +11864,16 @@ mod tests {
         assert!(entry.starts_with("[Desktop Entry]\n"));
         assert!(entry.contains("Exec=easysearch --hidden\n"));
         assert!(entry.contains(&format!("Icon={APP_ID}\n")));
+    }
+
+    #[test]
+    fn the_palette_offers_restore_from_trash() {
+        assert!(
+            palette_actions()
+                .iter()
+                .any(|(_, a)| *a == PaletteAction::OpenTrash),
+            "restore-from-trash is reachable from the palette"
+        );
     }
 
     #[test]

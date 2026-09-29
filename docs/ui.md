@@ -20,7 +20,7 @@ panes           sidebar | central view | preview/details;  below: view tabs · b
 
 **Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (advanced search,
 content, regex, fuzzy, multiline, case, hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
-excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts). The six
+excluded folders, saved searches, restore from trash) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
 
@@ -189,6 +189,11 @@ Tick copies to remove — per copy, a group's **Keep newest** / **Select all**, 
 the freedesktop **Trash** (`~/.local/share/Trash`) with their original path recorded, so any
 file manager can restore them; the confirmation lists what will move, and a whole group being
 checked warns first. **Move to Trash…** is also on a row's menu.
+
+**Tools ▸ Restore from Trash…** (also in the command palette) lists what you trashed — from
+this app or your file manager — newest first, with each item's original folder. **Restore** puts
+one file back and **Restore all** puts every item back; a folder that was removed is recreated,
+and a name that is already taken gets a numeric suffix rather than being overwritten.
 
 ## Tags
 
