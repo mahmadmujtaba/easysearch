@@ -97,7 +97,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   (Tools ▸ Restore from Trash…, also in the command palette).
 - **Open with…** — pick an application, remembered per extension.
 - **Follow the system theme** — dark/light and the accent colour via the
-  freedesktop portal.
+  freedesktop portal. **Done** (System theme: GNOME `color-scheme`, the
+  appearance portal via `gdbus`, then KDE/GTK config; re-checked live. The accent
+  colour is not taken from the system — the built-in palettes keep their own).
 - **Index diagnostics** — last scan, watcher health, and paths skipped for
   permissions.
 - **Pause indexing** plus battery/thermal throttling (UI + tray).

@@ -55,7 +55,7 @@ pub const APP_NAME: &str = "EasySearch";
 const ZOOM_LEVELS: &[f32] = &[0.95, 1.0, 1.1, 1.25];
 
 /// The colour scheme the user picked, stored by name in `gui.json`.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 enum ThemeChoice {
     /// The original Tokyo-Night-style dark palette.
@@ -64,6 +64,8 @@ enum ThemeChoice {
     Light,
     /// Drawn from the logo: teal ground, teal accent, pink and lime highlights.
     Brand,
+    /// Follow the desktop: dark or light is chosen from the system setting.
+    System,
 }
 
 /// Complete colour scheme for one appearance mode.
@@ -202,6 +204,8 @@ impl Theme {
             ThemeChoice::Dark => Self::DARK,
             ThemeChoice::Light => Self::LIGHT,
             ThemeChoice::Brand => Self::BRAND,
+            // `System` is resolved before we get here (see `App::resolved_theme`).
+            ThemeChoice::System => Self::DARK,
         }
     }
 
@@ -662,6 +666,7 @@ where
             "dark" => Ok(ThemeChoice::Dark),
             "light" => Ok(ThemeChoice::Light),
             "brand" => Ok(ThemeChoice::Brand),
+            "system" => Ok(ThemeChoice::System),
             other => Err(D::Error::custom(format!("unknown theme {other:?}"))),
         },
         // Anything else (a number, an object) falls back to the default rather
@@ -982,6 +987,7 @@ enum PaletteAction {
     ThemeDark,
     ThemeLight,
     ThemeBrand,
+    ThemeSystem,
     Zoom(f32),
     OpenSettings,
     OpenShortcuts,
@@ -1144,6 +1150,10 @@ struct App {
     sort: Option<Sort>,
     preview: Option<Preview>,
     theme: ThemeChoice,
+    /// The palette a [`ThemeChoice::System`] resolves to, and when it was last
+    /// detected — re-probed on a timer while that choice is active.
+    sys_theme: ThemeChoice,
+    sys_theme_at: Instant,
     /// The logo, rasterised on first use (see [`App::logo`]).
     logo_tex: Option<egui::TextureHandle>,
     history_idx: Option<usize>,
@@ -1299,6 +1309,13 @@ impl App {
 
         let prefs = GuiPrefs::load();
         let theme = prefs.theme;
+        // Only probe the desktop when System is selected; an explicit choice
+        // never pays for the `gsettings`/`gdbus` round-trip.
+        let sys_theme = if theme == ThemeChoice::System {
+            detect_system_theme()
+        } else {
+            ThemeChoice::Dark
+        };
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
         let backend_label = backend.label();
@@ -1443,6 +1460,8 @@ impl App {
             sort: start.sort,
             preview: None,
             theme,
+            sys_theme,
+            sys_theme_at: Instant::now(),
             logo_tex: None,
             history_idx: None,
             search_was_focused: false,
@@ -1645,7 +1664,32 @@ impl App {
 
     /// The active colour scheme.
     fn theme(&self) -> Theme {
-        Theme::of(self.theme)
+        Theme::of(self.resolved_theme())
+    }
+
+    /// The appearance in force: the user's explicit pick, or (for
+    /// [`ThemeChoice::System`]) the palette the desktop is asking for.
+    fn resolved_theme(&self) -> ThemeChoice {
+        match self.theme {
+            ThemeChoice::System => self.sys_theme,
+            other => other,
+        }
+    }
+
+    /// While the System theme is selected, re-read the desktop's setting every
+    /// few seconds and re-style when it flips (e.g. a night-mode toggle).
+    fn refresh_system_theme(&mut self, ctx: &egui::Context) {
+        if self.theme != ThemeChoice::System
+            || self.sys_theme_at.elapsed() < std::time::Duration::from_secs(5)
+        {
+            return;
+        }
+        self.sys_theme_at = Instant::now();
+        let detected = detect_system_theme();
+        if detected != self.sys_theme {
+            self.sys_theme = detected;
+            self.apply_style(ctx);
+        }
     }
 
     fn fg_dim(&self) -> egui::Color32 {
@@ -2078,6 +2122,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Theme: dark", ThemeDark),
         ("Theme: light", ThemeLight),
         ("Theme: brand", ThemeBrand),
+        ("Theme: follow system", ThemeSystem),
         ("Zoom 95%", Zoom(0.95)),
         ("Zoom 100%", Zoom(1.0)),
         ("Zoom 110%", Zoom(1.1)),
@@ -3789,6 +3834,138 @@ fn gtk_family_from(text: &str, key: &str) -> Option<String> {
     (!family.is_empty()).then(|| family.to_string())
 }
 
+// --- system appearance ----------------------------------------------------
+
+/// Which palette the desktop is asking for, for [`ThemeChoice::System`].
+///
+/// Probes, cheapest and most authoritative first: GNOME's `color-scheme`, the
+/// freedesktop appearance portal (via `gdbus`, so no extra dependency), then the
+/// KDE `kdeglobals` and GTK `settings.ini` files. Anything unreadable falls back
+/// to Dark — the palette the app has always opened with.
+///
+/// The free functions are deliberately thin and return `Option`, so a missing
+/// tool (`gsettings` is not on KDE, `gdbus` may not be installed) is just `None`
+/// and the next probe runs.
+fn detect_system_theme() -> ThemeChoice {
+    gsettings_color_scheme()
+        .or_else(portal_color_scheme)
+        .or_else(kde_color_scheme)
+        .or_else(gtk_prefer_dark)
+        .unwrap_or(ThemeChoice::Dark)
+}
+
+/// `gsettings get org.gnome.desktop.interface color-scheme` — GNOME 42+.
+fn gsettings_color_scheme() -> Option<ThemeChoice> {
+    let out = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| gsettings_scheme_from(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
+/// Parse `'prefer-dark'` / `'prefer-light'` (`'default'` = no preference).
+fn gsettings_scheme_from(out: &str) -> Option<ThemeChoice> {
+    match out.trim().trim_matches('\'').to_ascii_lowercase().as_str() {
+        "prefer-dark" => Some(ThemeChoice::Dark),
+        "prefer-light" => Some(ThemeChoice::Light),
+        _ => None,
+    }
+}
+
+/// `org.freedesktop.appearance` `color-scheme` over the settings portal.
+fn portal_color_scheme() -> Option<ThemeChoice> {
+    let out = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.portal.Desktop",
+            "--object-path",
+            "/org/freedesktop/portal/desktop",
+            "--method",
+            "org.freedesktop.portal.Settings.Read",
+            "org.freedesktop.appearance",
+            "color-scheme",
+        ])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| portal_scheme_from(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
+/// Parse `(<uint32 1>,)` — 1 = prefer-dark, 2 = prefer-light, 0 = no preference.
+fn portal_scheme_from(out: &str) -> Option<ThemeChoice> {
+    if out.contains("uint32 1") {
+        Some(ThemeChoice::Dark)
+    } else if out.contains("uint32 2") {
+        Some(ThemeChoice::Light)
+    } else {
+        None
+    }
+}
+
+/// KDE's `[General] ColorScheme=`, e.g. `BreezeDark` / `BreezeLight`.
+fn kde_color_scheme() -> Option<ThemeChoice> {
+    let home = std::env::var_os("HOME")?;
+    let text = std::fs::read_to_string(PathBuf::from(home).join(".config/kdeglobals")).ok()?;
+    kde_color_scheme_from(&text)
+}
+
+fn kde_color_scheme_from(text: &str) -> Option<ThemeChoice> {
+    let name = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ColorScheme="))
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    theme_from_name(&name)
+}
+
+/// GTK: `gtk-application-prefer-dark-theme=1` or a `-dark` theme name.
+fn gtk_prefer_dark() -> Option<ThemeChoice> {
+    let home = std::env::var_os("HOME")?;
+    for rel in [
+        ".config/gtk-4.0/settings.ini",
+        ".config/gtk-3.0/settings.ini",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(PathBuf::from(&home).join(rel))
+            && let Some(choice) = gtk_theme_from(&text)
+        {
+            return Some(choice);
+        }
+    }
+    None
+}
+
+fn gtk_theme_from(text: &str) -> Option<ThemeChoice> {
+    let key = |k: &str| -> Option<String> {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix(k)?.strip_prefix('='))
+            .map(|v| v.trim().to_string())
+    };
+    if let Some(v) = key("gtk-application-prefer-dark-theme")
+        && (v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Some(ThemeChoice::Dark);
+    }
+    key("gtk-theme-name").and_then(|name| theme_from_name(&name.to_ascii_lowercase()))
+}
+
+/// A theme/scheme *name* to a palette: `…dark…` is dark, `…light…` is light.
+fn theme_from_name(name: &str) -> Option<ThemeChoice> {
+    if name.contains("dark") {
+        Some(ThemeChoice::Dark)
+    } else if name.contains("light") {
+        Some(ThemeChoice::Light)
+    } else {
+        None
+    }
+}
+
 fn resolve_system_font(candidates: &[String], mono: bool) -> Option<Vec<u8>> {
     for family in candidates {
         if let Some(bytes) = fontconfig_file(family, mono) {
@@ -3832,6 +4009,7 @@ fn fontconfig_file(family: &str, mono: bool) -> Option<Vec<u8>> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.refresh_system_theme(ctx);
         while let Ok(OutMsg::Done {
             tab,
             ui_query,
@@ -4470,16 +4648,18 @@ impl App {
                             "Brand",
                             "The logo's colours: a deep teal ground, teal accent, pink and lime.",
                         ),
+                        (
+                            ThemeChoice::System,
+                            "System",
+                            "Follow the desktop's dark/light setting (re-checked live).",
+                        ),
                     ] {
                         if ui
                             .radio(self.prefs.theme == choice, label)
                             .on_hover_text(hover)
                             .clicked()
                         {
-                            self.prefs.theme = choice;
-                            self.theme = choice;
-                            self.apply_style(ctx);
-                            self.prefs.save();
+                            self.set_theme(choice, ctx);
                         }
                     }
                 });
@@ -4815,12 +4995,10 @@ impl App {
                                 (ThemeChoice::Dark, "Dark"),
                                 (ThemeChoice::Light, "Light"),
                                 (ThemeChoice::Brand, "Brand"),
+                                (ThemeChoice::System, "System"),
                             ] {
                                 if ui.radio(self.prefs.theme == choice, label).clicked() {
-                                    self.prefs.theme = choice;
-                                    self.theme = choice;
-                                    self.apply_style(ctx);
-                                    self.prefs.save();
+                                    self.set_theme(choice, ctx);
                                 }
                             }
                         },
@@ -6083,6 +6261,7 @@ impl App {
             PaletteAction::ThemeDark => self.set_theme(ThemeChoice::Dark, ctx),
             PaletteAction::ThemeLight => self.set_theme(ThemeChoice::Light, ctx),
             PaletteAction::ThemeBrand => self.set_theme(ThemeChoice::Brand, ctx),
+            PaletteAction::ThemeSystem => self.set_theme(ThemeChoice::System, ctx),
             PaletteAction::Zoom(level) => {
                 self.prefs.zoom = level;
                 ctx.set_zoom_factor(level);
@@ -6098,6 +6277,12 @@ impl App {
     fn set_theme(&mut self, choice: ThemeChoice, ctx: &egui::Context) {
         self.prefs.theme = choice;
         self.theme = choice;
+        if choice == ThemeChoice::System {
+            // Pick up the desktop's setting right away rather than after the
+            // first timer tick.
+            self.sys_theme = detect_system_theme();
+            self.sys_theme_at = Instant::now();
+        }
         self.apply_style(ctx);
         self.prefs.save();
     }
@@ -11946,6 +12131,66 @@ mod tests {
             Some("Hack")
         );
         assert_eq!(kde_family_from("[General]\n", "font"), None);
+    }
+
+    #[test]
+    fn the_system_theme_is_read_from_each_source() {
+        // GNOME `color-scheme` (the shell quotes the value).
+        assert_eq!(
+            gsettings_scheme_from("'prefer-dark'\n"),
+            Some(ThemeChoice::Dark)
+        );
+        assert_eq!(
+            gsettings_scheme_from("'prefer-light'\n"),
+            Some(ThemeChoice::Light)
+        );
+        assert_eq!(gsettings_scheme_from("'default'\n"), None);
+
+        // The portal returns a tuple of a uint32.
+        assert_eq!(
+            portal_scheme_from("(<uint32 1>,)\n"),
+            Some(ThemeChoice::Dark)
+        );
+        assert_eq!(
+            portal_scheme_from("(<uint32 2>,)\n"),
+            Some(ThemeChoice::Light)
+        );
+        assert_eq!(portal_scheme_from("(<uint32 0>,)\n"), None);
+
+        // KDE names its schemes; GTK may set a flag or a `-dark` theme name.
+        assert_eq!(
+            kde_color_scheme_from("[General]\nColorScheme=BreezeDark\n"),
+            Some(ThemeChoice::Dark)
+        );
+        assert_eq!(
+            kde_color_scheme_from("[General]\nColorScheme=BreezeLight\n"),
+            Some(ThemeChoice::Light)
+        );
+        assert_eq!(
+            kde_color_scheme_from("[General]\nColorScheme=Breeze\n"),
+            None
+        );
+        assert_eq!(
+            gtk_theme_from("[Settings]\ngtk-application-prefer-dark-theme=1\n"),
+            Some(ThemeChoice::Dark)
+        );
+        assert_eq!(
+            gtk_theme_from("[Settings]\ngtk-theme-name=Adwaita-dark\n"),
+            Some(ThemeChoice::Dark)
+        );
+        assert_eq!(gtk_theme_from("[Settings]\ngtk-theme-name=Adwaita\n"), None);
+    }
+
+    #[test]
+    fn system_is_accepted_in_a_saved_preference() {
+        let p: GuiPrefs = serde_json::from_str(r#"{"theme":"system"}"#).unwrap();
+        assert_eq!(p.theme, ThemeChoice::System);
+        // …and it round-trips through the same name.
+        assert!(
+            serde_json::to_string(&ThemeChoice::System)
+                .unwrap()
+                .contains("system")
+        );
     }
 
     #[test]

@@ -231,8 +231,11 @@ shows the count and opens the dialog ([`config.md`](config.md)).
 
 ## Theming and fonts
 
-Settings ▸ Appearance and **Filters ▸ Theme** offer **Dark** (default), **Light** and **Brand**,
-a deep-teal palette drawn from the logo, remembered by name in `gui.json`. Fonts come from the
+Settings ▸ Appearance and **Filters ▸ Theme** offer **Dark** (default), **Light**, **Brand**
+(a deep-teal palette drawn from the logo) and **System**, which follows the desktop's
+dark/light setting — read from GNOME's `color-scheme`, the freedesktop appearance portal
+(`gdbus`), or the KDE/GTK config files, and re-checked every few seconds so a night-mode
+toggle is picked up live. The choice is remembered by name in `gui.json`. Fonts come from the
 system: the desktop's configured family is resolved with `fc-match` (KDE, then GTK, then
 fontconfig) for the UI and the monospace face, with the bundled egui faces kept only as glyph
 fallbacks. Sidebar and result icons are painted in the theme's colours.
