@@ -1061,6 +1061,9 @@ struct App {
     /// Text in the results header's “Filter results…” box: narrows the visible
     /// rows without re-querying (`all_results` keeps the full set).
     result_filter: String,
+    /// Client-side quick filters over the visible rows.
+    filter_empty: bool,
+    filter_broken: bool,
     // --- view state -------------------------------------------------------
     density: Density,
     /// Which view fills the central area (Results / Preview / Details / History).
@@ -1348,6 +1351,8 @@ impl App {
             extensions: start.extensions,
             sidebar_filter: String::new(),
             result_filter: String::new(),
+            filter_empty: false,
+            filter_broken: false,
             density,
             view: ViewTab::Results,
             panel_tab: PanelTab::Preview,
@@ -3243,6 +3248,25 @@ fn export_text(results: &[ResultRow], format: ExportFormat) -> String {
             serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
         }
     }
+}
+
+/// A file of zero bytes, or a directory with no entries.
+fn is_empty_entry(path: &Path, is_dir: bool) -> bool {
+    if is_dir {
+        std::fs::read_dir(path)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
+    } else {
+        std::fs::metadata(path)
+            .map(|m| m.len() == 0)
+            .unwrap_or(false)
+    }
+}
+
+/// A symlink whose target does not resolve.
+fn is_broken_symlink(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Ok(m) if m.file_type().is_symlink())
+        && std::fs::metadata(path).is_err()
 }
 
 /// Case-insensitive comparison of a stored digest with the user's query.
@@ -5270,6 +5294,16 @@ impl App {
                         self.result_filter.clear();
                         self.apply_tag_filter();
                     }
+                    if ui
+                        .checkbox(&mut self.filter_empty, "Empty")
+                        .on_hover_text("Only empty files and folders")
+                        .changed()
+                        | ui.checkbox(&mut self.filter_broken, "Broken links")
+                            .on_hover_text("Only broken symbolic links")
+                            .changed()
+                    {
+                        self.apply_tag_filter();
+                    }
                     if let Some(msg) = &self.trash_msg {
                         ui.label(
                             egui::RichText::new(format!("• {msg}"))
@@ -5450,6 +5484,8 @@ impl App {
         self.all_results.shrink_to_fit();
         self.checked.clear();
         self.result_filter.clear();
+        self.filter_empty = false;
+        self.filter_broken = false;
         self.truncated = false;
         self.error = None;
         self.elapsed_ms = 0;
@@ -5519,6 +5555,8 @@ impl App {
         self.dup_progress = None;
         self.sidebar_filter.clear();
         self.result_filter.clear();
+        self.filter_empty = false;
+        self.filter_broken = false;
         self.selected = 0;
         self.truncated = false;
         self.error = None;
@@ -5793,6 +5831,8 @@ impl App {
         self.all_results.clear();
         self.checked.clear();
         self.result_filter.clear();
+        self.filter_empty = false;
+        self.filter_broken = false;
         self.truncated = false;
         self.error = None;
         self.elapsed_ms = 0;
@@ -7579,6 +7619,8 @@ impl App {
                 None => true,
             })
             .filter(|r| path_contains(&r.path, &needle))
+            .filter(|r| !self.filter_empty || is_empty_entry(&r.path, r.is_dir))
+            .filter(|r| !self.filter_broken || is_broken_symlink(&r.path))
             .cloned()
             .collect();
         if self.selected >= self.results.len() {
@@ -10989,6 +11031,24 @@ mod tests {
         assert!(hash_eq("AABBCC", "aabbcc"));
         assert!(hash_eq("aabbcc", "  AABBCC  "));
         assert!(!hash_eq("aabbcc", "aabbcd"));
+    }
+
+    #[test]
+    fn empty_and_broken_detection() {
+        let dir = std::env::temp_dir().join(format!("easysearch-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.txt");
+        std::fs::write(&empty, b"").unwrap();
+        let full = dir.join("full.txt");
+        std::fs::write(&full, b"x").unwrap();
+        let broken = dir.join("broken");
+        std::os::unix::fs::symlink(dir.join("missing"), &broken).unwrap();
+        assert!(is_empty_entry(&empty, false));
+        assert!(!is_empty_entry(&full, false));
+        assert!(is_broken_symlink(&broken));
+        assert!(!is_broken_symlink(&full));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

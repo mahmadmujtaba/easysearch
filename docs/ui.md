@@ -99,7 +99,8 @@ and the ✕ beside it clears the filter. **File ▸ Export results…** writes t
 CSV, TSV or JSON file of your choosing (`name`, `path`, `size`, `modified`, plus `is_dir` in
 JSON), and reports the destination through a desktop notification. **File ▸ Find files by hash…**
 hashes the visible files (up to 2000, skipping folders and files over 512 MB) and lists those
-matching a pasted SHA-256.
+matching a pasted SHA-256. Two checkboxes beside the filter box keep only **Empty** files and
+folders or **Broken links** (broken symlinks).
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:

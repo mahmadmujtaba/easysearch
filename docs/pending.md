@@ -77,7 +77,8 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   user unit). **Done** (Settings ▸ Startup).
 - **Find by hash** — paste a SHA-256 to locate the file. **Done** (File ▸ Find files by
   hash…, over the visible results).
-- Extra cleanup filters — empty files/folders and broken symlinks.
+- Extra cleanup filters — empty files/folders and broken symlinks. **Done** (results-header
+  checkboxes).
 - Duplicate finder: ignore hardlinks / same-inode files.
 
 ### M — medium
