@@ -4,6 +4,43 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.51.0] - 2026-09-30
+
+### Added
+
+- **Query tokens, finished** — `folder:`/`parent:` (the containing folder's name)
+  and `|` for OR within one term (`*.jpg|*.png`, `foo bar|baz`), with `|` binding
+  tighter than the implicit AND.
+- **Command palette** (`Ctrl+Shift+P`) — a fuzzy list of ~35 app actions.
+- **Advanced search** (`Search ▸ Advanced search…`) — a form that composes the
+  filter tokens.
+- **Restore from Trash** (`Tools ▸ Restore from Trash…`) — list what you trashed
+  (from here or a file manager) and put files back.
+- **Open with…** — pick an application, remembered per file extension.
+- **Follow the system theme** — a **System** theme read from the desktop
+  (GNOME `color-scheme`, the freedesktop appearance portal, or the KDE/GTK
+  config) and re-checked live.
+- **Index diagnostics** (`Tools ▸ Index diagnostics…`) — state, counts, skipped
+  paths, watcher health, the time of the last index build and the live switches.
+- **Pause indexing** (`Tools`/`Settings`/palette/tray) with **Pause on battery**
+  and **Pause when hot** throttles; resuming re-syncs the index.
+- **Editable location bar** — an editable path field with filesystem
+  autocomplete, under the filters.
+- **Bulk rename** (`Tools ▸ Bulk rename…`) — find/replace plus numbering, with a
+  live preview and conflict checks.
+- **Column chooser** — the **Columns** menu shows, hides and reorders every result
+  column, including opt-in **Extension**, **Owner**, **Group**, **Permissions**,
+  **Inode** and **Links**.
+- **Multiple index roots** (`Tools ▸ Indexed roots…`) — edit `config.roots`, save
+  and rebuild, with per-root counts.
+- **CLI parity** — `easysearch-cli search --json`, and `easysearch-cli watch`
+  streaming new matches.
+
+### Changed
+
+- **`easysearch-cli search` and `watch` share their filters** via a common set of
+  arguments.
+
 ## [0.50.0] - 2026-09-29
 
 ### Added
