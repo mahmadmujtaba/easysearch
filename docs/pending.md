@@ -83,7 +83,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 
 ### M — medium
 
-- **Filter-within-results** box — narrow the visible list without re-querying.
+- **Filter-within-results** box — narrow the visible list without re-querying. **Done.**
 - **Query tokens** — `ext:pdf size:>10MB modified:today folder: parent: file:`,
   plus `|` (OR) and quoted phrases; most map onto fields `Query` already has.
 - **Advanced Search** dialog — a builder that composes those tokens.
