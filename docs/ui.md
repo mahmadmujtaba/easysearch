@@ -214,6 +214,11 @@ the search stays warm and the next open is instant. Only **Quit** stops the app
 and its engine: *File ▸ Quit EasySearch*, the tray's *Quit EasySearch*, or
 `easysearch --quit`.
 
+**Settings ▸ Startup ▸ *Start EasySearch at login (background)*** writes an XDG
+autostart entry (`~/.config/autostart/easysearch.desktop`) that runs
+`easysearch --daemon`, so the tray and the index are ready at login without
+opening a window. Unchecking it removes the entry.
+
 **Left-click** the tray icon to open the app ready to search — the window is
 shown with the cursor in the search box. **Middle-click** flips the window on and
 off. **Right-click** opens the menu:

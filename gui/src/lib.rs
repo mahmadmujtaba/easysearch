@@ -3237,6 +3237,28 @@ fn path_contains(path: &Path, needle: &str) -> bool {
     needle.is_empty() || path.to_string_lossy().to_lowercase().contains(needle)
 }
 
+/// The XDG autostart entry that starts the background host at login.
+fn autostart_entry() -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=EasySearch\n\
+         Comment=Realtime filename and content search\n\
+         Exec=easysearch --daemon\n\
+         Icon={APP_ID}\n\
+         Terminal=false\n\
+         X-GNOME-Autostart-enabled=true\n"
+    )
+}
+
+/// `~/.config/autostart/easysearch.desktop`, honouring `XDG_CONFIG_HOME`.
+fn autostart_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("autostart").join("easysearch.desktop"))
+}
+
 /// `rwxr-xr-x (0755)` for a path, or `—` when it cannot be read.
 fn file_perms(path: &Path) -> String {
     use std::os::unix::fs::PermissionsExt;
@@ -4265,6 +4287,20 @@ impl App {
                 }
                 if ui.button("Edit ignore files…").clicked() {
                     self.open_ignore_dialog();
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Startup").strong());
+                let mut autostart = Self::autostart_enabled();
+                if ui
+                    .checkbox(&mut autostart, "Start EasySearch at login (background)")
+                    .on_hover_text(
+                        "Writes an XDG autostart entry that runs `easysearch --daemon`, so the \
+                         tray and the index are ready without opening a window.",
+                    )
+                    .changed()
+                    && let Err(e) = Self::set_autostart(autostart)
+                {
+                    notify_desktop("Autostart", &format!("Could not update autostart: {e}"));
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Configuration").strong());
@@ -5573,6 +5609,30 @@ impl App {
             .find(|(_, c)| *c == self.category)
             .map(|(label, _)| (*label).to_string())
             .unwrap_or_else(|| "All files".to_string())
+    }
+
+    /// Is the login-autostart entry present?
+    fn autostart_enabled() -> bool {
+        autostart_path().is_some_and(|p| p.exists())
+    }
+
+    /// Create or remove the login-autostart entry (`~/.config/autostart`).
+    fn set_autostart(enabled: bool) -> std::io::Result<()> {
+        let Some(path) = autostart_path() else {
+            return Err(std::io::Error::other("no config directory"));
+        };
+        if enabled {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, autostart_entry())
+        } else {
+            match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
     }
 
     fn home_path(&self) -> PathBuf {
@@ -10811,6 +10871,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["name"], "My Report, v2.pdf");
         assert_eq!(parsed[0]["size"], 10);
+    }
+
+    #[test]
+    fn autostart_entry_runs_the_daemon() {
+        let entry = autostart_entry();
+        assert!(entry.starts_with("[Desktop Entry]\n"));
+        assert!(entry.contains("Exec=easysearch --daemon\n"));
+        assert!(entry.contains(&format!("Icon={APP_ID}\n")));
     }
 
     #[test]
