@@ -250,6 +250,9 @@ The first `--toggle`, `--show` or `--search` **starts** the app when nothing is 
 |---|---|
 | `↑` `↓` `PgUp` `PgDn` | Navigate results |
 | `Enter` / double-click | Open the selected result |
+| `Ctrl+Enter` | Open the containing folder |
+| `F5` | Re-run the search |
+| `Alt+↑` | Go to the parent location |
 | `Esc` | Clear the row selection, then the search |
 | `Ctrl+F` | Focus the search box |
 | `Ctrl+A` | Select all result rows (marks them) |

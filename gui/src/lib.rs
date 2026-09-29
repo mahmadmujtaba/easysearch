@@ -3709,22 +3709,41 @@ impl eframe::App for App {
                 }
             }
         } else if !search_focused {
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            // Alt+↑ is a separate shortcut (parent location); keep the plain
+            // arrows from also firing on it.
+            let (up, down, pgup, pgdn) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::ArrowUp) && !i.modifiers.alt,
+                    i.key_pressed(egui::Key::ArrowDown) && !i.modifiers.alt,
+                    i.key_pressed(egui::Key::PageUp),
+                    i.key_pressed(egui::Key::PageDown),
+                )
+            });
+            if down {
                 self.select(self.selected + 1, ctx);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            if up {
                 self.select(self.selected.saturating_sub(1), ctx);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
+            if pgdn {
                 self.select(self.selected + 20, ctx);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
+            if pgup {
                 self.select(self.selected.saturating_sub(20), ctx);
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::Enter))
-                && let Some(row) = self.results.get(self.selected)
-            {
-                App::open(&row.path);
+            // Enter opens the row; Ctrl+Enter opens its containing folder.
+            if let Some(path) = self.results.get(self.selected).map(|r| r.path.clone()) {
+                let (enter, ctrl_enter) = ctx.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Enter),
+                        i.modifiers.command && i.key_pressed(egui::Key::Enter),
+                    )
+                });
+                if ctrl_enter {
+                    App::open_folder(&path);
+                } else if enter {
+                    App::open(&path);
+                }
             }
         }
         // Escape first drops the bulk selection (unmarking every row); with
@@ -3736,6 +3755,20 @@ impl eframe::App for App {
                 self.query.clear();
                 self.history_idx = None;
                 self.send_query();
+            }
+        }
+        // F5 re-runs the current search; Alt+↑ narrows the location to its parent.
+        if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+            self.send_query();
+        }
+        if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowUp)) {
+            let parent = self
+                .under
+                .as_deref()
+                .and_then(|u| Path::new(u).parent())
+                .map(|p| p.to_string_lossy().into_owned());
+            if let Some(parent) = parent {
+                self.set_under(Some(parent));
             }
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
@@ -4163,6 +4196,9 @@ impl App {
                 let rows = [
                     ("↑ / ↓ / PgUp / PgDn", "Navigate results"),
                     ("Enter", "Open the selected file"),
+                    ("Ctrl+Enter", "Open the containing folder"),
+                    ("F5", "Re-run the search"),
+                    ("Alt+↑", "Go to the parent location"),
                     ("Double-click", "Open a result"),
                     ("Esc", "Clear the row selection, then the search"),
                     ("Ctrl+F", "Focus the search box"),
