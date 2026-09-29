@@ -41,7 +41,7 @@ back to its default while keeping the theme and zoom you picked. Both act
 immediately and report through a desktop notification that dismisses itself after
 five seconds (via `notify-send`), not a dialog; the index, tags and files are
 never touched. The window title carries the version and build stamp —
-`EasySearch v0.49.0-20260929` — as does the logo's tooltip.
+`EasySearch v0.50.0-20260929` — as does the logo's tooltip.
 
 ## Searching
 
@@ -221,12 +221,13 @@ and its engine: *File ▸ Quit EasySearch*, the tray's *Quit EasySearch*, or
 
 **Settings ▸ Startup ▸ *Start EasySearch at login (background)*** writes an XDG
 autostart entry (`~/.config/autostart/easysearch.desktop`) that runs
-`easysearch --daemon`, so the tray and the index are ready at login without
-opening a window. Unchecking it removes the entry.
+`easysearch --hidden`, so the tray and the index are ready at login without
+opening a window. Unchecking it removes the entry. Launching from the desktop
+(`easysearch` with no arguments) still opens a window.
 
-**Left-click** the tray icon to open the app ready to search — the window is
-shown with the cursor in the search box. **Middle-click** flips the window on and
-off. **Right-click** opens the menu:
+**Left-click** (or middle-click) the tray icon to **flip** the window: it opens
+ready to search if it is hidden, and hides again if it is visible. **Right-click**
+opens the menu:
 
 | Tray item | Effect |
 |---|---|

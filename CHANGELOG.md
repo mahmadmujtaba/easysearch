@@ -4,6 +4,34 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.0] - 2026-09-29
+
+### Added
+
+- **Copy as…** — the row menu (and bulk actions) can copy paths as `file://` URIs or
+  shell-escaped for a shell.
+- **More results shortcuts** — `Ctrl+Enter` opens the containing folder, `F5` re-runs
+  the search, and `Alt+↑` goes to the parent location.
+- **Export results** (`File ▸ Export results…`) — write the visible rows to a CSV,
+  TSV or JSON file.
+- **Start at login** (`Settings ▸ Startup`) — an XDG autostart entry that runs
+  `easysearch --hidden`, so the tray and index are warm at login without opening a
+  window.
+- **Find files by hash** (`File ▸ Find files by hash…`) — hash the visible files and
+  list those matching a pasted SHA-256.
+- **Filter results** — a box in the results header narrows the visible rows by name
+  or path without re-querying the index, with **Empty** and **Broken links** quick
+  filters beside it.
+
+### Changed
+
+- **The tray icon flips the window.** Left-click (and middle-click) now toggles —
+  show it ready to search when hidden, hide it when visible — instead of only
+  opening it.
+- **The duplicate finder ignores hardlinks** — files that share an inode are
+  collapsed to one entry, so the same file is no longer reported as its own
+  duplicate.
+
 ## [0.49.0] - 2026-09-29
 
 ### Changed
