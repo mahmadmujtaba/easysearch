@@ -4,6 +4,25 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.0] - 2026-09-29
+
+### Added
+
+- **A 95% zoom level**, alongside 100%, 110% and 125%.
+
+### Changed
+
+- **Select all marks the rows.** A checked row now reads as selected, so
+  **Select all** (and `Ctrl+A`) highlights every result row, not just its
+  checkbox. `Esc` clears the marks — unmarking every row — before it falls back
+  to clearing the search.
+- **Free memory and Reset defaults report through the desktop.** Neither opens a
+  dialog any more: each acts at once and shows a desktop notification that
+  dismisses itself after five seconds (`notify-send`).
+- **Reset defaults keeps your appearance.** It puts the search settings, filters,
+  tabs and saved searches back to their defaults but leaves the theme and zoom you
+  picked untouched.
+
 ## [0.47.0] - 2026-09-29
 
 ### Added

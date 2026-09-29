@@ -68,7 +68,7 @@
   </screenshots>
 
   <releases>
-    <release version="0.47.0" date="2026-09-29">
+    <release version="0.48.0" date="2026-09-29">
       <description>
         <p>
           Realtime filename and content search with a native GUI, tray, tags,
