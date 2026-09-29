@@ -122,11 +122,12 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 
 ## Repo & tooling
 
-- **CI builds the packages, not the tests.** `.github/workflows/packages.yml`
+- **The only automatic pipeline is the tag build.** `.github/workflows/packages.yml`
   builds the `.deb` and `.rpm` only when a `v*` tag is pushed (or on demand via
   *Run workflow*) and attaches them to the GitHub release; ordinary pushes to
-  `master` and pull requests build nothing. The test suite is run by the
-  contributor, not CI.
+  `master` and pull requests trigger nothing. `.github/workflows/ci.yml`
+  (fmt + check + test) is **manual-only** — run it from the Actions tab. The test
+  suite is otherwise run by the contributor.
 - **The end-to-end engine suite is `#[ignore]`d.** Every test in
   `daemon/tests/roundtrip.rs` spawns a real engine and waits for it to index, so
   the suite is slow. Run it on demand with

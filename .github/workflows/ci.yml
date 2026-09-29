@@ -1,23 +1,21 @@
-# Fast feedback for pull requests: formatting, a compile of every target and the
-# unit/integration test suite.
+# Formatting, a compile of every target, and the unit/integration test suite — run
+# on demand only.
 #
-#   pull request       fmt + check + test, so a change is reviewed green
-#   manual dispatch    the same, on demand
+#   manual dispatch    fmt + check + test (Actions ▸ checks ▸ Run workflow)
 #
-# Packaging (.deb/.rpm) is deliberately *not* built here — that only happens for
-# a version tag, in `packages.yml`. This workflow needs no secrets.
+# Nothing triggers this automatically. The only workflow that runs on its own is
+# the packaging build, and that only for a `v*` tag (`packages.yml`); ordinary
+# pushes to `master` and pull requests trigger nothing. This needs no secrets.
 name: checks
 
 on:
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
 # Read-only: this workflow never writes to the repository.
 permissions:
   contents: read
 
-# A newer push to the same PR supersedes an in-flight run.
+# A newer run of the same branch supersedes an in-flight one.
 concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true

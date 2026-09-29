@@ -142,10 +142,12 @@ Push your branch and open a PR against `master` with:
   light themes look different).
 - Any **follow-up** you deliberately left out.
 
-CI builds a `.deb` and an `.rpm` only when a `v*` tag is pushed, and attaches
-them to the GitHub release; pulls and pushes to `master` build nothing. Run the
-packaging workflow by hand (Actions ▸ *packages* ▸ *Run workflow*) to check
-packaging before you tag. The test suite is run by you, not CI, for now.
+The only pipeline that runs on its own is the packaging build, and only when a
+`v*` tag is pushed — it attaches the `.deb`/`.rpm` to the GitHub release. Pulls and
+pushes to `master` trigger nothing. Run the packaging workflow by hand
+(Actions ▸ *packages* ▸ *Run workflow*) to check packaging before you tag, and the
+manual-only *checks* workflow (Actions ▸ *checks* ▸ *Run workflow*) for
+fmt/check/test. The test suite is otherwise run by you, not CI.
 
 ## Conventions worth knowing
 
