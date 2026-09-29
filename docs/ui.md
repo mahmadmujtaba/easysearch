@@ -100,7 +100,8 @@ CSV, TSV or JSON file of your choosing (`name`, `path`, `size`, `modified`, plus
 JSON), and reports the destination through a desktop notification. **File ▸ Find files by hash…**
 hashes the visible files (up to 2000, skipping folders and files over 512 MB) and lists those
 matching a pasted SHA-256. Two checkboxes beside the filter box keep only **Empty** files and
-folders or **Broken links** (broken symlinks).
+folders or **Broken links** (broken symlinks). Select a row and press `F2` to rename it; the
+name is checked for clashes before the rename, and the row updates in place.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:
@@ -270,6 +271,7 @@ The first `--toggle`, `--show` or `--search` **starts** the app when nothing is 
 | `Ctrl+Enter` | Open the containing folder |
 | `F5` | Re-run the search |
 | `Alt+↑` | Go to the parent location |
+| `F2` | Rename the selected file |
 | `Esc` | Clear the row selection, then the search |
 | `Ctrl+F` | Focus the search box |
 | `Ctrl+A` | Select all result rows (marks them) |

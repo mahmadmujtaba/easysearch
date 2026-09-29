@@ -89,7 +89,7 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Advanced Search** dialog — a builder that composes those tokens.
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
   Permissions / Inode / Link count, persisted per tab.
-- **Rename in place** (`F2`) with clobber checks.
+- **Rename in place** (`F2`) with clobber checks. **Done.**
 - **Restore from Trash** in-app — list trashed items with original paths.
 - **Open with…** — pick an application, remembered per extension.
 - **Follow the system theme** — dark/light and the accent colour via the

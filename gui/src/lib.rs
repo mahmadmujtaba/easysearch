@@ -1140,6 +1140,10 @@ struct App {
     hash_matches: Vec<PathBuf>,
     hash_scanned: usize,
     hash_ran: bool,
+    /// The “Rename” dialog: which row is being renamed and the text being typed.
+    rename_target: Option<PathBuf>,
+    rename_value: String,
+    rename_error: Option<String>,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1408,6 +1412,9 @@ impl App {
             hash_matches: Vec::new(),
             hash_scanned: 0,
             hash_ran: false,
+            rename_target: None,
+            rename_value: String::new(),
+            rename_error: None,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -3289,6 +3296,22 @@ fn hash_eq(stored: &str, wanted: &str) -> bool {
     stored.eq_ignore_ascii_case(wanted.trim())
 }
 
+/// Check a user-typed name for the rename dialog, returning the trimmed name or
+/// the reason it cannot be used.
+fn validate_rename(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name.".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("That name is reserved.".to_string());
+    }
+    if name.contains('/') {
+        return Err("A name cannot contain a slash.".to_string());
+    }
+    Ok(name.to_string())
+}
+
 /// Does a result path contain `needle` (already lower-cased)? Powers the
 /// results-header “Filter results…” box; an empty needle matches everything.
 fn path_contains(path: &Path, needle: &str) -> bool {
@@ -3835,7 +3858,8 @@ impl eframe::App for App {
             || !self.trash_confirm.is_empty()
             || self.show_ignore
             || self.show_export
-            || self.show_hash;
+            || self.show_hash
+            || self.rename_target.is_some();
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -3946,6 +3970,18 @@ impl eframe::App for App {
         // F5 re-runs the current search; Alt+↑ narrows the location to its parent.
         if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
             self.send_query();
+        }
+        // F2 renames the selected row, unless the search box has the keyboard.
+        if ctx.input(|i| i.key_pressed(egui::Key::F2))
+            && !ctx.memory(|m| m.has_focus(search_id()))
+            && let Some(path) = self.results.get(self.selected).map(|r| r.path.clone())
+        {
+            self.rename_value = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.rename_error = None;
+            self.rename_target = Some(path);
         }
         if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowUp)) {
             let parent = self
@@ -4107,6 +4143,9 @@ impl eframe::App for App {
         }
         if self.show_hash {
             self.hash_dialog(ctx);
+        }
+        if self.rename_target.is_some() {
+            self.rename_dialog(ctx);
         }
     }
 
@@ -4405,6 +4444,7 @@ impl App {
                     ("Ctrl+Enter", "Open the containing folder"),
                     ("F5", "Re-run the search"),
                     ("Alt+↑", "Go to the parent location"),
+                    ("F2", "Rename the selected file"),
                     ("Double-click", "Open a result"),
                     ("Esc", "Clear the row selection, then the search"),
                     ("Ctrl+F", "Focus the search box"),
@@ -5693,6 +5733,99 @@ impl App {
             });
         if run {
             self.run_hash_search();
+        }
+    }
+
+    // --- rename -----------------------------------------------------------
+
+    fn rename_dialog(&mut self, ctx: &egui::Context) {
+        let Some(old) = self.rename_target.clone() else {
+            return;
+        };
+        let mut submit = false;
+        egui::Window::new("Rename")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(short_dir(&old))
+                        .small()
+                        .color(self.fg_dim()),
+                );
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.rename_value)
+                        .desired_width(360.0)
+                        .hint_text("New name"),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
+                if let Some(e) = &self.rename_error {
+                    ui.add_space(4.0);
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Rename").clicked() {
+                        submit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.rename_target = None;
+                    }
+                });
+            });
+        if submit {
+            self.commit_rename();
+        }
+    }
+
+    /// Rename the target row, refusing an empty/reserved name or a clash.
+    fn commit_rename(&mut self) {
+        let Some(old) = self.rename_target.clone() else {
+            return;
+        };
+        let new_name = match validate_rename(&self.rename_value) {
+            Ok(n) => n,
+            Err(e) => {
+                self.rename_error = Some(e);
+                return;
+            }
+        };
+        let Some(parent) = old.parent() else {
+            self.rename_error = Some("The path has no parent directory.".to_string());
+            return;
+        };
+        let new = parent.join(&new_name);
+        if new == old {
+            self.rename_target = None;
+            return;
+        }
+        if new.exists() {
+            self.rename_error = Some(format!("{} already exists.", new.display()));
+            return;
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => {
+                for row in self.results.iter_mut() {
+                    if row.path == old {
+                        row.path = new.clone();
+                    }
+                }
+                for row in self.all_results.iter_mut() {
+                    if row.path == old {
+                        row.path = new.clone();
+                    }
+                }
+                if self.checked.remove(&old) {
+                    self.checked.insert(new.clone());
+                }
+                self.rename_target = None;
+                self.rename_error = None;
+                notify_desktop("Renamed", &format!("{} → {}", old.display(), new.display()));
+            }
+            Err(e) => self.rename_error = Some(format!("Could not rename: {e}")),
         }
     }
 
@@ -11111,6 +11244,14 @@ mod tests {
         assert!(entry.starts_with("[Desktop Entry]\n"));
         assert!(entry.contains("Exec=easysearch --hidden\n"));
         assert!(entry.contains(&format!("Icon={APP_ID}\n")));
+    }
+
+    #[test]
+    fn rename_names_are_validated() {
+        assert_eq!(validate_rename(" report.pdf ").unwrap(), "report.pdf");
+        assert!(validate_rename("").is_err());
+        assert!(validate_rename("..").is_err());
+        assert!(validate_rename("a/b").is_err());
     }
 
     #[test]
