@@ -105,7 +105,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   permissions. **Done** (Tools ▸ Index diagnostics…: state, counts, pending
   changes, skipped, watch failures, last index time, content-index state and the
   live switches, with a Rebuild button).
-- **Pause indexing** plus battery/thermal throttling (UI + tray).
+- **Pause indexing** plus battery/thermal throttling (UI + tray). **Done**
+  (Tools/Settings/palette/tray, with **Pause on battery** and **Pause when hot**
+  auto-throttles read from `/sys`; resuming re-syncs the index).
 - **Command palette** (`Ctrl+Shift+P`) over the app's actions. **Done.**
 - **Editable breadcrumb** path bar with autocomplete over the index.
 - **CLI parity** — `--json` output, the same filters, and `watch "query"` to

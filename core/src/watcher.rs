@@ -14,6 +14,7 @@ use notify::{
     Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, mpsc};
 use std::thread::JoinHandle;
 
@@ -37,6 +38,7 @@ pub fn start_watcher(
     queue: Option<Arc<ExtractQueue>>,
     status: Arc<RwLock<Status>>,
     opts: WalkOptions,
+    paused: Arc<AtomicBool>,
     on_error: Arc<dyn Fn() + Send + Sync>,
 ) -> JoinHandle<()> {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
@@ -117,6 +119,11 @@ pub fn start_watcher(
                                     let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
                                 }
                             }
+                        }
+                        // While paused, events are dropped: resume re-syncs the
+                        // index (see `Engine::set_paused`).
+                        if paused.load(Ordering::Relaxed) {
+                            continue;
                         }
                         handle_event(
                             &event,

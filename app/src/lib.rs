@@ -60,6 +60,9 @@ pub fn engine_log_path() -> Option<PathBuf> {
 pub fn run_engine(quiet: bool) -> Result<(), String> {
     let mut engine = Engine::new(Config::load());
     engine.start();
+    if easysearch_gui::pause_indexing_pref() {
+        engine.set_paused(true);
+    }
     let engine = std::sync::Arc::new(engine);
 
     if !quiet {
@@ -91,6 +94,8 @@ enum DaemonMsg {
     ClearResults,
     /// Rebuild the on-disk index (the engine lives here, so no window is needed).
     RebuildIndex,
+    /// Pause or resume live indexing (the engine lives here).
+    TogglePause,
     /// Reveal the index folder in the file manager.
     OpenIndexFolder,
     /// Open the Settings dialog.
@@ -123,6 +128,7 @@ impl DaemonMsg {
             TrayMsg::Search(q) => DaemonMsg::Search(q),
             TrayMsg::ClearHistory => DaemonMsg::ClearHistory,
             TrayMsg::RebuildIndex => DaemonMsg::RebuildIndex,
+            TrayMsg::TogglePause => DaemonMsg::TogglePause,
             TrayMsg::OpenIndexFolder => DaemonMsg::OpenIndexFolder,
             TrayMsg::Settings => DaemonMsg::Settings,
             TrayMsg::About => DaemonMsg::About,
@@ -137,7 +143,11 @@ pub fn run_daemon() -> Result<(), String> {
     // The engine runs here, so it survives every window open/close.
     let mut engine = Engine::new(Config::load());
     engine.start();
-    let daemon = easysearch_daemon::Daemon::new(Arc::new(engine));
+    if easysearch_gui::pause_indexing_pref() {
+        engine.set_paused(true);
+    }
+    let engine = Arc::new(engine);
+    let daemon = easysearch_daemon::Daemon::new(Arc::clone(&engine));
 
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
 
@@ -240,6 +250,9 @@ pub fn run_daemon() -> Result<(), String> {
                         op: Op::Rebuild,
                         payload: None,
                     });
+                }
+                DaemonMsg::TogglePause => {
+                    engine.set_paused(!engine.paused());
                 }
                 // Clearing history with a window open has to happen *there*, or
                 // the window's own prefs save would write the old list back.

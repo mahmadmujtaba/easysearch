@@ -168,6 +168,23 @@ fn walk_settings_round_trip_through_the_child() {
 
 #[test]
 #[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
+fn pausing_indexing_round_trips() {
+    let fixture = Fixture::new("pause");
+    fixture.wait_for("a live index", |r| r.status.state == State::Live);
+    assert!(
+        !fixture.child.report().unwrap().status.paused,
+        "not paused at start"
+    );
+
+    fixture.child.set_paused(true).unwrap();
+    fixture.wait_for("paused", |r| r.status.paused);
+
+    fixture.child.set_paused(false).unwrap();
+    fixture.wait_for("resumed", |r| !r.status.paused);
+}
+
+#[test]
+#[ignore = "pending: spawns a real engine and waits to index; run with --ignored"]
 fn the_content_cache_switch_round_trips() {
     let fixture = Fixture::new("cindex");
     fixture.wait_for("a live index", |r| r.status.state == State::Live);

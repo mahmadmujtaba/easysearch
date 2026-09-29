@@ -128,6 +128,16 @@ impl Backend {
         }
     }
 
+    /// Pause or resume live indexing (in-process engine, or the child).
+    pub fn set_paused(&self, on: bool) {
+        match self {
+            Backend::Local(e) => e.set_paused(on),
+            Backend::Child(c) => {
+                let _ = c.set_paused(on);
+            }
+        }
+    }
+
     /// Replace the excluded-directory list (in-process engine, or the child).
     /// The engine resolves `~`/relative entries and rebuilds its index.
     pub fn set_exclude_dirs(&self, dirs: Vec<String>) {

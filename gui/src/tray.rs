@@ -39,6 +39,8 @@ pub enum TrayMsg {
     ClearHistory,
     /// Rebuild the on-disk index.
     RebuildIndex,
+    /// Pause or resume live indexing.
+    TogglePause,
     /// Reveal the index folder in the file manager.
     OpenIndexFolder,
     /// Open the Settings dialog.
@@ -148,6 +150,7 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
         items.push(msg_item("Rebuild index", TrayMsg::RebuildIndex));
+        items.push(msg_item("Pause / resume indexing", TrayMsg::TogglePause));
         items.push(msg_item("Open index folder", TrayMsg::OpenIndexFolder));
         items.push(MenuItem::Separator);
         items.push(msg_item("Settings…", TrayMsg::Settings));
@@ -253,6 +256,7 @@ mod tests {
             "Clear results",
             "Recent searches",
             "Rebuild index",
+            "Pause / resume indexing",
             "Open index folder",
             "Settings…",
             "About EasySearch",

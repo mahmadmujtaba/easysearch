@@ -625,6 +625,12 @@ pub fn clear_recent_searches() {
     prefs.clear_history();
 }
 
+/// Whether the user left indexing paused, so the host can apply it at startup
+/// (before any window is open).
+pub fn pause_indexing_pref() -> bool {
+    GuiPrefs::load().pause_indexing
+}
+
 /// The logo rendered for the window icon.
 fn window_icon() -> egui::IconData {
     const SIZE: u32 = 256;
@@ -718,6 +724,15 @@ struct GuiPrefs {
     /// id), so the same app is reused for that kind of file.
     #[serde(default)]
     open_with: BTreeMap<String, String>,
+    /// Live indexing is paused by the user.
+    #[serde(default)]
+    pause_indexing: bool,
+    /// Pause live indexing automatically while on battery.
+    #[serde(default)]
+    throttle_on_battery: bool,
+    /// Pause live indexing automatically when a thermal zone runs hot.
+    #[serde(default)]
+    throttle_when_hot: bool,
 }
 
 impl Default for GuiPrefs {
@@ -737,6 +752,9 @@ impl Default for GuiPrefs {
             multiline: false,
             content_warning_seen: false,
             open_with: BTreeMap::new(),
+            pause_indexing: false,
+            throttle_on_battery: false,
+            throttle_when_hot: false,
         }
     }
 }
@@ -973,6 +991,7 @@ enum PaletteAction {
     FreeMemory,
     ResetDefaults,
     RebuildIndex,
+    TogglePause,
     Advanced,
     FindHash,
     Export,
@@ -1259,6 +1278,8 @@ struct App {
     trash_restore_msg: Option<String>,
     /// The read-only “Index diagnostics” window.
     show_diagnostics: bool,
+    /// When the battery/thermal throttle was last re-checked.
+    throttle_at: Instant,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1543,6 +1564,7 @@ impl App {
             trash_items: Vec::new(),
             trash_restore_msg: None,
             show_diagnostics: false,
+            throttle_at: Instant::now(),
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -1711,6 +1733,24 @@ impl App {
         if detected != self.sys_theme {
             self.sys_theme = detected;
             self.apply_style(ctx);
+        }
+    }
+
+    /// Push the effective pause state to the engine: the user's toggle, or the
+    /// battery/thermal throttle kicking in. Re-checked on a timer, not per frame.
+    fn apply_throttle(&mut self) {
+        if self.throttle_at.elapsed() < Duration::from_secs(10) {
+            return;
+        }
+        self.throttle_at = Instant::now();
+        let desired = self.prefs.pause_indexing
+            || (self.prefs.throttle_on_battery && system_on_battery() == Some(true))
+            || (self.prefs.throttle_when_hot && system_too_hot() == Some(true));
+        if desired != self.status.paused {
+            self.engine.set_paused(desired);
+            // Mirror at once so the status dot and checkbox do not flicker while
+            // a remote engine's status is still in flight.
+            self.status.paused = desired;
         }
     }
 
@@ -2249,6 +2289,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Free memory", FreeMemory),
         ("Reset defaults", ResetDefaults),
         ("Rebuild index", RebuildIndex),
+        ("Pause / resume indexing", TogglePause),
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
@@ -4421,6 +4462,66 @@ fn ext_key(path: &Path) -> Option<String> {
         .map(|e| e.to_ascii_lowercase())
 }
 
+// --- battery / thermal ----------------------------------------------------
+
+/// Thermal-zone temperature (millidegrees) above which indexing is throttled.
+const HOT_MILLIDEG: i64 = 85_000;
+
+/// Whether the machine is running on battery: `Some(true)` discharging,
+/// `Some(false)` on a battery that is charging/full, `None` when no battery is
+/// present (a desktop) or `/sys` is unreadable.
+fn system_on_battery() -> Option<bool> {
+    let entries = std::fs::read_dir("/sys/class/power_supply").ok()?;
+    let mut seen = false;
+    let mut discharging = false;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        // Only real batteries, not AC/mains adapters.
+        if !matches!(read_sys(&dir.join("type")).as_deref(), Some("Battery")) {
+            continue;
+        }
+        seen = true;
+        let status = read_sys(&dir.join("status")).unwrap_or_default();
+        if battery_state_from(&status) == Some(true) {
+            discharging = true;
+        }
+    }
+    seen.then_some(discharging)
+}
+
+/// `"Discharging"` → discharging; charging/full/unknown → not.
+fn battery_state_from(status: &str) -> Option<bool> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "discharging" => Some(true),
+        "charging" | "full" | "not charging" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether any thermal zone is hot enough to throttle: `Some(true)` hot,
+/// `Some(false)` cool, `None` when no thermal zone is readable.
+fn system_too_hot() -> Option<bool> {
+    let entries = std::fs::read_dir("/sys/class/thermal").ok()?;
+    let mut max: Option<i64> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("thermal_zone") {
+            continue;
+        }
+        if let Some(t) = read_sys(&entry.path().join("temp")).and_then(|t| t.trim().parse().ok()) {
+            max = Some(max.map_or(t, |m: i64| m.max(t)));
+        }
+    }
+    max.map(|t| t >= HOT_MILLIDEG)
+}
+
+/// Read a `/sys` file as a trimmed string, if it is there.
+fn read_sys(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
 fn resolve_system_font(candidates: &[String], mono: bool) -> Option<Vec<u8>> {
     for family in candidates {
         if let Some(bytes) = fontconfig_file(family, mono) {
@@ -4465,6 +4566,7 @@ fn fontconfig_file(family: &str, mono: bool) -> Option<Vec<u8>> {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.refresh_system_theme(ctx);
+        self.apply_throttle();
         // Load the application list once at startup, but only if a remembered
         // “Open with” choice needs its name for a menu label.
         if !self.open_apps_loaded && !self.prefs.open_with.is_empty() {
@@ -5192,6 +5294,39 @@ impl App {
                     self.engine.set_follow_symlinks(follow);
                     self.status.follow_symlinks = follow;
                 }
+                ui.horizontal(|ui| {
+                    let mut paused = self.prefs.pause_indexing;
+                    if ui
+                        .checkbox(&mut paused, "Pause indexing")
+                        .on_hover_text(
+                            "Stop live updates and background rebuilds; resuming re-syncs the index.",
+                        )
+                        .changed()
+                    {
+                        self.prefs.pause_indexing = paused;
+                        self.engine.set_paused(paused);
+                        self.status.paused = paused;
+                        self.prefs.save();
+                    }
+                });
+                let mut on_battery = self.prefs.throttle_on_battery;
+                if ui
+                    .checkbox(&mut on_battery, "Pause on battery")
+                    .on_hover_text("Pause live indexing automatically while on battery power.")
+                    .changed()
+                {
+                    self.prefs.throttle_on_battery = on_battery;
+                    self.prefs.save();
+                }
+                let mut when_hot = self.prefs.throttle_when_hot;
+                if ui
+                    .checkbox(&mut when_hot, "Pause when hot")
+                    .on_hover_text("Pause live indexing when a thermal zone runs hot.")
+                    .changed()
+                {
+                    self.prefs.throttle_when_hot = when_hot;
+                    self.prefs.save();
+                }
                 let mut content_index = matches!(
                     self.status.content_index,
                     ContentIndexStatus::Enabled { .. }
@@ -5478,6 +5613,19 @@ impl App {
                             if ui.button("Rebuild index").clicked() {
                                 self.engine.rebuild();
                                 ui.close_menu();
+                            }
+                            let mut paused = self.prefs.pause_indexing;
+                            if ui
+                                .checkbox(&mut paused, "Pause indexing")
+                                .on_hover_text(
+                                    "Hold back the watcher and background rebuilds; resuming re-syncs.",
+                                )
+                                .changed()
+                            {
+                                self.prefs.pause_indexing = paused;
+                                self.prefs.save();
+                                self.engine.set_paused(paused);
+                                self.status.paused = paused;
                             }
                             if ui.button("Ignore files…").clicked() {
                                 self.open_ignore_dialog();
@@ -6698,6 +6846,13 @@ impl App {
             PaletteAction::FreeMemory => self.free_memory(),
             PaletteAction::ResetDefaults => self.reset_defaults(ctx),
             PaletteAction::RebuildIndex => self.engine.rebuild(),
+            PaletteAction::TogglePause => {
+                let paused = !self.status.paused;
+                self.prefs.pause_indexing = paused;
+                self.prefs.save();
+                self.engine.set_paused(paused);
+                self.status.paused = paused;
+            }
             PaletteAction::Advanced => self.open_advanced(),
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
@@ -7261,13 +7416,19 @@ impl App {
                     .spacing([16.0, 6.0])
                     .striped(true)
                     .show(ui, |ui| {
-                        let mut row = |ui: &mut egui::Ui, key: &str, value: String, color| {
+                        let row = |ui: &mut egui::Ui, key: &str, value: String, color| {
                             ui.label(egui::RichText::new(key).color(t.dim));
                             ui.label(egui::RichText::new(value).color(color));
                             ui.end_row();
                         };
                         row(ui, "Backend", backend.clone(), t.text);
                         row(ui, "State", state.to_string(), state_color);
+                        row(
+                            ui,
+                            "Paused",
+                            yes_no(s.paused).to_string(),
+                            if s.paused { t.warn } else { t.text },
+                        );
                         row(ui, "Files", human_count(files), t.text);
                         row(ui, "Folders", human_count(dirs), t.text);
                         row(
@@ -7738,17 +7899,30 @@ impl App {
     }
 
     /// Collapsible cheat-sheet; its open state is persisted.
-    /// “LIVE” / “INDEX” pill; the dot pulses while the first pass runs.
+    /// “LIVE” / “INDEX” / “PAUSED” pill; the dot pulses while the first pass runs.
     fn live_badge(&self, ui: &mut egui::Ui) {
         let t = self.theme();
+        let paused = self.status.paused;
         let live = self.status.state == State::Live;
-        let color = if live { t.good } else { t.warn };
-        let pulse = if live {
+        let color = if paused {
+            t.faint
+        } else if live {
+            t.good
+        } else {
+            t.warn
+        };
+        let pulse = if live || paused {
             1.0
         } else {
             ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32
         };
-        let text = if live { "LIVE" } else { "INDEX" };
+        let text = if paused {
+            "PAUSED"
+        } else if live {
+            "LIVE"
+        } else {
+            "INDEX"
+        };
         let galley = ui.painter().layout_no_wrap(
             text.to_string(),
             egui::FontId::new(10.0, egui::FontFamily::Proportional),
@@ -7770,7 +7944,7 @@ impl App {
             galley,
             color,
         );
-        if !live {
+        if !live && !paused {
             ui.ctx().request_repaint();
         }
     }
@@ -12597,6 +12771,16 @@ mod tests {
         assert_eq!(relative_time(1000, 940), "1 min ago");
         assert_eq!(relative_time(10_000, 3_000), "1 h ago");
         assert_eq!(relative_time(200_000, 20_000), "2 d ago");
+    }
+
+    #[test]
+    fn battery_state_is_read_from_the_kernel_value() {
+        assert_eq!(battery_state_from("Discharging\n"), Some(true));
+        assert_eq!(battery_state_from("Charging"), Some(false));
+        assert_eq!(battery_state_from("Full"), Some(false));
+        assert_eq!(battery_state_from("Not charging"), Some(false));
+        assert_eq!(battery_state_from("Unknown"), None);
+        assert_eq!(battery_state_from(""), None);
     }
 
     #[test]

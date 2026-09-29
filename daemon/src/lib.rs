@@ -84,6 +84,9 @@ impl Daemon {
                     if let Some(on) = patch.content_index {
                         self.engine.set_content_index(on);
                     }
+                    if let Some(on) = patch.paused {
+                        self.engine.set_paused(on);
+                    }
                     let walk_changed = patch.respect.is_some()
                         || patch.follow_symlinks.is_some()
                         || patch.exclude_dirs.is_some();

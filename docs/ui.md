@@ -241,6 +241,12 @@ permissions), directories the watcher could not watch, the time of the last comp
 build, the content-index state, and the two live switches. It has a **Rebuild index** button and
 its own **Close**.
 
+**Pause indexing** (Tools menu, Settings ▸ Indexing, the palette and the tray) holds back the
+watcher and the background rebuilds, so the index stops churning — resuming re-syncs it, since
+changes made while paused were not observed. Two automatic throttles sit beside it: **Pause on
+battery** and **Pause when hot**, which flip the same switch while on battery power or when a
+thermal zone runs hot (read from `/sys`). The status pill reads **PAUSED** while it is on.
+
 ## Theming and fonts
 
 Settings ▸ Appearance and **Filters ▸ Theme** offer **Dark** (default), **Light**, **Brand**
@@ -278,6 +284,7 @@ opens the menu:
 | *Clear results* | empty the open window's result list (frees the rows) |
 | *Recent searches ▸* | re-run a recent query; *Clear history* empties the list |
 | *Rebuild index* | rebuild the on-disk index |
+| *Pause / resume indexing* | hold back live updates and background rebuilds |
 | *Open index folder* | reveal the index folder in the file manager |
 | *Settings…* / *About* | open the matching dialog in the window |
 | *Quit EasySearch* | stop the app and its engine |

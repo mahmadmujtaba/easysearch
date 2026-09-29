@@ -84,6 +84,10 @@ pub struct Status {
     /// start that served a cached index without re-walking).
     #[serde(default)]
     pub last_index_at: i64,
+    /// Live indexing is paused (the watcher's changes and background rebuilds are
+    /// held back). Live-toggleable via [`Engine::set_paused`].
+    #[serde(default)]
+    pub paused: bool,
     /// Directory subtrees excluded from the index (as configured; `~` and
     /// relative paths are shown unresolved). Live-editable via
     /// [`Engine::set_exclude_dirs`].
@@ -106,6 +110,7 @@ impl Default for Status {
             respect_ignore_files: true,
             follow_symlinks: false,
             last_index_at: 0,
+            paused: false,
             exclude_dirs: Vec::new(),
         }
     }
@@ -137,6 +142,9 @@ pub struct Engine {
     respect_ignore: Arc<AtomicBool>,
     /// Whether symbolic links are followed. Same live-toggle semantics.
     follow_symlinks: Arc<AtomicBool>,
+    /// Live indexing is paused. Read by the watcher (skip changes) and by the
+    /// background rebuilds (held back). See [`Engine::set_paused`].
+    paused: Arc<AtomicBool>,
 }
 
 /// Where the optional content cache keeps the text it extracts.
@@ -170,6 +178,7 @@ impl Engine {
             respect_ignore_files: config.respect_ignore_files,
             follow_symlinks: config.follow_symlinks,
             last_index_at: 0,
+            paused: false,
             exclude_dirs: config.exclude_dirs.clone(),
         }));
         let cache = Arc::new(ContentIndex::new(
@@ -255,6 +264,7 @@ impl Engine {
             counts_cache,
             respect_ignore: Arc::new(AtomicBool::new(respect_ignore_files)),
             follow_symlinks: Arc::new(AtomicBool::new(follow_symlinks)),
+            paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -300,6 +310,56 @@ impl Engine {
     /// Current value of the ignore-files setting.
     pub fn respect_ignore(&self) -> bool {
         self.respect_ignore.load(Ordering::Relaxed)
+    }
+
+    /// Pause or resume live indexing.
+    ///
+    /// While paused the watcher ignores filesystem events and background rebuilds
+    /// are held back, so the index stops churning (useful on battery or when the
+    /// machine is hot). Resuming re-syncs the index, since changes made while
+    /// paused were not observed.
+    pub fn set_paused(&self, on: bool) {
+        let was = self.paused.swap(on, Ordering::SeqCst);
+        if let Ok(mut s) = self.status.write() {
+            s.paused = on;
+        }
+        if was && !on {
+            self.resync();
+        }
+    }
+
+    /// Whether live indexing is paused.
+    pub fn paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Bring the index back in step with the filesystem after a pause.
+    fn resync(&self) {
+        if self.config.persist_index {
+            self.spawn_rebuild(true);
+            return;
+        }
+        // RAM-only: re-walk into the overlay, as the degraded rescan does.
+        let roots = Arc::clone(&self.roots);
+        let status = Arc::clone(&self.status);
+        let queue = self.queue.clone();
+        let overlay = Arc::clone(&self.overlay);
+        let opts = self.walk_options();
+        std::thread::Builder::new()
+            .name("resync".into())
+            .spawn(move || {
+                for root in &roots.roots {
+                    walk_root_apply(
+                        root,
+                        &overlay,
+                        &roots,
+                        queue.as_ref(),
+                        &status,
+                        opts.clone(),
+                    );
+                }
+            })
+            .ok();
     }
 
     /// Follow symbolic links into their targets (and rebuild so it takes effect).
@@ -421,7 +481,7 @@ impl Engine {
                     // Served from the cache: date it from the database file.
                     s.last_index_at = file_mtime(&self.config.db_dir().join(DB_FILE));
                 }
-                self.spawn_rebuild();
+                self.spawn_rebuild(false);
             }
             return;
         }
@@ -434,7 +494,7 @@ impl Engine {
                 s.state = State::Live;
                 s.last_index_at = file_mtime(&self.index_path);
             }
-            self.spawn_rebuild();
+            self.spawn_rebuild(false);
         } else {
             let roots = Arc::clone(&self.roots);
             let status = Arc::clone(&self.status);
@@ -557,6 +617,7 @@ impl Engine {
             queue,
             status,
             opts,
+            Arc::clone(&self.paused),
             on_error,
         );
         drop(handle); // detached: the thread runs until process exit
@@ -565,11 +626,16 @@ impl Engine {
     /// Trigger a background compaction/rebuild of the disk index.
     pub fn rebuild(&self) {
         if self.config.persist_index {
-            self.spawn_rebuild();
+            self.spawn_rebuild(true);
         }
     }
 
-    fn spawn_rebuild(&self) {
+    fn spawn_rebuild(&self, force: bool) {
+        // Background rebuilds are held back while paused; a user-initiated one
+        // (`force`) still runs, so "Rebuild index" is never a no-op.
+        if !force && self.paused.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(db) = self.sqlite.clone() {
             let roots = Arc::clone(&self.roots);
             let status = Arc::clone(&self.status);
@@ -643,7 +709,7 @@ impl Engine {
             self.flush_overlay();
             let dirty = db.lock().map(|d| d.dirty()).unwrap_or(0);
             if dirty > REFRESH_AFTER_DIRTY && !self.rebuilding.load(Ordering::Relaxed) {
-                self.spawn_rebuild();
+                self.spawn_rebuild(false);
             }
             return;
         }
@@ -652,7 +718,7 @@ impl Engine {
         }
         let pending = self.overlay.read().unwrap().pending_changes();
         if pending > self.config.overlay_compaction_threshold {
-            self.spawn_rebuild();
+            self.spawn_rebuild(false);
         }
     }
 
@@ -683,6 +749,7 @@ impl Engine {
     pub fn status_snapshot(&self) -> Status {
         let mut s = self.status.read().unwrap().clone();
         s.respect_ignore_files = self.respect_ignore.load(Ordering::Relaxed);
+        s.paused = self.paused.load(Ordering::Relaxed);
         s.follow_symlinks = self.follow_symlinks.load(Ordering::Relaxed);
         s.content_index = if self.cache.enabled() {
             let (entries, bytes) = self.cache.stats();

@@ -348,6 +348,14 @@ impl ChildEngine {
         })
     }
 
+    /// Pause or resume live indexing in the engine.
+    pub fn set_paused(&self, on: bool) -> Result<(), String> {
+        self.patch(ConfigPatch {
+            paused: Some(on),
+            ..Default::default()
+        })
+    }
+
     /// Last polled status report (`None` until the first successful poll).
     pub fn report(&self) -> Option<StatusReport> {
         self.report.read().ok().and_then(|r| r.clone())
