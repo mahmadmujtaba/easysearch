@@ -13,7 +13,7 @@ use crate::disk_index::{DiskIndex, INDEX_FILE};
 use crate::matcher::{CompiledQuery, Query, is_hidden, matches_category};
 use crate::overlay::{Meta, Overlay};
 use crate::roots::RootSet;
-use crate::sqlite_index::{REFRESH_AFTER_DIRTY, SqliteIndex};
+use crate::sqlite_index::{DB_FILE, REFRESH_AFTER_DIRTY, SqliteIndex};
 use crate::walker::{self, walk_root_apply, walk_root_collect};
 use crate::watcher;
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,10 @@ pub struct Status {
     /// via [`Engine::set_follow_symlinks`].
     #[serde(default)]
     pub follow_symlinks: bool,
+    /// Unix time of the last completed index build/rebuild (0 = unknown, e.g. a
+    /// start that served a cached index without re-walking).
+    #[serde(default)]
+    pub last_index_at: i64,
     /// Directory subtrees excluded from the index (as configured; `~` and
     /// relative paths are shown unresolved). Live-editable via
     /// [`Engine::set_exclude_dirs`].
@@ -101,6 +105,7 @@ impl Default for Status {
             base_dirs: 0,
             respect_ignore_files: true,
             follow_symlinks: false,
+            last_index_at: 0,
             exclude_dirs: Vec::new(),
         }
     }
@@ -164,6 +169,7 @@ impl Engine {
             base_dirs: 0,
             respect_ignore_files: config.respect_ignore_files,
             follow_symlinks: config.follow_symlinks,
+            last_index_at: 0,
             exclude_dirs: config.exclude_dirs.clone(),
         }));
         let cache = Arc::new(ContentIndex::new(
@@ -396,7 +402,11 @@ impl Engine {
                             }
                         }
                         trim_allocator();
-                        status.write().unwrap().state = State::Live;
+                        {
+                            let mut s = status.write().unwrap();
+                            s.state = State::Live;
+                            s.last_index_at = now_unix();
+                        }
                     })
                     .expect("failed to spawn sqlite-build thread");
             } else {
@@ -408,6 +418,8 @@ impl Engine {
                     s.base_files = files;
                     s.base_dirs = dirs;
                     s.state = State::Live;
+                    // Served from the cache: date it from the database file.
+                    s.last_index_at = file_mtime(&self.config.db_dir().join(DB_FILE));
                 }
                 self.spawn_rebuild();
             }
@@ -417,7 +429,11 @@ impl Engine {
         let has_cache = self.config.persist_index && self.base.read().unwrap().is_some();
         if has_cache {
             // Searchable immediately; refresh the base in the background.
-            self.status.write().unwrap().state = State::Live;
+            {
+                let mut s = self.status.write().unwrap();
+                s.state = State::Live;
+                s.last_index_at = file_mtime(&self.index_path);
+            }
             self.spawn_rebuild();
         } else {
             let roots = Arc::clone(&self.roots);
@@ -451,7 +467,11 @@ impl Engine {
                             );
                         }
                     }
-                    status.write().unwrap().state = State::Live;
+                    {
+                        let mut s = status.write().unwrap();
+                        s.state = State::Live;
+                        s.last_index_at = now_unix();
+                    }
                 })
                 .expect("failed to spawn index-build thread");
         }
@@ -578,6 +598,7 @@ impl Engine {
                                 s.base_entries = n;
                                 s.base_files = files;
                                 s.base_dirs = dirs;
+                                s.last_index_at = now_unix();
                             }
                             Err(e) => eprintln!("sqlite: rebuild failed: {e}"),
                         }
@@ -1146,6 +1167,16 @@ pub(crate) fn accepts(cq: &CompiledQuery, p: &Path, meta: Meta, files_only: bool
     true
 }
 
+/// Modification time of a file in unix seconds (0 if it cannot be read).
+fn file_mtime(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Current unix time in whole seconds (0 if the clock is before the epoch).
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -1192,6 +1223,7 @@ fn rebuild_once(
             let idx = Arc::new(idx);
             *base.write().unwrap() = Some(Arc::clone(&idx));
             overlay.write().unwrap().prune_against(|p| idx.contains(p));
+            status.write().unwrap().last_index_at = now_unix();
         }
         Err(e) => eprintln!("index rebuild failed: {e}"),
     }

@@ -102,7 +102,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   appearance portal via `gdbus`, then KDE/GTK config; re-checked live. The accent
   colour is not taken from the system — the built-in palettes keep their own).
 - **Index diagnostics** — last scan, watcher health, and paths skipped for
-  permissions.
+  permissions. **Done** (Tools ▸ Index diagnostics…: state, counts, pending
+  changes, skipped, watch failures, last index time, content-index state and the
+  live switches, with a Rebuild button).
 - **Pause indexing** plus battery/thermal throttling (UI + tray).
 - **Command palette** (`Ctrl+Shift+P`) over the app's actions. **Done.**
 - **Editable breadcrumb** path bar with autocomplete over the index.

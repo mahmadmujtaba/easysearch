@@ -20,7 +20,7 @@ panes           sidebar | central view | preview/details;  below: view tabs · b
 
 **Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (advanced search,
 content, regex, fuzzy, multiline, case, hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
-excluded folders, saved searches, restore from trash) · Settings (settings, zoom) · Help (about, shortcuts). The six
+excluded folders, saved searches, restore from trash, index diagnostics) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
 
@@ -234,6 +234,12 @@ folders…** edits `config.exclude_dirs` — exact directory trees to skip, one 
 home) — and saves `config.json` with a live rebuild; right-clicking a folder result ▸ **Exclude
 folder from the index** adds one on the spot, and the sidebar's **Excluded folders (N)…** row
 shows the count and opens the dialog ([`config.md`](config.md)).
+
+**Tools ▸ Index diagnostics…** (also in the palette) opens a read-only snapshot: the backend and
+state, files and folders, base entries, pending overlay changes, paths skipped (typically
+permissions), directories the watcher could not watch, the time of the last completed index
+build, the content-index state, and the two live switches. It has a **Rebuild index** button and
+its own **Close**.
 
 ## Theming and fonts
 

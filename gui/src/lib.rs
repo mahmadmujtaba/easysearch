@@ -978,6 +978,7 @@ enum PaletteAction {
     Export,
     OpenTrash,
     OpenWith,
+    Diagnostics,
     RenameSelected,
     TogglePreview,
     ToggleCozy,
@@ -1256,6 +1257,8 @@ struct App {
     show_trash: bool,
     trash_items: Vec<easysearch_core::trash::TrashedItem>,
     trash_restore_msg: Option<String>,
+    /// The read-only “Index diagnostics” window.
+    show_diagnostics: bool,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1539,6 +1542,7 @@ impl App {
             show_trash: false,
             trash_items: Vec::new(),
             trash_restore_msg: None,
+            show_diagnostics: false,
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -2249,6 +2253,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
         ("Open with…", OpenWith),
+        ("Index diagnostics…", Diagnostics),
         ("Restore from Trash…", OpenTrash),
         ("Rename selected file", RenameSelected),
         ("Toggle preview pane", TogglePreview),
@@ -3037,6 +3042,62 @@ fn human_count(n: u64) -> String {
         out.push(ch);
     }
     out
+}
+
+fn yes_no(b: bool) -> &'static str {
+    if b { "yes" } else { "no" }
+}
+
+/// Unix time in whole seconds (0 if the clock is before the epoch).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// A compact age for a past timestamp: `never`, `just now`, `5 min ago`, …
+fn relative_time(now: i64, then: i64) -> String {
+    if then <= 0 {
+        return "never".to_string();
+    }
+    let age = now - then;
+    match age {
+        ..=59 => "just now".to_string(),
+        60..=3599 => format!("{} min ago", age / 60),
+        3600..=86_399 => format!("{} h ago", age / 3600),
+        _ => format!("{} d ago", age / 86_400),
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS UTC` for a unix timestamp (`—` for 0 / before the epoch).
+fn format_utc(secs: i64) -> String {
+    if secs <= 0 {
+        return "—".to_string();
+    }
+    let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
+    let rem = secs.rem_euclid(86_400);
+    format!(
+        "{y:04}-{mo:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Days since the unix epoch → `(year, month, day)`. Howard Hinnant's inverse of
+/// `days_from_civil`; pure, so the date shown is testable without a clock.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// A small pill chip, used for the sidebar's quick locations.
@@ -4609,6 +4670,7 @@ impl eframe::App for App {
             || self.show_hash
             || self.show_trash
             || self.open_with_target.is_some()
+            || self.show_diagnostics
             || self.rename_target.is_some()
             || self.show_advanced
             || self.show_palette;
@@ -4908,6 +4970,9 @@ impl eframe::App for App {
         }
         if self.open_with_target.is_some() {
             self.open_with_dialog(ctx);
+        }
+        if self.show_diagnostics {
+            self.diagnostics_window(ctx);
         }
         if self.show_advanced {
             self.advanced_dialog(ctx);
@@ -5432,6 +5497,14 @@ impl App {
                                 ui.close_menu();
                             }
                             ui.separator();
+                            if ui
+                                .button("Index diagnostics…")
+                                .on_hover_text("Index state, counts, watcher health and timing.")
+                                .clicked()
+                            {
+                                self.show_diagnostics = true;
+                                ui.close_menu();
+                            }
                             if ui
                                 .button("Restore from Trash…")
                                 .on_hover_text("List the files you trashed and put them back.")
@@ -6629,6 +6702,7 @@ impl App {
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
             PaletteAction::OpenTrash => self.open_trash(),
+            PaletteAction::Diagnostics => self.show_diagnostics = true,
             PaletteAction::OpenWith => {
                 if let Some(row) = self.results.get(self.selected) {
                     let path = row.path.clone();
@@ -7135,6 +7209,132 @@ impl App {
             self.trash_items.clear();
             self.trash_restore_msg = None;
         }
+    }
+
+    /// A read-only snapshot of the engine's health: state, counts, watcher
+    /// health, timing and the live indexing switches.
+    fn diagnostics_window(&mut self, ctx: &egui::Context) {
+        if !self.show_diagnostics {
+            return;
+        }
+        let t = self.theme();
+        let (files, dirs) = self.engine.counts();
+        let backend = self.backend_label.clone();
+        let s = self.status.clone();
+        let now = now_unix();
+        let (state, state_color) = match s.state {
+            State::Starting => ("starting", t.warn),
+            State::Indexing => ("indexing", t.warn),
+            State::Live => ("live", t.good),
+        };
+        let content = match &s.content_index {
+            ContentIndexStatus::Disabled => "off".to_string(),
+            ContentIndexStatus::Enabled {
+                entries,
+                bytes,
+                pending,
+            } => format!(
+                "on · {entries} files · {} MiB · {pending} pending",
+                bytes / (1024 * 1024)
+            ),
+        };
+        let last = if s.last_index_at > 0 {
+            format!(
+                "{} · {}",
+                format_utc(s.last_index_at),
+                relative_time(now, s.last_index_at)
+            )
+        } else {
+            "not recorded".to_string()
+        };
+        let mut open = true;
+        let mut rebuild = false;
+        let mut close = false;
+        egui::Window::new("Index diagnostics")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(440.0)
+            .show(ctx, |ui| {
+                egui::Grid::new("diagnostics-grid")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        let mut row = |ui: &mut egui::Ui, key: &str, value: String, color| {
+                            ui.label(egui::RichText::new(key).color(t.dim));
+                            ui.label(egui::RichText::new(value).color(color));
+                            ui.end_row();
+                        };
+                        row(ui, "Backend", backend.clone(), t.text);
+                        row(ui, "State", state.to_string(), state_color);
+                        row(ui, "Files", human_count(files), t.text);
+                        row(ui, "Folders", human_count(dirs), t.text);
+                        row(
+                            ui,
+                            "Base entries",
+                            human_count(s.base_entries as u64),
+                            t.text,
+                        );
+                        row(ui, "Pending changes", s.overlay_pending.to_string(), t.text);
+                        let skipped_color = if s.skipped > 0 { t.warn } else { t.text };
+                        row(ui, "Skipped", human_count(s.skipped), skipped_color);
+                        let watch_color = if s.watch_failures > 0 { t.bad } else { t.text };
+                        row(
+                            ui,
+                            "Watch failures",
+                            s.watch_failures.to_string(),
+                            watch_color,
+                        );
+                        row(ui, "Last indexed", last.clone(), t.text);
+                        row(ui, "Content index", content.clone(), t.text);
+                        row(
+                            ui,
+                            "Respect .ignore",
+                            yes_no(s.respect_ignore_files).to_string(),
+                            t.text,
+                        );
+                        row(
+                            ui,
+                            "Follow symlinks",
+                            yes_no(s.follow_symlinks).to_string(),
+                            t.text,
+                        );
+                        row(
+                            ui,
+                            "Excluded folders",
+                            s.exclude_dirs.len().to_string(),
+                            t.text,
+                        );
+                    });
+                if s.skipped > 0 {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Skipped counts paths the walk could not read — usually permissions.",
+                        )
+                        .size(11.0)
+                        .color(t.faint),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Rebuild index")
+                        .on_hover_text("Re-walk the roots in the background.")
+                        .clicked()
+                    {
+                        rebuild = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if rebuild {
+            self.engine.rebuild();
+        }
+        self.show_diagnostics = open && !close;
     }
 
     fn category_label(&self) -> String {
@@ -12383,6 +12583,20 @@ mod tests {
         assert_eq!(location_label("/home/a/Documents"), "Documents");
         assert_eq!(location_label("Documents"), "Documents");
         assert_eq!(location_label("/"), "/");
+    }
+
+    #[test]
+    fn diagnostics_time_formatting() {
+        assert_eq!(format_utc(0), "—");
+        assert_eq!(format_utc(1_700_000_000), "2023-11-14 22:13:20 UTC");
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+
+        assert_eq!(relative_time(1000, 0), "never");
+        assert_eq!(relative_time(1000, 1000), "just now");
+        assert_eq!(relative_time(1000, 940), "1 min ago");
+        assert_eq!(relative_time(10_000, 3_000), "1 h ago");
+        assert_eq!(relative_time(200_000, 20_000), "2 d ago");
     }
 
     #[test]
