@@ -240,6 +240,9 @@ const LARGE_MIN_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 /// stall the UI thread).
 const MAX_HASH_BYTES: u64 = 512 * 1024 * 1024;
 
+/// How many visible rows “Find files by hash” will hash before stopping.
+const HASH_SCAN_LIMIT: usize = 2000;
+
 /// How much of a text file the preview reads. Larger files show this head, with
 /// a note, rather than being read whole.
 const TEXT_PREVIEW_BYTES: usize = 256 * 1024;
@@ -1125,6 +1128,12 @@ struct App {
     export_path: String,
     export_format: ExportFormat,
     export_error: Option<String>,
+    /// The “Find files by hash” popup.
+    show_hash: bool,
+    hash_query: String,
+    hash_matches: Vec<PathBuf>,
+    hash_scanned: usize,
+    hash_ran: bool,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1386,6 +1395,11 @@ impl App {
             export_path: String::new(),
             export_format: ExportFormat::default(),
             export_error: None,
+            show_hash: false,
+            hash_query: String::new(),
+            hash_matches: Vec::new(),
+            hash_scanned: 0,
+            hash_ran: false,
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -3231,6 +3245,11 @@ fn export_text(results: &[ResultRow], format: ExportFormat) -> String {
     }
 }
 
+/// Case-insensitive comparison of a stored digest with the user's query.
+fn hash_eq(stored: &str, wanted: &str) -> bool {
+    stored.eq_ignore_ascii_case(wanted.trim())
+}
+
 /// Does a result path contain `needle` (already lower-cased)? Powers the
 /// results-header “Filter results…” box; an empty needle matches everything.
 fn path_contains(path: &Path, needle: &str) -> bool {
@@ -3776,7 +3795,8 @@ impl eframe::App for App {
             || self.show_excludes
             || !self.trash_confirm.is_empty()
             || self.show_ignore
-            || self.show_export;
+            || self.show_export
+            || self.show_hash;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -4045,6 +4065,9 @@ impl eframe::App for App {
         self.ignore_dialog(ctx);
         if self.show_export {
             self.export_dialog(ctx);
+        }
+        if self.show_hash {
+            self.hash_dialog(ctx);
         }
     }
 
@@ -4409,6 +4432,16 @@ impl App {
                             .clicked()
                         {
                             self.open_export();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button("Find files by hash…")
+                            .on_hover_text(
+                                "Hash the visible files and keep the ones matching a SHA-256",
+                            )
+                            .clicked()
+                        {
+                            self.open_hash();
                             ui.close_menu();
                         }
                         ui.separator();
@@ -5509,6 +5542,105 @@ impl App {
             "Search settings, filters, tabs and saved searches are back to their defaults. \
              Your theme and zoom were kept.",
         );
+    }
+
+    // --- find by hash -----------------------------------------------------
+
+    fn open_hash(&mut self) {
+        self.hash_query.clear();
+        self.hash_matches.clear();
+        self.hash_scanned = 0;
+        self.hash_ran = false;
+        self.show_hash = true;
+    }
+
+    /// Hash the visible files and keep those matching `hash_query`.
+    fn run_hash_search(&mut self) {
+        let want = self.hash_query.trim().to_string();
+        self.hash_matches.clear();
+        self.hash_scanned = 0;
+        self.hash_ran = true;
+        if want.is_empty() {
+            return;
+        }
+        for r in self.results.iter().take(HASH_SCAN_LIMIT) {
+            if r.is_dir || r.size > MAX_HASH_BYTES {
+                continue;
+            }
+            self.hash_scanned += 1;
+            if let Some(h) = sha256_of(&r.path)
+                && hash_eq(&h, &want)
+            {
+                self.hash_matches.push(r.path.clone());
+            }
+        }
+    }
+
+    fn hash_dialog(&mut self, ctx: &egui::Context) {
+        let mut run = false;
+        egui::Window::new("Find files by hash")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("SHA-256 digest").strong());
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.hash_query)
+                        .desired_width(380.0)
+                        .hint_text("e.g. 9f86d0818…  (case-insensitive)"),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Hashes the visible files (up to {HASH_SCAN_LIMIT}), skipping folders \
+                         and files over 512 MB."
+                    ))
+                    .small()
+                    .color(self.fg_dim()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Find").clicked() {
+                        run = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        self.show_hash = false;
+                    }
+                });
+                if self.hash_ran {
+                    ui.add_space(6.0);
+                    if self.hash_matches.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "No match among {} hashed files.",
+                                self.hash_scanned
+                            ))
+                            .color(self.fg_dim()),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} match(es) in {} hashed files:",
+                                self.hash_matches.len(),
+                                self.hash_scanned
+                            ))
+                            .strong(),
+                        );
+                        for p in self.hash_matches.iter().take(50) {
+                            ui.label(
+                                egui::RichText::new(p.display().to_string())
+                                    .small()
+                                    .monospace()
+                                    .color(self.fg_dim()),
+                            );
+                        }
+                    }
+                }
+            });
+        if run {
+            self.run_hash_search();
+        }
     }
 
     // --- export -----------------------------------------------------------
@@ -10850,6 +10982,13 @@ mod tests {
         assert!(path_contains(Path::new("/home/a/Report.pdf"), "/home/"));
         assert!(path_contains(Path::new("/home/a/Report.pdf"), ""));
         assert!(!path_contains(Path::new("/home/a/Report.pdf"), "draft"));
+    }
+
+    #[test]
+    fn hash_compare_is_case_insensitive_and_trims() {
+        assert!(hash_eq("AABBCC", "aabbcc"));
+        assert!(hash_eq("aabbcc", "  AABBCC  "));
+        assert!(!hash_eq("aabbcc", "aabbcd"));
     }
 
     #[test]

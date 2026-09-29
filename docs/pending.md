@@ -75,7 +75,8 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - Export the current results as CSV / TSV / JSON. **Done.**
 - **Open at login** — a toggle that writes an XDG autostart entry (or a systemd
   user unit). **Done** (Settings ▸ Startup).
-- **Find by hash** — paste a SHA-256 to locate the file.
+- **Find by hash** — paste a SHA-256 to locate the file. **Done** (File ▸ Find files by
+  hash…, over the visible results).
 - Extra cleanup filters — empty files/folders and broken symlinks.
 - Duplicate finder: ignore hardlinks / same-inode files.
 
