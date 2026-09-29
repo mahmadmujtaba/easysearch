@@ -4,6 +4,27 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.0] - 2026-09-29
+
+### Changed
+
+- **A redesigned toolbar.** The row is now a left-aligned strip of coloured-outline
+  controls — a tinted border over the panel background, each with a description on
+  hover — instead of nine full-width buttons. **Back** and **Forward** share one
+  capsule; **Home** and **Index** are compact glyphs (the index button draws a
+  database cylinder, and says so while indexing); **Recent** and **Saved** are
+  compact toggles; the **Content** button is gone, since content search lives in
+  the *Scope* dropdown.
+- **Simple / Regex / Fuzzy is now one choice.** The three match modes are a single
+  mutually-exclusive radio group in the toolbar; the Search menu and Settings keep
+  the two exclusive to match.
+
+### Fixed
+
+- **The Path column no longer shows a doubled root slash.** A file whose parent sat
+  one level under the root rendered its path as `//home` (and `//etc`, …); it now
+  reads `/home`.
+
 ## [0.48.0] - 2026-09-29
 
 ### Added
