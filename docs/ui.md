@@ -20,7 +20,7 @@ panes           sidebar | central view | preview/details;  below: view tabs · b
 
 **Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (advanced search,
 content, regex, fuzzy, multiline, case, hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
-excluded folders, saved searches, restore from trash, index diagnostics) · Settings (settings, zoom) · Help (about, shortcuts). The six
+excluded folders, saved searches, restore from trash, index diagnostics, bulk rename) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
 
@@ -121,7 +121,10 @@ JSON), and reports the destination through a desktop notification. **File ▸ Fi
 hashes the visible files (up to 2000, skipping folders and files over 512 MB) and lists those
 matching a pasted SHA-256. Two checkboxes beside the filter box keep only **Empty** files and
 folders or **Broken links** (broken symlinks). Select a row and press `F2` to rename it; the
-name is checked for clashes before the rename, and the row updates in place.
+name is checked for clashes before the rename, and the row updates in place. **Tools ▸ Bulk
+rename…** renames the whole checked selection at once: a find/replace over the file name (with an
+optional **Add a number** counter, a start and a zero-pad width), a live old → new preview, and
+conflict checks — the **Rename N** button stays disabled until every target is clear.
 
 Right-click a row for the context menu; it acts on the whole **selection** when the row is part
 of one, otherwise on the row alone:

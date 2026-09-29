@@ -992,6 +992,7 @@ enum PaletteAction {
     ResetDefaults,
     RebuildIndex,
     TogglePause,
+    BulkRename,
     Advanced,
     FindHash,
     Export,
@@ -1280,6 +1281,16 @@ struct App {
     show_diagnostics: bool,
     /// When the battery/thermal throttle was last re-checked.
     throttle_at: Instant,
+    /// The “Bulk rename” dialog: pattern fields, the targets, and a status line.
+    show_bulk: bool,
+    bulk_targets: Vec<PathBuf>,
+    bulk_find: String,
+    bulk_replace: String,
+    bulk_case: bool,
+    bulk_number: bool,
+    bulk_number_start: u64,
+    bulk_number_pad: usize,
+    bulk_msg: Option<String>,
     // --- ignore files -----------------------------------------------------
     /// The “Ignore files” window is open.
     show_ignore: bool,
@@ -1565,6 +1576,15 @@ impl App {
             trash_restore_msg: None,
             show_diagnostics: false,
             throttle_at: Instant::now(),
+            show_bulk: false,
+            bulk_targets: Vec::new(),
+            bulk_find: String::new(),
+            bulk_replace: String::new(),
+            bulk_case: false,
+            bulk_number: false,
+            bulk_number_start: 1,
+            bulk_number_pad: 2,
+            bulk_msg: None,
             show_ignore: false,
             ignore_text: String::new(),
             ignore_msg: None,
@@ -2290,6 +2310,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Reset defaults", ResetDefaults),
         ("Rebuild index", RebuildIndex),
         ("Pause / resume indexing", TogglePause),
+        ("Bulk rename…", BulkRename),
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
@@ -4522,6 +4543,126 @@ fn read_sys(path: &Path) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+// --- bulk rename ----------------------------------------------------------
+
+/// How to rename a batch of files: a find/replace over the stem, and an optional
+/// running number appended.
+#[derive(Clone, Default)]
+struct BulkRenameOpts {
+    find: String,
+    replace: String,
+    case_sensitive: bool,
+    number: bool,
+    number_start: u64,
+    number_step: u64,
+    number_pad: usize,
+}
+
+/// One planned rename, with a reason it cannot go ahead (if any).
+#[derive(Debug)]
+struct RenamePlan {
+    from: PathBuf,
+    to: PathBuf,
+    /// False when the pattern leaves the name unchanged (nothing to do).
+    changed: bool,
+    /// `Some(reason)` blocks the rename.
+    problem: Option<String>,
+}
+
+/// Replace every occurrence of `find` in `text`, honouring case sensitivity.
+fn replace_all(text: &str, find: &str, replace: &str, case_sensitive: bool) -> String {
+    if find.is_empty() {
+        return text.to_string();
+    }
+    if case_sensitive {
+        return text.replace(find, replace);
+    }
+    // Case-insensitive: scan for the needle folded, keeping the rest verbatim.
+    let hay = text.to_ascii_lowercase();
+    let needle = find.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(pos) = hay[i..].find(&needle) {
+        let at = i + pos;
+        out.push_str(&text[i..at]);
+        out.push_str(replace);
+        i = at + needle.len();
+    }
+    out.push_str(&text[i..]);
+    out
+}
+
+/// The new file name for `name` under `opts`, or `None` if it has no stem.
+fn renamed_file_name(name: &str, opts: &BulkRenameOpts, index: usize) -> Option<String> {
+    let path = Path::new(name);
+    // A dotfile (`.bashrc`) has no extension; a name with no dot keeps the whole
+    // thing as the stem, so both round-trip through `file_stem`.
+    let stem = path.file_stem()?.to_string_lossy().into_owned();
+    let ext = path.extension().map(|e| e.to_string_lossy().into_owned());
+    let mut stem = replace_all(&stem, &opts.find, &opts.replace, opts.case_sensitive);
+    if opts.number {
+        let step = opts.number_step.max(1);
+        let n = opts.number_start + index as u64 * step;
+        stem = format!("{stem} {}", pad_number(n, opts.number_pad));
+    }
+    match ext {
+        Some(e) => Some(format!("{stem}.{e}")),
+        None => Some(stem),
+    }
+}
+
+/// Left-pad a number with zeroes to at least `pad` digits.
+fn pad_number(n: u64, pad: usize) -> String {
+    format!("{n:0width$}", width = pad.max(1))
+}
+
+/// Plan a batch rename. Rows are reported in input order; a row is `changed`
+/// only when the pattern actually alters its name, and carries a `problem` when
+/// it cannot be applied (an empty name, a duplicate target, or one already on
+/// disk).
+fn bulk_rename_plan(paths: &[PathBuf], opts: &BulkRenameOpts) -> Vec<RenamePlan> {
+    let mut plan = Vec::with_capacity(paths.len());
+    let mut targets: HashSet<PathBuf> = HashSet::new();
+    for (i, from) in paths.iter().enumerate() {
+        let name = from
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let to = match renamed_file_name(&name, opts, i) {
+            Some(new_name) if !new_name.is_empty() => from
+                .parent()
+                .map(|p| p.join(&new_name))
+                .unwrap_or_else(|| PathBuf::from(&new_name)),
+            _ => {
+                plan.push(RenamePlan {
+                    from: from.clone(),
+                    to: from.clone(),
+                    changed: false,
+                    problem: Some("the pattern leaves no name".to_string()),
+                });
+                continue;
+            }
+        };
+        let changed = to != *from;
+        let problem = if !changed {
+            None
+        } else if to.exists() {
+            Some("a file with that name already exists".to_string())
+        } else if !targets.insert(to.clone()) {
+            Some("two files would get the same name".to_string())
+        } else {
+            None
+        };
+        plan.push(RenamePlan {
+            from: from.clone(),
+            to,
+            changed,
+            problem,
+        });
+    }
+    plan
+}
+
 fn resolve_system_font(candidates: &[String], mono: bool) -> Option<Vec<u8>> {
     for family in candidates {
         if let Some(bytes) = fontconfig_file(family, mono) {
@@ -4773,6 +4914,7 @@ impl eframe::App for App {
             || self.show_trash
             || self.open_with_target.is_some()
             || self.show_diagnostics
+            || self.show_bulk
             || self.rename_target.is_some()
             || self.show_advanced
             || self.show_palette;
@@ -5075,6 +5217,9 @@ impl eframe::App for App {
         }
         if self.show_diagnostics {
             self.diagnostics_window(ctx);
+        }
+        if self.show_bulk {
+            self.bulk_rename_dialog(ctx);
         }
         if self.show_advanced {
             self.advanced_dialog(ctx);
@@ -5642,6 +5787,14 @@ impl App {
                             }
                             if ui.button("Saved searches…").clicked() {
                                 self.show_saved = true;
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button("Bulk rename…")
+                                .on_hover_text("Rename the checked results by a pattern.")
+                                .clicked()
+                            {
+                                self.open_bulk_rename();
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -6853,6 +7006,7 @@ impl App {
                 self.engine.set_paused(paused);
                 self.status.paused = paused;
             }
+            PaletteAction::BulkRename => self.open_bulk_rename(),
             PaletteAction::Advanced => self.open_advanced(),
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
@@ -7496,6 +7650,223 @@ impl App {
             self.engine.rebuild();
         }
         self.show_diagnostics = open && !close;
+    }
+
+    // --- bulk rename ------------------------------------------------------
+
+    /// Open the bulk-rename dialog on the checked results (or the cursor row).
+    fn open_bulk_rename(&mut self) {
+        let mut targets: Vec<PathBuf> = if !self.checked.is_empty() {
+            self.checked.iter().cloned().collect()
+        } else if let Some(row) = self.results.get(self.selected) {
+            vec![row.path.clone()]
+        } else {
+            Vec::new()
+        };
+        targets.retain(|p| p.is_file());
+        targets.sort();
+        targets.dedup();
+        self.bulk_msg = None;
+        self.bulk_targets = targets;
+        self.bulk_find.clear();
+        self.bulk_replace.clear();
+        self.bulk_case = false;
+        self.bulk_number = false;
+        self.bulk_number_start = 1;
+        self.bulk_number_pad = 2;
+        self.show_bulk = true;
+    }
+
+    /// A find/replace (plus optional numbering) over the selected results, with a
+    /// live preview and conflict checks before anything is renamed.
+    fn bulk_rename_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_bulk {
+            return;
+        }
+        let t = self.theme();
+        let opts = BulkRenameOpts {
+            find: self.bulk_find.clone(),
+            replace: self.bulk_replace.clone(),
+            case_sensitive: self.bulk_case,
+            number: self.bulk_number,
+            number_start: self.bulk_number_start,
+            number_step: 1,
+            number_pad: self.bulk_number_pad,
+        };
+        let plan = bulk_rename_plan(&self.bulk_targets, &opts);
+        let changes = plan.iter().filter(|p| p.changed).count();
+        let conflicts = plan
+            .iter()
+            .filter(|p| p.changed && p.problem.is_some())
+            .count();
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Bulk rename")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(560.0)
+            .default_height(460.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} file(s) selected", self.bulk_targets.len()))
+                        .strong()
+                        .color(t.text),
+                );
+                ui.add_space(4.0);
+                egui::Grid::new("bulk-grid")
+                    .num_columns(2)
+                    .spacing([10.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Find");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.bulk_find)
+                                .desired_width(320.0)
+                                .hint_text("text to replace (empty = keep the name)"),
+                        );
+                        ui.end_row();
+                        ui.label("Replace with");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.bulk_replace).desired_width(320.0),
+                        );
+                        ui.end_row();
+                    });
+                ui.checkbox(&mut self.bulk_case, "Match case");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.bulk_number, "Add a number");
+                    ui.add_enabled_ui(self.bulk_number, |ui| {
+                        ui.label("from");
+                        ui.add(egui::DragValue::new(&mut self.bulk_number_start));
+                        ui.label("pad to");
+                        ui.add(egui::DragValue::new(&mut self.bulk_number_pad).speed(0.1));
+                    });
+                });
+                if let Some(msg) = &self.bulk_msg {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(msg).size(12.0).color(t.good));
+                }
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("{changes} will change, {conflicts} conflict(s)"))
+                        .size(11.5)
+                        .color(if conflicts > 0 { t.bad } else { t.dim }),
+                );
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        let mut shown = 0usize;
+                        for p in plan.iter().filter(|p| p.changed) {
+                            if shown >= 500 {
+                                break;
+                            }
+                            shown += 1;
+                            ui.horizontal(|ui| {
+                                let old = p
+                                    .from
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                let new =
+                                    p.to.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                ui.label(
+                                    egui::RichText::new(old).monospace().size(11.0).color(t.dim),
+                                );
+                                ui.label(egui::RichText::new("→").size(11.0).color(t.faint));
+                                let color = if p.problem.is_some() { t.bad } else { t.text };
+                                ui.label(
+                                    egui::RichText::new(new).monospace().size(11.0).color(color),
+                                );
+                                if let Some(reason) = &p.problem {
+                                    ui.label(egui::RichText::new(reason).size(10.5).color(t.bad));
+                                }
+                            });
+                        }
+                        if changes == 0 {
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Nothing changes yet — type a Find text or tick Add a number.",
+                                )
+                                .color(t.faint),
+                            );
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            changes > 0 && conflicts == 0,
+                            egui::Button::new(format!("Rename {changes}")),
+                        )
+                        .clicked()
+                    {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if apply {
+            self.apply_bulk_rename(&plan);
+        } else if cancel {
+            self.show_bulk = false;
+            self.bulk_msg = None;
+        }
+    }
+
+    /// Apply a planned rename, then keep the in-memory result paths in step.
+    fn apply_bulk_rename(&mut self, plan: &[RenamePlan]) {
+        let mut mapping: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
+        let (mut ok, mut fail) = (0usize, 0usize);
+        for p in plan {
+            if !p.changed || p.problem.is_some() {
+                continue;
+            }
+            match std::fs::rename(&p.from, &p.to) {
+                Ok(()) => {
+                    ok += 1;
+                    mapping.insert(p.from.clone(), p.to.clone());
+                }
+                Err(e) => {
+                    fail += 1;
+                    eprintln!("rename: {}: {e}", p.from.display());
+                }
+            }
+        }
+        if !mapping.is_empty() {
+            for r in &mut self.results {
+                if let Some(n) = mapping.get(&r.path) {
+                    r.path = n.clone();
+                }
+            }
+            for r in &mut self.all_results {
+                if let Some(n) = mapping.get(&r.path) {
+                    r.path = n.clone();
+                }
+            }
+            self.checked = self
+                .checked
+                .iter()
+                .map(|p| mapping.get(p).cloned().unwrap_or_else(|| p.clone()))
+                .collect();
+            self.preview = None;
+        }
+        let msg = match (ok, fail) {
+            (0, f) => format!("Could not rename {f} file(s)."),
+            (o, 0) => format!("Renamed {o} file(s)."),
+            (o, f) => format!("Renamed {o} file(s); {f} failed."),
+        };
+        if ok > 0 {
+            notify_desktop("Files renamed", &msg);
+        }
+        self.bulk_msg = Some(msg);
+        if ok > 0 && fail == 0 {
+            self.show_bulk = false;
+        }
     }
 
     fn category_label(&self) -> String {
@@ -12781,6 +13152,105 @@ mod tests {
         assert_eq!(battery_state_from("Not charging"), Some(false));
         assert_eq!(battery_state_from("Unknown"), None);
         assert_eq!(battery_state_from(""), None);
+    }
+
+    #[test]
+    fn find_and_replace_respects_case() {
+        assert_eq!(replace_all("a-b-a", "a", "x", true), "x-b-x");
+        assert_eq!(replace_all("A-b-a", "a", "x", false), "x-b-x");
+        assert_eq!(replace_all("A-b-a", "a", "x", true), "A-b-x");
+        // An empty needle is a no-op, not an infinite loop.
+        assert_eq!(replace_all("abc", "", "x", false), "abc");
+    }
+
+    #[test]
+    fn packed_numbers_pad_to_width() {
+        assert_eq!(pad_number(7, 3), "007");
+        assert_eq!(pad_number(1234, 2), "1234");
+        assert_eq!(pad_number(0, 1), "0");
+    }
+
+    #[test]
+    fn renamed_names_keep_the_extension() {
+        let opts = BulkRenameOpts {
+            find: "IMG".into(),
+            replace: "Holiday".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            renamed_file_name("IMG_2024.jpg", &opts, 0).as_deref(),
+            Some("Holiday_2024.jpg")
+        );
+        // A dotfile has no extension, and an extensionless name keeps its stem.
+        assert_eq!(
+            renamed_file_name(".bashrc", &opts, 0).as_deref(),
+            Some(".bashrc")
+        );
+        assert_eq!(
+            renamed_file_name("notes", &opts, 0).as_deref(),
+            Some("notes")
+        );
+
+        // Numbering appends a padded counter after the transformed stem.
+        let opts = BulkRenameOpts {
+            find: "a".into(),
+            replace: "photo".into(),
+            number: true,
+            number_start: 1,
+            number_step: 1,
+            number_pad: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            renamed_file_name("a.txt", &opts, 0).as_deref(),
+            Some("photo 01.txt")
+        );
+        assert_eq!(
+            renamed_file_name("a.txt", &opts, 2).as_deref(),
+            Some("photo 03.txt")
+        );
+    }
+
+    #[test]
+    fn the_plan_skips_unchanged_and_flags_conflicts() {
+        let dir = std::env::temp_dir().join(format!("easysearch-bulk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        let taken = dir.join("taken.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        std::fs::write(&taken, b"t").unwrap();
+
+        // Empty find: nothing changes.
+        let plan = bulk_rename_plan(&[a.clone(), b.clone()], &BulkRenameOpts::default());
+        assert!(
+            plan.iter().all(|p| !p.changed),
+            "no-op pattern changes nothing"
+        );
+
+        // A real change: `a.txt` → `x-a.txt`, no conflict.
+        let opts = BulkRenameOpts {
+            find: "a".into(),
+            replace: "x-a".into(),
+            ..Default::default()
+        };
+        let plan = bulk_rename_plan(&[a.clone()], &opts);
+        assert_eq!(plan[0].to, dir.join("x-a.txt"));
+        assert!(plan[0].changed && plan[0].problem.is_none(), "{plan:?}");
+
+        // Renaming onto an existing file is refused.
+        let opts = BulkRenameOpts {
+            find: "a".into(),
+            replace: "taken".into(),
+            ..Default::default()
+        };
+        let plan = bulk_rename_plan(&[a.clone()], &opts);
+        assert_eq!(plan[0].to, taken);
+        assert!(plan[0].problem.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
