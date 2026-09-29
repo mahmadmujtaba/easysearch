@@ -11,7 +11,7 @@ network code. `easysearch-cli` is the engine headless and `easysearch-gui` opens
 ```
 menu bar        File · Search · Filters · Tools · Settings · Help   [Free memory] [Reset defaults] [logo]
 search tabs     one pill per open search (restored on restart)               [ + ]
-toolbar         Back · Forward · Home · Index · Content · Regex · Fuzzy · Recent · Saved   (full width)
+toolbar         [ < │ > ]  Home  Index  [ Simple │ Regex │ Fuzzy ]  Recent  Saved   (left-aligned)
 search row      [ query ]  [ scope ▾ ] [ location ▾ ]  [ Search ]
 filter bar      Type Size Modified Path Ext: Case Hidden  [ ✕ Clear Filters ]
 results header  N results · M files indexed · T ms      Sort by ▾  Cozy Compact
@@ -23,6 +23,14 @@ hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild in
 excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
+
+**Toolbar:** a left-aligned strip of coloured-outline controls — only the border is tinted, the
+fill stays the panel background, and hovering shows a description tooltip. **Back**/**Forward**
+share one capsule; **Home** (a house) and **Index** (a database cylinder, which rebuilds the
+index) are compact glyphs; **Simple** / **Regex** / **Fuzzy** are one mutually-exclusive
+match-mode radio group; **Recent** (files changed in the last 7 days) and **Saved** (your saved
+searches, with a count) close the row. Content search is no longer a toolbar button — pick the
+*Contents (ripgrep)* or *Full text* scope in the search row instead.
 
 **Quick actions** sit at the top right, just left of the logo, as two tinted
 icon buttons: **Free memory** (a broom, teal) stops a running content search,

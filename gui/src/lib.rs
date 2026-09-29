@@ -909,6 +909,16 @@ enum ViewTab {
     History,
 }
 
+/// How the query text is matched — the toolbar's Simple / Regex / Fuzzy radio.
+/// The three are mutually exclusive; `Simple` is plain text and globs.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum MatchMode {
+    #[default]
+    Simple,
+    Regex,
+    Fuzzy,
+}
+
 impl ViewTab {
     const ALL: &'static [ViewTab] = &[
         ViewTab::Results,
@@ -1915,7 +1925,8 @@ enum Icon {
     Back,
     Forward,
     Home,
-    Index,
+    /// A database cylinder (the “rebuild the index” button).
+    Database,
     Content,
     Clock,
     Bookmark,
@@ -1965,14 +1976,20 @@ fn paint_icon(painter: &egui::Painter, rect: egui::Rect, kind: Icon, color: egui
                 egui::StrokeKind::Inside,
             );
         }
-        Icon::Index => {
-            for i in 0..3 {
-                let r = egui::Rect::from_min_max(
-                    p(-0.9, -0.95 + i as f32 * 0.62),
-                    p(0.9, -0.45 + i as f32 * 0.62),
-                );
-                painter.rect_filled(r, egui::CornerRadius::same(3), color);
-            }
+        Icon::Database => {
+            // A database cylinder: a top rim, two sides and the bottom rim.
+            painter.add(egui::Shape::ellipse_stroke(
+                p(0.0, -0.5),
+                egui::vec2(0.75 * s, 0.28 * s),
+                stroke,
+            ));
+            painter.add(egui::Shape::ellipse_stroke(
+                p(0.0, 0.55),
+                egui::vec2(0.75 * s, 0.28 * s),
+                stroke,
+            ));
+            painter.line_segment([p(-0.75, -0.5), p(-0.75, 0.55)], stroke);
+            painter.line_segment([p(0.75, -0.5), p(0.75, 0.55)], stroke);
         }
         Icon::Content => {
             painter.circle_stroke(p(-0.2, -0.2), s * 0.6, egui::Stroke::new(1.8_f32, color));
@@ -2246,84 +2263,201 @@ fn quick_button(
     resp.on_hover_text(tip)
 }
 
-/// A toolbar button: a painted icon with its label to the right, centred in the
-/// space it is given. Returns `true` only when it is enabled *and* clicked.
+/// A toolbar button drawn as a coloured outline: the fill stays the panel
+/// background and only the border and the ink carry the tint, so the bar reads
+/// as a line of rings. Hovering brightens it and shows `tip` as the description.
 #[allow(clippy::too_many_arguments)]
-fn tool_button(
+fn outline_button(
     ui: &mut egui::Ui,
     t: &Theme,
     icon: Option<Icon>,
-    glyph: Option<&str>,
-    label: &str,
+    label: Option<&str>,
     tip: &str,
+    tint: egui::Color32,
     active: bool,
     enabled: bool,
-) -> bool {
-    let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
-    let text_w = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), font.clone(), t.text)
-        .size()
-        .x;
-    let (icon_w, gap) = (17.0_f32, 7.0_f32);
-    let width = ui.available_width().max(text_w + icon_w + gap + 24.0);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+) -> egui::Response {
+    let font = egui::FontId::new(12.5, egui::FontFamily::Proportional);
+    let (pad, icon_w, gap) = (12.0_f32, 20.0_f32, 7.0_f32);
+    let text_w = label.map_or(0.0, |l| {
+        ui.painter()
+            .layout_no_wrap(l.to_string(), font.clone(), t.text)
+            .size()
+            .x
+    });
+    let mut width = pad * 2.0 + text_w;
+    if icon.is_some() {
+        width += icon_w;
+        if label.is_some() {
+            width += gap;
+        }
+    }
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 36.0), egui::Sense::click());
     let hovered = enabled && resp.hovered();
-    let radius = egui::CornerRadius::same(7);
-    // Every button carries a fill and a border, so its boundary is visible even
-    // when it is not hovered; hover and the on-state move to the accent.
-    let (fill, border) = if active || hovered {
-        (t.accent_soft(), t.accent)
-    } else if enabled {
-        (t.card, t.stroke)
+    let (fill, border, ink) = if !enabled {
+        (egui::Color32::TRANSPARENT, t.stroke, t.faint)
+    } else if active {
+        (tint.gamma_multiply(0.30), tint, tint)
+    } else if hovered {
+        (tint.gamma_multiply(0.16), tint, tint)
     } else {
-        (t.panel, t.stroke)
+        (
+            egui::Color32::TRANSPARENT,
+            tint.gamma_multiply(0.72),
+            t.text,
+        )
     };
+    let radius = egui::CornerRadius::same(9);
     ui.painter().rect_filled(rect, radius, fill);
     ui.painter().rect_stroke(
         rect,
         radius,
-        egui::Stroke::new(1.0_f32, border),
+        egui::Stroke::new(1.2_f32, border),
         egui::StrokeKind::Inside,
     );
-    let fg = if !enabled {
-        t.faint
-    } else if active {
-        t.accent
-    } else {
-        t.text
-    };
-    // Icon and label are centred together, icon on the left.
-    let content_w = icon_w + gap + text_w;
-    let start = rect.center().x - content_w * 0.5;
-    let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(start + icon_w * 0.5, rect.center().y),
-        egui::vec2(icon_w, icon_w),
-    );
+    let mut x = rect.min.x + pad;
     if let Some(kind) = icon {
-        paint_icon(ui.painter(), icon_rect, kind, fg);
-    } else if let Some(g) = glyph {
+        let ir = egui::Rect::from_center_size(
+            egui::pos2(x + icon_w * 0.5, rect.center().y),
+            egui::vec2(icon_w, icon_w),
+        );
+        paint_icon(ui.painter(), ir, kind, ink);
+        x += icon_w;
+        if label.is_some() {
+            x += gap;
+        }
+    }
+    if let Some(l) = label {
         ui.painter().text(
-            icon_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            g,
-            egui::FontId::new(12.5, egui::FontFamily::Monospace),
-            fg,
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            l,
+            font,
+            ink,
         );
     }
-    ui.painter().text(
-        egui::pos2(start + icon_w + gap, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        fg,
+    resp.on_hover_text(tip)
+}
+
+/// One segment of a [`capsule`].
+struct Segment<'a> {
+    icon: Option<Icon>,
+    label: Option<&'a str>,
+    tip: &'a str,
+    enabled: bool,
+    selected: bool,
+}
+
+/// A single coloured outline holding several segments side by side — the joined
+/// Back/Forward control and the Simple/Regex/Fuzzy match-mode radio group. Only
+/// the border, the separators and the active segment carry the colour; the fill
+/// stays the panel background. Returns the index of a clicked, enabled segment.
+fn capsule(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    salt: &str,
+    tint: egui::Color32,
+    segments: &[Segment<'_>],
+) -> Option<usize> {
+    let font = egui::FontId::new(12.5, egui::FontFamily::Proportional);
+    let (pad, icon_w, gap, height) = (12.0_f32, 20.0_f32, 7.0_f32, 36.0_f32);
+    // Measure the labels first, before the capsule is allocated, so the painter is
+    // not borrowed across the (mutable) allocation.
+    let label_widths: Vec<f32> = segments
+        .iter()
+        .map(|s| {
+            s.label.map_or(0.0, |l| {
+                ui.painter()
+                    .layout_no_wrap(l.to_string(), font.clone(), t.text)
+                    .size()
+                    .x
+            })
+        })
+        .collect();
+    let widths: Vec<f32> = segments
+        .iter()
+        .zip(&label_widths)
+        .map(|(s, &label_w)| {
+            let mut w = pad * 2.0 + label_w;
+            if s.icon.is_some() {
+                w += icon_w;
+                if s.label.is_some() {
+                    w += gap;
+                }
+            }
+            w
+        })
+        .collect();
+    let total: f32 = widths.iter().sum();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, height), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(9);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.2_f32, tint.gamma_multiply(0.72)),
+        egui::StrokeKind::Inside,
     );
-    let tip = if enabled {
-        tip.to_string()
-    } else {
-        format!("{tip} — unavailable while indexing")
-    };
-    resp.on_hover_text(tip).clicked() && enabled
+    let mut clicked = None;
+    let mut x = rect.min.x;
+    for (i, s) in segments.iter().enumerate() {
+        let seg =
+            egui::Rect::from_min_size(egui::pos2(x, rect.min.y), egui::vec2(widths[i], height));
+        if i > 0 {
+            ui.painter().line_segment(
+                [
+                    egui::pos2(x, seg.top() + 8.0),
+                    egui::pos2(x, seg.bottom() - 8.0),
+                ],
+                egui::Stroke::new(1.0_f32, tint.gamma_multiply(0.35)),
+            );
+        }
+        let resp = ui
+            .interact(seg, ui.id().with((salt, i)), egui::Sense::click())
+            .on_hover_text(s.tip);
+        let hovered = s.enabled && resp.hovered();
+        let (fill, ink) = if !s.enabled {
+            (egui::Color32::TRANSPARENT, t.faint)
+        } else if s.selected {
+            (tint.gamma_multiply(0.30), tint)
+        } else if hovered {
+            (tint.gamma_multiply(0.16), tint)
+        } else {
+            (egui::Color32::TRANSPARENT, t.text)
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            ui.painter().rect_filled(seg.shrink(1.0), radius, fill);
+        }
+        let icon_w_eff = if s.icon.is_some() { icon_w } else { 0.0 };
+        let text_w = label_widths[i];
+        let gap_eff = if s.icon.is_some() && s.label.is_some() {
+            gap
+        } else {
+            0.0
+        };
+        let content_w = icon_w_eff + gap_eff + text_w;
+        let start = seg.center().x - content_w * 0.5;
+        if let Some(kind) = s.icon {
+            let ir = egui::Rect::from_center_size(
+                egui::pos2(start + icon_w_eff * 0.5, seg.center().y),
+                egui::vec2(icon_w, icon_w),
+            );
+            paint_icon(ui.painter(), ir, kind, ink);
+        }
+        if let Some(l) = s.label {
+            ui.painter().text(
+                egui::pos2(start + icon_w_eff + gap_eff, seg.center().y),
+                egui::Align2::LEFT_CENTER,
+                l,
+                font.clone(),
+                ink,
+            );
+        }
+        if s.enabled && resp.clicked() {
+            clicked = Some(i);
+        }
+        x += widths[i];
+    }
+    clicked
 }
 
 /// An accent-filled button for the primary action (the search row's `Search`).
@@ -3875,14 +4009,21 @@ impl App {
                 );
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Search").strong());
+                let mut fuzzy = self.prefs.fuzzy;
                 if ui
-                    .checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
+                    .checkbox(&mut fuzzy, "Fuzzy matching (fzf-style)")
                     .on_hover_text(
                         "Match the query's characters in order anywhere in the name: \
                          mtn → meeting-notes.md",
                     )
                     .changed()
                 {
+                    self.prefs.fuzzy = fuzzy;
+                    if fuzzy {
+                        // Fuzzy is one of the three match modes (the toolbar's
+                        // Simple / Regex / Fuzzy radio), so it clears Regex.
+                        self.regex_mode = false;
+                    }
                     self.prefs.save();
                     self.send_query();
                 }
@@ -4076,9 +4217,25 @@ impl App {
                                 "Search inside files (ripgrep). Uses more memory and CPU.",
                             )
                             .changed();
-                        let changed = ui.checkbox(&mut self.regex_mode, "Regex mode").changed()
-                            | ui.checkbox(&mut self.prefs.fuzzy, "Fuzzy matching (fzf-style)")
-                                .changed()
+                        // Regex and fuzzy are one three-way choice (the toolbar's
+                        // Simple / Regex / Fuzzy radio), so turning one on clears
+                        // the other.
+                        let mut regex = self.regex_mode;
+                        let mut fuzzy = self.prefs.fuzzy;
+                        let mut mode_changed = ui.checkbox(&mut regex, "Regex mode").changed();
+                        mode_changed |= ui
+                            .checkbox(&mut fuzzy, "Fuzzy matching (fzf-style)")
+                            .changed();
+                        if mode_changed {
+                            if regex {
+                                fuzzy = false;
+                            } else if fuzzy {
+                                regex = false;
+                            }
+                            self.regex_mode = regex;
+                            self.prefs.fuzzy = fuzzy;
+                        }
+                        let changed = mode_changed
                             | ui.checkbox(
                                 &mut self.prefs.multiline,
                                 "Multiline content (regex spans lines)",
@@ -4271,7 +4428,9 @@ impl App {
             });
     }
 
-    /// Toolbar row: labelled action buttons, as in the reference UI.
+    /// Toolbar row: a left-aligned strip of coloured-outline controls. Back and
+    /// Forward share one capsule, Home and Index are compact glyphs, the match
+    /// mode is a Simple/Regex/Fuzzy radio group, and Recent and Saved close it.
     fn toolbar(&mut self, ctx: &egui::Context) {
         let t = self.theme();
         let indexing = matches!(self.status.state, State::Starting | State::Indexing);
@@ -4279,150 +4438,157 @@ impl App {
         let at_home = self.under.as_deref() == home.to_str();
         let recent = matches!(self.category, Category::Recent { .. });
         let saved_count = self.prefs.saved.len();
+        let mode = self.match_mode();
         egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::new()
                     .fill(t.panel)
-                    .inner_margin(egui::Margin::symmetric(8, 4)),
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    // Nine equal columns, so the bar fills the whole width instead
-                    // of clustering every button at the left.
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.columns(9, |c| {
-                        if tool_button(
-                            &mut c[0],
-                            &t,
-                            Some(Icon::Back),
-                            None,
-                            "Back",
-                            "Previous location",
-                            false,
-                            self.loc_idx > 0,
-                        ) {
-                            self.nav_location(-1);
-                        }
-                        if tool_button(
-                            &mut c[1],
-                            &t,
-                            Some(Icon::Forward),
-                            None,
-                            "Forward",
-                            "Next location",
-                            false,
-                            self.loc_idx + 1 < self.loc_history.len(),
-                        ) {
-                            self.nav_location(1);
-                        }
-                        if tool_button(
-                            &mut c[2],
-                            &t,
-                            Some(Icon::Home),
-                            None,
-                            "Home",
-                            "Search your home directory",
-                            at_home,
-                            true,
-                        ) {
-                            self.set_under(home.to_str().map(|s| s.to_string()));
-                        }
-                        if tool_button(
-                            &mut c[3],
-                            &t,
-                            Some(Icon::Index),
-                            None,
-                            "Index",
-                            "Rebuild the index from disk",
-                            false,
-                            !indexing,
-                        ) {
-                            self.engine.rebuild();
-                        }
-                        if tool_button(
-                            &mut c[4],
-                            &t,
-                            Some(Icon::Content),
-                            None,
-                            "Content",
-                            "Search inside file contents (ripgrep, always fresh). \
-                             Uses more memory and CPU than filename search.",
-                            self.content_mode,
-                            true,
-                        ) {
-                            let was = self.content_mode;
-                            let on = !was;
-                            self.content_mode = on;
-                            if !on {
-                                self.full_text = false;
-                            }
-                            self.after_scope_change(was, on);
-                        }
-                        if tool_button(
-                            &mut c[5],
-                            &t,
-                            None,
-                            Some(".*"),
-                            "Regex",
-                            "Treat the query as a regular expression",
-                            self.regex_mode,
-                            true,
-                        ) {
-                            self.regex_mode = !self.regex_mode;
-                            self.send_query();
-                        }
-                        if tool_button(
-                            &mut c[6],
-                            &t,
-                            None,
-                            Some("fz"),
-                            "Fuzzy",
-                            "Fuzzy matching: the query's characters in order, anywhere \
-                             (mtn → meeting-notes.md)",
-                            self.prefs.fuzzy,
-                            true,
-                        ) {
-                            self.prefs.fuzzy = !self.prefs.fuzzy;
-                            self.prefs.save();
-                            self.send_query();
-                        }
-                        if tool_button(
-                            &mut c[7],
-                            &t,
-                            Some(Icon::Clock),
-                            None,
-                            "Recent",
-                            "Files changed in the last 7 days",
-                            recent,
-                            true,
-                        ) {
-                            self.category = if recent {
-                                Category::All
-                            } else {
-                                Category::Recent {
-                                    max_age_secs: RECENT_AGE_SECS,
-                                }
-                            };
-                            self.send_query();
-                        }
-                        let saved_label = if saved_count > 0 {
-                            format!("Saved ({saved_count})")
+                    ui.spacing_mut().item_spacing.x = 8.0;
+
+                    // Back and Forward share one slot.
+                    match capsule(
+                        ui,
+                        &t,
+                        "nav",
+                        t.accent,
+                        &[
+                            Segment {
+                                icon: Some(Icon::Back),
+                                label: None,
+                                tip: "Back — the previous location",
+                                enabled: self.loc_idx > 0,
+                                selected: false,
+                            },
+                            Segment {
+                                icon: Some(Icon::Forward),
+                                label: None,
+                                tip: "Forward — the next location",
+                                enabled: self.loc_idx + 1 < self.loc_history.len(),
+                                selected: false,
+                            },
+                        ],
+                    ) {
+                        Some(0) => self.nav_location(-1),
+                        Some(1) => self.nav_location(1),
+                        _ => {}
+                    }
+
+                    // Home and Index: compact glyphs.
+                    if outline_button(
+                        ui,
+                        &t,
+                        Some(Icon::Home),
+                        None,
+                        "Search your home directory",
+                        t.kind_dir,
+                        at_home,
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.set_under(home.to_str().map(|s| s.to_string()));
+                    }
+                    if outline_button(
+                        ui,
+                        &t,
+                        Some(Icon::Database),
+                        None,
+                        if indexing {
+                            "Rebuilding the index…"
                         } else {
-                            "Saved".to_string()
+                            "Rebuild the index from disk"
+                        },
+                        t.warn,
+                        false,
+                        !indexing,
+                    )
+                    .clicked()
+                    {
+                        self.engine.rebuild();
+                    }
+
+                    // Match mode: Simple / Regex / Fuzzy, one of three.
+                    match capsule(
+                        ui,
+                        &t,
+                        "mode",
+                        t.accent,
+                        &[
+                            Segment {
+                                icon: None,
+                                label: Some("Simple"),
+                                tip: "Plain text and globs (*, ?, [abc])",
+                                enabled: true,
+                                selected: mode == MatchMode::Simple,
+                            },
+                            Segment {
+                                icon: None,
+                                label: Some("Regex"),
+                                tip: "Treat the query as a regular expression",
+                                enabled: true,
+                                selected: mode == MatchMode::Regex,
+                            },
+                            Segment {
+                                icon: None,
+                                label: Some("Fuzzy"),
+                                tip: "Fuzzy matching: the query's characters in order, \
+                                      anywhere (mtn → meeting-notes.md)",
+                                enabled: true,
+                                selected: mode == MatchMode::Fuzzy,
+                            },
+                        ],
+                    ) {
+                        Some(0) => self.set_match_mode(MatchMode::Simple),
+                        Some(1) => self.set_match_mode(MatchMode::Regex),
+                        Some(2) => self.set_match_mode(MatchMode::Fuzzy),
+                        _ => {}
+                    }
+
+                    // Recent and Saved searches close the row.
+                    if outline_button(
+                        ui,
+                        &t,
+                        Some(Icon::Clock),
+                        Some("Recent"),
+                        "Files changed in the last 7 days",
+                        t.kind_av,
+                        recent,
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.category = if recent {
+                            Category::All
+                        } else {
+                            Category::Recent {
+                                max_age_secs: RECENT_AGE_SECS,
+                            }
                         };
-                        if tool_button(
-                            &mut c[8],
-                            &t,
-                            Some(Icon::Bookmark),
-                            None,
-                            &saved_label,
-                            "Your saved searches",
-                            self.show_saved,
-                            true,
-                        ) {
-                            self.show_saved = !self.show_saved;
-                        }
-                    });
+                        self.send_query();
+                    }
+                    let saved_label = if saved_count > 0 {
+                        format!("Saved ({saved_count})")
+                    } else {
+                        "Saved".to_string()
+                    };
+                    if outline_button(
+                        ui,
+                        &t,
+                        Some(Icon::Bookmark),
+                        Some(saved_label.as_str()),
+                        "Your saved searches",
+                        t.kind_img,
+                        self.show_saved,
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.show_saved = !self.show_saved;
+                    }
                 });
             });
     }
@@ -4903,6 +5069,33 @@ impl App {
             Scope::Contents => "Contents (ripgrep)",
             Scope::FullText => "Full text (name or contents)",
         }
+    }
+
+    /// The current match mode, derived from the regex/fuzzy switches.
+    fn match_mode(&self) -> MatchMode {
+        if self.regex_mode {
+            MatchMode::Regex
+        } else if self.prefs.fuzzy {
+            MatchMode::Fuzzy
+        } else {
+            MatchMode::Simple
+        }
+    }
+
+    /// Set the match mode; regex and fuzzy are mutually exclusive.
+    fn set_match_mode(&mut self, mode: MatchMode) {
+        let (regex, fuzzy) = match mode {
+            MatchMode::Simple => (false, false),
+            MatchMode::Regex => (true, false),
+            MatchMode::Fuzzy => (false, true),
+        };
+        if self.regex_mode == regex && self.prefs.fuzzy == fuzzy {
+            return;
+        }
+        self.regex_mode = regex;
+        self.prefs.fuzzy = fuzzy;
+        self.prefs.save();
+        self.send_query();
     }
 
     fn set_scope(&mut self, s: Scope) {
