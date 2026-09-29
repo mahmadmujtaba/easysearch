@@ -18,8 +18,8 @@ results header  N results · M files indexed · T ms   [ Filter results… ]   S
 panes           sidebar | central view | preview/details;  below: view tabs · bulk actions · recent searches · status bar
 ```
 
-**Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (content, regex, fuzzy, multiline, case,
-hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
+**Menus:** File (tabs, focus, reload, export, find-by-hash, hide, quit) · Search (advanced search,
+content, regex, fuzzy, multiline, case, hidden, full-path toggles) · Filters (preview pane, theme) · Tools (rebuild index, ignore files,
 excluded folders, saved searches) · Settings (settings, zoom) · Help (about, shortcuts). The six
 menu titles are colour-coded, and every button carries a tinted fill and a visible border that
 lights up in the accent on hover.
@@ -69,6 +69,10 @@ that query and takes precedence over the matching filter control:
 | `file:` | files only |
 
 An unrecognised `key:value` (like `time:12:30`) is matched literally.
+
+**Search ▸ Advanced search…** builds a query from the same tokens with a small form — name
+contains, extension, size (at least / at most), modified and folder — and puts the composed query
+in the search box.
 
 **Scope** (beside the search box): **Filenames** (default), **Full path**, **Contents
 (ripgrep)** — inside files, read live so results are never stale — or **Full text** (name

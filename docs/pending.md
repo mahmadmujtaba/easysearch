@@ -88,7 +88,8 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   (OR) and quoted phrases; most map onto fields `Query` already has. **Done** for
   `ext:`, `size:`, `modified:`, `in:`/`under:`, `file:` and quoted phrases; **still
   open**: `folder:`/`parent:` and `|` (OR).
-- **Advanced Search** dialog — a builder that composes those tokens.
+- **Advanced Search** dialog — a builder that composes those tokens. **Done**
+  (Search ▸ Advanced search…).
 - **Column chooser** — show/hide/reorder columns, add Extension / Owner / Group /
   Permissions / Inode / Link count, persisted per tab.
 - **Rename in place** (`F2`) with clobber checks. **Done.**

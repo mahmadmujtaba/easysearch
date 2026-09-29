@@ -1144,6 +1144,14 @@ struct App {
     rename_target: Option<PathBuf>,
     rename_value: String,
     rename_error: Option<String>,
+    /// The “Advanced search” dialog and its fields.
+    show_advanced: bool,
+    adv_name: String,
+    adv_ext: String,
+    adv_min: String,
+    adv_max: String,
+    adv_modified: usize,
+    adv_under: String,
     /// A content search is held back because the pattern is shorter than
     /// [`CONTENT_MIN_CHARS`].
     content_blocked: bool,
@@ -1415,6 +1423,13 @@ impl App {
             rename_target: None,
             rename_value: String::new(),
             rename_error: None,
+            show_advanced: false,
+            adv_name: String::new(),
+            adv_ext: String::new(),
+            adv_min: String::new(),
+            adv_max: String::new(),
+            adv_modified: 0,
+            adv_under: String::new(),
             content_blocked: false,
             show_content_warning: false,
             tabs,
@@ -3296,6 +3311,42 @@ fn hash_eq(stored: &str, wanted: &str) -> bool {
     stored.eq_ignore_ascii_case(wanted.trim())
 }
 
+/// Compose a query string from the Advanced-search fields, using filter tokens
+/// (see `docs/ui.md`); an empty field contributes nothing.
+fn build_advanced_query(
+    name: &str,
+    ext: &str,
+    min: &str,
+    max: &str,
+    modified: usize,
+    under: &str,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !name.trim().is_empty() {
+        parts.push(name.trim().to_string());
+    }
+    if !ext.trim().is_empty() {
+        parts.push(format!("ext:{}", ext.trim()));
+    }
+    if !min.trim().is_empty() {
+        parts.push(format!("size:>={}", min.trim()));
+    }
+    if !max.trim().is_empty() {
+        parts.push(format!("size:<={}", max.trim()));
+    }
+    match modified {
+        1 => parts.push("modified:today".to_string()),
+        2 => parts.push("modified:week".to_string()),
+        3 => parts.push("modified:month".to_string()),
+        4 => parts.push("modified:year".to_string()),
+        _ => {}
+    }
+    if !under.trim().is_empty() {
+        parts.push(format!("in:{}", under.trim()));
+    }
+    parts.join(" ")
+}
+
 /// Check a user-typed name for the rename dialog, returning the trimmed name or
 /// the reason it cannot be used.
 fn validate_rename(name: &str) -> Result<String, String> {
@@ -3859,7 +3910,8 @@ impl eframe::App for App {
             || self.show_ignore
             || self.show_export
             || self.show_hash
-            || self.rename_target.is_some();
+            || self.rename_target.is_some()
+            || self.show_advanced;
         if !modal_open
             && ctx.memory(|m| m.focused().is_none())
             && let Some(text) = ctx.input(|i| {
@@ -4146,6 +4198,9 @@ impl eframe::App for App {
         }
         if self.rename_target.is_some() {
             self.rename_dialog(ctx);
+        }
+        if self.show_advanced {
+            self.advanced_dialog(ctx);
         }
     }
 
@@ -4550,6 +4605,17 @@ impl App {
                         }
                     });
                     ui.menu_button(egui::RichText::new("Search").color(t.good).strong(), |ui| {
+                        if ui
+                            .button("Advanced search…")
+                            .on_hover_text(
+                                "Build a query from filters: name, extension, size, date, folder",
+                            )
+                            .clicked()
+                        {
+                            self.open_advanced();
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         let mut content_on = self.content_mode;
                         let content_changed = ui
                             .checkbox(&mut content_on, "Match contents")
@@ -5733,6 +5799,107 @@ impl App {
             });
         if run {
             self.run_hash_search();
+        }
+    }
+
+    // --- advanced search --------------------------------------------------
+
+    fn open_advanced(&mut self) {
+        self.adv_name.clear();
+        self.adv_ext.clear();
+        self.adv_min.clear();
+        self.adv_max.clear();
+        self.adv_modified = 0;
+        self.adv_under.clear();
+        self.show_advanced = true;
+    }
+
+    /// A builder that composes a query from filter tokens (see `docs/ui.md`).
+    fn advanced_dialog(&mut self, ctx: &egui::Context) {
+        let mut search = false;
+        let modified = ["Any time", "Today", "Past week", "Past month", "Past year"];
+        egui::Window::new("Advanced search")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Grid::new("advanced-grid")
+                    .num_columns(2)
+                    .spacing([10.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Name contains");
+                        ui.add(egui::TextEdit::singleline(&mut self.adv_name).desired_width(280.0));
+                        ui.end_row();
+                        ui.label("Extension");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.adv_ext)
+                                .desired_width(280.0)
+                                .hint_text("pdf, doc"),
+                        );
+                        ui.end_row();
+                        ui.label("Size at least");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.adv_min)
+                                .desired_width(120.0)
+                                .hint_text("e.g. 1MB"),
+                        );
+                        ui.end_row();
+                        ui.label("Size at most");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.adv_max)
+                                .desired_width(120.0)
+                                .hint_text("e.g. 100MB"),
+                        );
+                        ui.end_row();
+                        ui.label("Modified");
+                        let idx = self.adv_modified.min(modified.len() - 1);
+                        egui::ComboBox::from_id_salt("advanced-modified")
+                            .selected_text(modified[idx])
+                            .show_ui(ui, |ui| {
+                                for (i, label) in modified.iter().enumerate() {
+                                    ui.selectable_value(&mut self.adv_modified, i, *label);
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("In folder");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.adv_under)
+                                .desired_width(280.0)
+                                .hint_text("/path/to/folder"),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Composes a query with filter tokens; the search box then shows it.",
+                    )
+                    .small()
+                    .color(self.fg_dim()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Search").clicked() {
+                        search = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_advanced = false;
+                    }
+                });
+            });
+        if search {
+            let q = build_advanced_query(
+                &self.adv_name,
+                &self.adv_ext,
+                &self.adv_min,
+                &self.adv_max,
+                self.adv_modified,
+                &self.adv_under,
+            );
+            self.show_advanced = false;
+            if !q.is_empty() {
+                self.run_query(&q);
+            }
         }
     }
 
@@ -11252,6 +11419,15 @@ mod tests {
         assert!(validate_rename("").is_err());
         assert!(validate_rename("..").is_err());
         assert!(validate_rename("a/b").is_err());
+    }
+
+    #[test]
+    fn advanced_query_composes_tokens() {
+        assert_eq!(
+            build_advanced_query("report", "pdf,doc", "1MB", "100MB", 2, "/home/a"),
+            "report ext:pdf,doc size:>=1MB size:<=100MB modified:week in:/home/a"
+        );
+        assert_eq!(build_advanced_query("", "", "", "", 0, ""), "");
     }
 
     #[test]
