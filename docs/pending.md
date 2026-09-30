@@ -141,8 +141,11 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 - **Removable-media indexing** — detect mounts, index on mount, drop on unmount.
 - **Browse and search inside archives** (zip/tar/7z) without extracting.
 - **Font preview** and first-page thumbnails for documents.
-Accessibility sweep — screen-reader labels (accesskit), high-contrast and
-  reduced-motion options.
+- **Accessibility sweep** — screen-reader labels (accesskit), high-contrast and
+  reduced-motion options. **Done**: **High contrast** and **Reduce motion**
+  settings, and accesskit `WidgetInfo` labels on the custom-drawn toolbar and
+  quick-action buttons (egui's text widgets are already labelled). Not verified
+  with a real screen reader — that needs a desktop session.
 - **Live-updating results** — add/remove rows as the index changes while a query
   is open.
 

@@ -280,6 +280,11 @@ system: the desktop's configured family is resolved with `fc-match` (KDE, then G
 fontconfig) for the UI and the monospace face, with the bundled egui faces kept only as glyph
 fallbacks. Sidebar and result icons are painted in the theme's colours.
 
+**Accessibility.** Settings ▸ Appearance has **High contrast** (pure black/white grounds and
+stronger borders, keeping the accents) and **Reduce motion** (stops the pulsing index dots);
+the custom-drawn toolbar and quick-action buttons carry an accesskit label taken from their
+hover tip, so a screen reader can name them.
+
 ## Tray, closing and the global hotkey
 
 The **X** closes the window and leaves EasySearch running: the window process

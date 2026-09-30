@@ -210,6 +210,35 @@ impl Theme {
         }
     }
 
+    /// A higher-contrast variant of this theme: pure black/white grounds, stronger
+    /// borders and near-white/black text, keeping the accent and category hues.
+    /// Pure, so the transform can be asserted without a window.
+    fn high_contrast(&self) -> Theme {
+        let dark = self.dark;
+        let mut t = *self;
+        // Grounds.
+        t.bg = if dark {
+            egui::Color32::BLACK
+        } else {
+            egui::Color32::WHITE
+        };
+        t.panel = rgb(if dark { 0x080808 } else { 0xf4f4f4 });
+        t.card = rgb(if dark { 0x121212 } else { 0xe6e6e6 });
+        t.hover = rgb(if dark { 0x2a2a2a } else { 0xd2d2d2 });
+        t.active = rgb(if dark { 0x3a3a3a } else { 0xbcbcbc });
+        t.stripe = t.panel;
+        // Borders and ink.
+        t.stroke = rgb(if dark { 0x8a8a8a } else { 0x444444 });
+        t.text = if dark {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::BLACK
+        };
+        t.dim = rgb(if dark { 0xd0d0d0 } else { 0x1c1c1c });
+        t.faint = rgb(if dark { 0xb0b0b0 } else { 0x404040 });
+        t
+    }
+
     /// Soft accent used behind selected rows and labels.
     fn accent_soft(&self) -> egui::Color32 {
         self.accent
@@ -737,6 +766,13 @@ struct GuiPrefs {
     /// The result columns shown, in order (see [`ColumnKind`]).
     #[serde(default = "default_columns")]
     columns: Vec<ColumnKind>,
+    /// Boost contrast: pure black/white grounds and stronger borders, on top of
+    /// whichever palette is active.
+    #[serde(default)]
+    high_contrast: bool,
+    /// Suppress decorative animation (the pulsing index dots).
+    #[serde(default)]
+    reduce_motion: bool,
 }
 
 impl Default for GuiPrefs {
@@ -760,6 +796,8 @@ impl Default for GuiPrefs {
             throttle_on_battery: false,
             throttle_when_hot: false,
             columns: default_columns(),
+            high_contrast: false,
+            reduce_motion: false,
         }
     }
 }
@@ -1956,9 +1994,20 @@ impl App {
         ctx.set_style(style);
     }
 
-    /// The active colour scheme.
+    /// The active colour scheme, with the high-contrast transform applied when
+    /// the user asked for it.
     fn theme(&self) -> Theme {
-        Theme::of(self.resolved_theme())
+        let base = Theme::of(self.resolved_theme());
+        if self.prefs.high_contrast {
+            base.high_contrast()
+        } else {
+            base
+        }
+    }
+
+    /// Whether decorative animation may run (off with **Reduce motion**).
+    fn animate(&self) -> bool {
+        !self.prefs.reduce_motion
     }
 
     /// The appearance in force: the user's explicit pick, or (for
@@ -2953,7 +3002,14 @@ fn quick_button(
         font,
         tint,
     );
-    resp.on_hover_text(tip)
+    // A screen reader gets the hover tip as the control's name (the label drawn
+    // on the canvas is invisible to accesskit).
+    let name = tip.to_string();
+    let resp = resp.on_hover_text(tip);
+    resp.widget_info(move || {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone())
+    });
+    resp
 }
 
 /// A toolbar button drawn as a coloured outline: the fill stays the panel
@@ -3029,7 +3085,18 @@ fn outline_button(
             ink,
         );
     }
-    resp.on_hover_text(tip)
+    // Name the control for accesskit (the tip is the only text an icon-only
+    // button has, and the drawn label is invisible to a screen reader).
+    let name = if label.is_none() {
+        tip.to_string()
+    } else {
+        label.unwrap_or(tip).to_string()
+    };
+    let resp = resp.on_hover_text(tip);
+    resp.widget_info(move || {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name.clone())
+    });
+    resp
 }
 
 /// One segment of a [`capsule`].
@@ -3192,6 +3259,15 @@ fn primary_button(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Option<Icon>)
 /// Small uppercase label used before a filter control.
 fn bar_label(t: &Theme, text: &str) -> egui::RichText {
     egui::RichText::new(text).size(11.0).color(t.faint)
+}
+
+/// A colour from a packed `0xRRGGBB` literal.
+fn rgb(hex: u32) -> egui::Color32 {
+    egui::Color32::from_rgb(
+        ((hex >> 16) & 0xff) as u8,
+        ((hex >> 8) & 0xff) as u8,
+        (hex & 0xff) as u8,
+    )
 }
 
 /// A cell in the Details grid: muted key on the left, value on the right.
@@ -5697,6 +5773,21 @@ impl App {
                 });
                 if ui
                     .checkbox(&mut self.prefs.show_preview, "Preview pane")
+                    .changed()
+                {
+                    self.prefs.save();
+                }
+                if ui
+                    .checkbox(&mut self.prefs.high_contrast, "High contrast")
+                    .on_hover_text("Pure black/white grounds and stronger borders.")
+                    .changed()
+                {
+                    self.apply_style(ctx);
+                    self.prefs.save();
+                }
+                if ui
+                    .checkbox(&mut self.prefs.reduce_motion, "Reduce motion")
+                    .on_hover_text("Stop the decorative pulsing animations.")
                     .changed()
                 {
                     self.prefs.save();
@@ -8772,7 +8863,7 @@ impl App {
         } else {
             t.warn
         };
-        let pulse = if live || paused {
+        let pulse = if live || paused || !self.animate() {
             1.0
         } else {
             ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32
@@ -8805,7 +8896,7 @@ impl App {
             galley,
             color,
         );
-        if !live && !paused {
+        if !live && !paused && self.animate() {
             ui.ctx().request_repaint();
         }
     }
@@ -10335,7 +10426,11 @@ impl App {
         ui.horizontal(|ui| {
             match self.status.state {
                 State::Starting | State::Indexing => {
-                    let a = ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32;
+                    let a = if self.animate() {
+                        ((ui.input(|i| i.time) * 5.0).sin() * 0.5 + 0.5) as f32
+                    } else {
+                        1.0
+                    };
                     status_dot(ui, t.warn.gamma_multiply(0.5 + 0.5 * a));
                     ui.label(
                         egui::RichText::new(format!("Indexing… {} files", human_count(files)))
@@ -14029,6 +14124,33 @@ mod tests {
         assert_eq!(users.get(&0).map(String::as_str), Some("root"));
         assert_eq!(users.get(&1000).map(String::as_str), Some("me"));
         assert_eq!(users.get(&7), None);
+    }
+
+    #[test]
+    fn high_contrast_pushes_grounds_and_ink_to_the_extremes() {
+        let hc = Theme::DARK.high_contrast();
+        assert_eq!(hc.bg, egui::Color32::BLACK);
+        assert_eq!(hc.text, egui::Color32::WHITE);
+        assert!(hc.dark, "the dark palette stays dark");
+        // The accents are kept, so a highlight is still a highlight.
+        assert_eq!(hc.accent, Theme::DARK.accent);
+
+        let hc = Theme::LIGHT.high_contrast();
+        assert_eq!(hc.bg, egui::Color32::WHITE);
+        assert_eq!(hc.text, egui::Color32::BLACK);
+        assert!(!hc.dark);
+    }
+
+    #[test]
+    fn accessibility_flags_round_trip_in_prefs() {
+        let p: GuiPrefs =
+            serde_json::from_str(r#"{"high_contrast":true,"reduce_motion":true}"#).unwrap();
+        assert!(p.high_contrast && p.reduce_motion);
+        // Absent in an older gui.json, both default off.
+        let p: GuiPrefs = serde_json::from_str("{}").unwrap();
+        assert!(!p.high_contrast && !p.reduce_motion);
+        // The packed-colour helper matches `from_rgb`.
+        assert_eq!(rgb(0x1a2b3c), egui::Color32::from_rgb(0x1a, 0x2b, 0x3c));
     }
 
     #[test]
