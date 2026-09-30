@@ -198,7 +198,10 @@ on the right), keyboard hints, and the running **version** at the far right, plu
 **Results**, **Preview**, **Details** and **Search History** — switch what fills the central area
 (the last lists your recent queries as clickable rows). Each search **tab** keeps its own query and
 filters and is restored on the next start (the content scope is not); `Ctrl+T` opens one, `Ctrl+W`
-closes it, `Ctrl+Tab` cycles and `Ctrl+1…9` jumps. The **Recent searches** row shows recent queries
+closes it, `Ctrl+Tab` cycles and `Ctrl+1…9` jumps. With **Live-updating results** on
+(Settings ▸ Appearance), an open query re-runs when the index changes underneath it — files
+created, changed or deleted elsewhere appear in the list — debounced so a burst of events causes
+one refresh, with the cursor kept on the same file. The **Recent searches** row shows recent queries
 as chips (click to re-run) and mirrors them in the tray menu; a *saved search* bundles a query with
 its filters, and tabs and history live in `~/.config/easysearch/gui.json`.
 

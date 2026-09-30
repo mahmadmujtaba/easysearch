@@ -152,7 +152,9 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   quick-action buttons (egui's text widgets are already labelled). Not verified
   with a real screen reader — that needs a desktop session.
 - **Live-updating results** — add/remove rows as the index changes while a query
-  is open.
+  is open. **Done** (the open query re-runs when the index fingerprint changes,
+  debounced at 700 ms, restoring the cursor by path; the **Live-updating
+  results** setting and a palette command turn it off).
 
 ## Repo & tooling
 

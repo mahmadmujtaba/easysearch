@@ -699,6 +699,11 @@ fn default_theme() -> ThemeChoice {
     ThemeChoice::Dark
 }
 
+/// A `bool` preference that defaults to `true` when absent from an old file.
+fn default_true() -> bool {
+    true
+}
+
 /// Read the theme leniently: a name (`"dark"`, `"light"`, `"brand"`), or the
 /// older boolean the field used to be (`"dark": true|false`, and `null` — the
 /// pre-0.33 "follow system", which now means Dark), so an existing `gui.json`
@@ -787,6 +792,9 @@ struct GuiPrefs {
     /// Suppress decorative animation (the pulsing index dots).
     #[serde(default)]
     reduce_motion: bool,
+    /// Re-run the open query when the index changes underneath it.
+    #[serde(default = "default_true")]
+    live_results: bool,
 }
 
 impl Default for GuiPrefs {
@@ -812,6 +820,7 @@ impl Default for GuiPrefs {
             columns: default_columns(),
             high_contrast: false,
             reduce_motion: false,
+            live_results: true,
         }
     }
 }
@@ -1254,6 +1263,7 @@ enum PaletteAction {
     TogglePause,
     BulkRename,
     IndexedRoots,
+    ToggleLiveResults,
     Advanced,
     FindHash,
     Export,
@@ -1468,9 +1478,14 @@ struct App {
     results_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
-    /// The bytes of the font currently installed for the specimen preview, if any
+    /// The font currently installed for the specimen preview, if any
     /// (the path it came from, so a change re-applies the style).
     font_preview: Option<PathBuf>,
+    /// Live results: the last-seen index fingerprint and when it changed, plus
+    /// the cursor path to restore after a background refresh.
+    live_key: Option<(usize, usize)>,
+    live_at: Instant,
+    live_keep: Option<PathBuf>,
     /// Events pushed by the host process (tray, `--toggle`, `--quit`, `--search`).
     events: mpsc::Receiver<Event>,
     /// Set when a real Quit arrives: the window closes the whole app, not just
@@ -1653,6 +1668,12 @@ impl App {
         };
         let (ui_font, mono_font) = load_system_fonts();
         let status_snapshot = backend.status_snapshot();
+        // The initial index fingerprint, so live results do not fire a redundant
+        // refresh on the first frame.
+        let live_key0 = (
+            status_snapshot.base_entries,
+            status_snapshot.overlay_pending,
+        );
         let backend_label = backend.label();
 
         // Restore the tabs that were open when the app last closed (at least one).
@@ -1807,6 +1828,9 @@ impl App {
             ui_font,
             mono_font,
             font_preview: None,
+            live_key: Some(live_key0),
+            live_at: Instant::now(),
+            live_keep: None,
             events,
             quit,
             show_about: false,
@@ -2208,6 +2232,31 @@ impl App {
         self.prefs.save();
         self.dirty = false;
         self.last_save = Instant::now();
+    }
+
+    /// Re-run the open query when the index changed underneath it (the watcher's
+    /// pending changes, or a finished rebuild), so the list stays current.
+    ///
+    /// Debounced: a burst of filesystem events causes one refresh, and the
+    /// cursor row is restored by path afterwards.
+    fn maybe_refresh_results(&mut self) {
+        if !self.prefs.live_results || self.pending || self.view != ViewTab::Results {
+            return;
+        }
+        if self.last_sent.is_empty() {
+            return;
+        }
+        let key = (self.status.base_entries, self.status.overlay_pending);
+        if self.live_key == Some(key) {
+            return;
+        }
+        if self.live_at.elapsed() < Duration::from_millis(700) {
+            return;
+        }
+        self.live_key = Some(key);
+        self.live_at = Instant::now();
+        self.live_keep = self.results.get(self.selected).map(|r| r.path.clone());
+        self.send_query();
     }
 
     fn send_query(&mut self) {
@@ -2704,6 +2753,7 @@ fn palette_actions() -> Vec<(&'static str, PaletteAction)> {
         ("Pause / resume indexing", TogglePause),
         ("Bulk rename…", BulkRename),
         ("Indexed roots…", IndexedRoots),
+        ("Toggle live results", ToggleLiveResults),
         ("Advanced search…", Advanced),
         ("Find files by hash…", FindHash),
         ("Export results…", Export),
@@ -5533,6 +5583,14 @@ impl eframe::App for App {
                         }
                         self.apply_tag_filter();
                         self.prune_selection();
+                        // Live results: keep the cursor on the same file when the
+                        // list was refreshed in the background.
+                        if let Some(path) = self.live_keep.take()
+                            && let Some(i) = self.results.iter().position(|r| r.path == path)
+                        {
+                            self.selected = i;
+                            self.scroll_to = Some(i);
+                        }
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -5565,6 +5623,7 @@ impl eframe::App for App {
         }
         self.status = self.engine.status_snapshot();
         self.refresh_sys_stats();
+        self.maybe_refresh_results();
 
         if self.query != self.last_sent {
             self.dirty = true;
@@ -6193,6 +6252,16 @@ impl App {
                 if ui
                     .checkbox(&mut self.prefs.reduce_motion, "Reduce motion")
                     .on_hover_text("Stop the decorative pulsing animations.")
+                    .changed()
+                {
+                    self.prefs.save();
+                }
+                if ui
+                    .checkbox(&mut self.prefs.live_results, "Live-updating results")
+                    .on_hover_text(
+                        "Re-run the open query as the index changes (files added or removed
+                         while you search).",
+                    )
                     .changed()
                 {
                     self.prefs.save();
@@ -7882,6 +7951,10 @@ impl App {
             }
             PaletteAction::BulkRename => self.open_bulk_rename(),
             PaletteAction::IndexedRoots => self.open_roots_dialog(),
+            PaletteAction::ToggleLiveResults => {
+                self.prefs.live_results = !self.prefs.live_results;
+                self.prefs.save();
+            }
             PaletteAction::Advanced => self.open_advanced(),
             PaletteAction::FindHash => self.open_hash(),
             PaletteAction::Export => self.open_export(),
@@ -14941,6 +15014,15 @@ mod tests {
         assert!(!p.high_contrast && !p.reduce_motion);
         // The packed-colour helper matches `from_rgb`.
         assert_eq!(rgb(0x1a2b3c), egui::Color32::from_rgb(0x1a, 0x2b, 0x3c));
+    }
+
+    #[test]
+    fn live_results_defaults_on_and_round_trips() {
+        // Absent from an older gui.json, live results are on; the flag is honoured.
+        let p: GuiPrefs = serde_json::from_str("{}").unwrap();
+        assert!(p.live_results);
+        let p: GuiPrefs = serde_json::from_str(r#"{"live_results":false}"#).unwrap();
+        assert!(!p.live_results);
     }
 
     #[test]
