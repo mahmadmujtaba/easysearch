@@ -357,6 +357,12 @@ these as a desktop shortcut:
 | `easysearch --search TODO` | show the window and run a search |
 | `easysearch --quit` | stop the app and the engine |
 
+**Settings ▸ Startup ▸ Global shortcut** can do the GNOME binding for you: type a key (a GTK
+accelerator such as `<Super>e`) and press **Set shortcut**, which writes a custom keybinding for
+`easysearch --toggle` through `gsettings` (the media-keys schema); **Remove** takes it back. On a
+desktop without that schema the app says so and you bind `easysearch --toggle` yourself — the
+XDG `GlobalShortcuts` portal is the eventual Wayland-native route.
+
 The first `--toggle`, `--show` or `--search` **starts** the app when nothing is running; `--hide` and `--quit` need a running instance.
 
 ## Keyboard shortcuts

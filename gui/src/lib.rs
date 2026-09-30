@@ -704,6 +704,11 @@ fn default_true() -> bool {
     true
 }
 
+/// The default global shortcut.
+fn default_hotkey() -> String {
+    "<Super>e".to_string()
+}
+
 /// Read the theme leniently: a name (`"dark"`, `"light"`, `"brand"`), or the
 /// older boolean the field used to be (`"dark": true|false`, and `null` — the
 /// pre-0.33 "follow system", which now means Dark), so an existing `gui.json`
@@ -799,6 +804,9 @@ struct GuiPrefs {
     /// appears, drop it when it goes.
     #[serde(default)]
     index_removable_media: bool,
+    /// The key the global shortcut is bound to (a GTK accelerator string).
+    #[serde(default = "default_hotkey")]
+    hotkey_binding: String,
 }
 
 impl Default for GuiPrefs {
@@ -826,6 +834,7 @@ impl Default for GuiPrefs {
             reduce_motion: false,
             live_results: true,
             index_removable_media: false,
+            hotkey_binding: default_hotkey(),
         }
     }
 }
@@ -1500,6 +1509,8 @@ struct App {
     update_tx: mpsc::Sender<UpdateMsg>,
     update_rx: mpsc::Receiver<UpdateMsg>,
     update_state: UpdateState,
+    /// Status line for the global-shortcut buttons.
+    hotkey_msg: Option<String>,
     /// Live results: the last-seen index fingerprint and when it changed, plus
     /// the cursor path to restore after a background refresh.
     live_key: Option<(usize, usize)>,
@@ -1856,6 +1867,7 @@ impl App {
             update_tx,
             update_rx,
             update_state: UpdateState::Idle,
+            hotkey_msg: None,
             live_key: Some(live_key0),
             live_at: Instant::now(),
             live_keep: None,
@@ -4164,6 +4176,151 @@ fn spawn_update_download(tx: mpsc::Sender<UpdateMsg>, info: ReleaseInfo) {
 fn shell_single_quote(path: &Path) -> String {
     let text = path.display().to_string();
     format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+// --- global hotkey --------------------------------------------------------
+
+/// The relocatable schema path of our GNOME custom keybinding.
+const HOTKEY_PATH: &str =
+    "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/easysearch/";
+/// What the hotkey runs (flips the window, exactly as the tray's left-click does).
+const HOTKEY_COMMAND: &str = "easysearch --toggle";
+/// The keybinding `name` shown in GNOME's Settings.
+const HOTKEY_NAME: &str = "EasySearch";
+
+/// The media-keys schema that owns the custom-keybindings list.
+const MEDIA_KEYS_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
+
+/// The relocatable schema for our one keybinding.
+fn custom_keybinding_schema() -> String {
+    format!("org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:{HOTKEY_PATH}")
+}
+
+/// The quoted paths inside a `custom-keybindings` GVariant value, e.g.
+/// `['/a/', '/b/']` → both paths.
+fn parse_keybinding_paths(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('\'') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('\'') else {
+            break;
+        };
+        out.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+/// The GVariant list value for `custom-keybindings`.
+fn keybindings_value(paths: &[String]) -> String {
+    let inner: Vec<String> = paths.iter().map(|p| format!("'{p}'")).collect();
+    format!("[{}]", inner.join(", "))
+}
+
+/// The `gsettings` argument lines that install (or refresh) the hotkey: the list
+/// gains our path (keeping any others), then the name, command and binding.
+fn hotkey_install_args(binding: &str, existing: &[String]) -> Vec<Vec<String>> {
+    let mut paths: Vec<String> = existing
+        .iter()
+        .filter(|p| p.as_str() != HOTKEY_PATH)
+        .cloned()
+        .collect();
+    paths.push(HOTKEY_PATH.to_string());
+    let schema = custom_keybinding_schema();
+    vec![
+        vec![
+            "set".into(),
+            MEDIA_KEYS_SCHEMA.into(),
+            "custom-keybindings".into(),
+            keybindings_value(&paths),
+        ],
+        vec![
+            "set".into(),
+            schema.clone(),
+            "name".into(),
+            HOTKEY_NAME.into(),
+        ],
+        vec![
+            "set".into(),
+            schema.clone(),
+            "command".into(),
+            HOTKEY_COMMAND.into(),
+        ],
+        vec!["set".into(), schema, "binding".into(), binding.into()],
+    ]
+}
+
+/// The `gsettings` argument line that removes the hotkey (dropping our path from
+/// the list, leaving any other custom keybindings alone).
+fn hotkey_remove_args(existing: &[String]) -> Vec<Vec<String>> {
+    let paths: Vec<String> = existing
+        .iter()
+        .filter(|p| p.as_str() != HOTKEY_PATH)
+        .cloned()
+        .collect();
+    vec![vec![
+        "set".into(),
+        MEDIA_KEYS_SCHEMA.into(),
+        "custom-keybindings".into(),
+        keybindings_value(&paths),
+    ]]
+}
+
+/// Run `gsettings`, returning its stdout (trimmed) or an error.
+fn gsettings(args: &[String]) -> Result<String, String> {
+    let out = Command::new("gsettings")
+        .args(args)
+        .output()
+        .map_err(|e| format!("gsettings: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("gsettings exited with {}", out.status)
+        } else {
+            err
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Whether this desktop can take a hotkey from us: `gsettings` is installed and
+/// knows the media-keys schema (GNOME and close relatives).
+fn hotkey_supported() -> bool {
+    gsettings(&["list-keys".into(), MEDIA_KEYS_SCHEMA.into()]).is_ok()
+}
+
+/// The `custom-keybindings` list currently configured.
+fn current_keybindings() -> Vec<String> {
+    gsettings(&[
+        "get".into(),
+        MEDIA_KEYS_SCHEMA.into(),
+        "custom-keybindings".into(),
+    ])
+    .map(|v| parse_keybinding_paths(&v))
+    .unwrap_or_default()
+}
+
+/// Install (or refresh) the global hotkey, returning a short status line.
+fn install_hotkey(binding: &str) -> Result<String, String> {
+    if !hotkey_supported() {
+        return Err(format!(
+            "This desktop does not expose the GNOME keybinding schema — bind `{HOTKEY_COMMAND}` \
+             to a key in your own shortcut settings."
+        ));
+    }
+    for args in hotkey_install_args(binding, &current_keybindings()) {
+        gsettings(&args)?;
+    }
+    Ok(format!("Shortcut {binding} → `{HOTKEY_COMMAND}`"))
+}
+
+/// Remove the global hotkey.
+fn remove_hotkey() -> Result<String, String> {
+    for args in hotkey_remove_args(&current_keybindings()) {
+        gsettings(&args)?;
+    }
+    Ok("Shortcut removed.".to_string())
 }
 
 /// Stop the running app and install `package`, from a **detached** script: the
@@ -6909,6 +7066,46 @@ impl App {
                     && let Err(e) = Self::set_autostart(autostart)
                 {
                     notify_desktop("Autostart", &format!("Could not update autostart: {e}"));
+                }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Global shortcut").strong());
+                ui.label(
+                    egui::RichText::new(
+                        "A key that flips the window (the tray's left-click). Installed as a \
+                         GNOME custom keybinding; on other desktops bind `easysearch --toggle` \
+                         in your own shortcut settings.",
+                    )
+                    .size(11.0)
+                    .color(self.fg_dim()),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Key");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.prefs.hotkey_binding)
+                            .desired_width(140.0)
+                            .hint_text("<Super>e"),
+                    );
+                    if ui
+                        .button("Set shortcut")
+                        .on_hover_text("Write the keybinding (needs GNOME's media-keys schema).")
+                        .clicked()
+                    {
+                        let binding = self.prefs.hotkey_binding.clone();
+                        self.prefs.save();
+                        self.hotkey_msg = Some(match install_hotkey(&binding) {
+                            Ok(msg) => msg,
+                            Err(e) => e,
+                        });
+                    }
+                    if ui.button("Remove").clicked() {
+                        self.hotkey_msg = Some(match remove_hotkey() {
+                            Ok(msg) => msg,
+                            Err(e) => e,
+                        });
+                    }
+                });
+                if let Some(msg) = &self.hotkey_msg {
+                    ui.label(egui::RichText::new(msg).size(11.0).color(self.fg_dim()));
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Updates").strong());
@@ -15755,6 +15952,42 @@ mod tests {
             shell_single_quote(Path::new("/tmp/it's.deb")),
             "'/tmp/it'\\''s.deb'"
         );
+    }
+
+    #[test]
+    fn keybinding_values_round_trip() {
+        assert_eq!(parse_keybinding_paths("@as []"), Vec::<String>::new());
+        assert_eq!(parse_keybinding_paths("['/a/', '/b/']"), ["/a/", "/b/"]);
+        assert_eq!(keybindings_value(&[]), "[]");
+        assert_eq!(
+            keybindings_value(&["/a/".to_string(), "/b/".to_string()]),
+            "['/a/', '/b/']"
+        );
+    }
+
+    #[test]
+    fn the_hotkey_commands_keep_other_bindings() {
+        let existing = ["/other/entry/".to_string()];
+        let cmds = hotkey_install_args("<Super>e", &existing);
+        assert_eq!(cmds.len(), 4);
+        // The list gains our path and keeps the other one.
+        assert_eq!(cmds[0][2], "custom-keybindings");
+        assert!(cmds[0][3].contains("/other/entry/"));
+        assert!(cmds[0][3].contains(HOTKEY_PATH));
+        assert_eq!(cmds[1][3], HOTKEY_NAME);
+        assert_eq!(cmds[2][3], HOTKEY_COMMAND);
+        assert_eq!(cmds[3][3], "<Super>e");
+        // Installing twice does not duplicate our path.
+        let again = hotkey_install_args(
+            "<Super>e",
+            &["/other/entry/".to_string(), HOTKEY_PATH.to_string()],
+        );
+        assert_eq!(again[0][3].matches(HOTKEY_PATH).count(), 1);
+        // Removing drops only ours.
+        let remove = hotkey_remove_args(&["/other/entry/".to_string(), HOTKEY_PATH.to_string()]);
+        assert_eq!(remove.len(), 1);
+        assert!(remove[0][3].contains("/other/entry/"));
+        assert!(!remove[0][3].contains(HOTKEY_PATH));
     }
 
     #[test]

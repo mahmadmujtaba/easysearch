@@ -135,7 +135,11 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
 ### L — large
 
 - **Global hotkey** via the XDG `GlobalShortcuts` portal (Wayland) plus a native
-  X11 grab — today the CLI is hand-bound by the user.
+  X11 grab — today the CLI is hand-bound by the user. **Done for GNOME**: a key
+  field in Settings ▸ Startup installs/removes a custom keybinding for
+  `easysearch --toggle` through `gsettings`. **Not done**: the portal and an X11
+  grab — on other desktops the command is still bound by hand (the app says so,
+  and manual binding needs no extra work).
 - **Structured viewers** — CSV/TSV tables, JSON/XML trees, and a hex view for
   binaries. **Done** (the preview renders `.csv`/`.tsv` as a table, `.json` as a
   tree, `.xml`/`.svg`/… as an element tree, and a binary as a hex dump of its
