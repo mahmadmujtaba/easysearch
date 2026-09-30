@@ -177,8 +177,10 @@ content-index state. Hovering the **search bar** shows a small query cheat-sheet
 
 The right-hand pane has **Preview** and **Details** tabs; ✕ hides it (re-open from Filters ▸
 Preview pane) and ⧉ opens the file. **Preview** renders by kind: image thumbnails;
-**audio/video** metadata (`ffprobe`) plus a video first frame (`ffmpeg`); the **text layer** of
-PDF, `.docx` and OpenDocument files (`.odt`/`.ods`/`.odp`/`.odg`) extracted in-process;
+**audio/video** metadata (`ffprobe`) plus a video first frame (`ffmpeg`); a **font specimen** for
+`.ttf`/`.otf` (the font installed live, shown at several sizes and in the full ASCII); the **text
+layer** of PDF, `.docx` and OpenDocument files (`.odt`/`.ods`/`.odp`/`.odg`) extracted in-process;
+a **first-page thumbnail** above that text for a PDF when `pdftoppm` (poppler-utils) is installed;
 **rendered Markdown**; and **syntax-highlighted source code** (~31 languages, and fenced code in
 Markdown). Larger files fall back to plain monospace; `.xls`/`.xlsx`/`.ppt`/`.pptx` have no
 preview. **Details:** Name · Path · Size (exact bytes) · Modified · Created · MIME type ·

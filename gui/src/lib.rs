@@ -285,6 +285,9 @@ const HASH_SCAN_LIMIT: usize = 2000;
 /// a note, rather than being read whole.
 const TEXT_PREVIEW_BYTES: usize = 256 * 1024;
 
+/// The font family name a previewed font is installed under.
+const FONT_PREVIEW_FAMILY: &str = "preview";
+
 const CATEGORIES: &[(&str, Category)] = &[
     ("All files", Category::All),
     (
@@ -1332,6 +1335,8 @@ struct Preview {
     lang: Option<Lang>,
     /// The text is the head of a larger file.
     truncated: bool,
+    /// The bytes of a font file, rendered as a live specimen (`None` otherwise).
+    font: Option<Vec<u8>>,
     /// Metadata rows for audio/video (key, value).
     media: Vec<(String, String)>,
     /// A short note shown instead of a body (why there is no preview).
@@ -1444,6 +1449,9 @@ struct App {
     results_rect: Option<egui::Rect>,
     ui_font: Option<Vec<u8>>,
     mono_font: Option<Vec<u8>>,
+    /// The bytes of the font currently installed for the specimen preview, if any
+    /// (the path it came from, so a change re-applies the style).
+    font_preview: Option<PathBuf>,
     /// Events pushed by the host process (tray, `--toggle`, `--quit`, `--search`).
     events: mpsc::Receiver<Event>,
     /// Set when a real Quit arrives: the window closes the whole app, not just
@@ -1779,6 +1787,7 @@ impl App {
             results_rect: None,
             ui_font,
             mono_font,
+            font_preview: None,
             events,
             quit,
             show_about: false,
@@ -1961,6 +1970,18 @@ impl App {
                 .entry(egui::FontFamily::Monospace)
                 .or_default()
                 .insert(0, "mono".to_owned());
+        }
+        // A previewed font is installed under its own family, so the specimen is
+        // drawn in the font itself without touching the UI fonts.
+        if let Some(bytes) = self.preview.as_ref().and_then(|p| p.font.clone()) {
+            fonts.font_data.insert(
+                "preview".to_owned(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            fonts.families.insert(
+                egui::FontFamily::Name(FONT_PREVIEW_FAMILY.into()),
+                vec!["preview".to_owned()],
+            );
         }
         ctx.set_fonts(fonts);
 
@@ -2450,6 +2471,9 @@ impl App {
     fn refresh_preview(&mut self, ctx: &egui::Context) {
         let Some(row) = self.results.get(self.selected) else {
             self.preview = None;
+            if self.font_preview.take().is_some() {
+                self.apply_style(ctx);
+            }
             return;
         };
         if self.preview.as_ref().is_some_and(|p| p.path == row.path) {
@@ -2467,6 +2491,7 @@ impl App {
             markdown: false,
             lang: None,
             truncated: false,
+            font: None,
             media: Vec::new(),
             note: None,
         };
@@ -2489,9 +2514,17 @@ impl App {
                         "No metadata — install ffmpeg (ffprobe) for media details.".to_string(),
                     );
                 }
+            } else if is_font_file(&path) {
+                // A font: read it and render a specimen (installed by `apply_style`).
+                match read_bytes_head(&path, 16 * 1024 * 1024) {
+                    Some(bytes) => preview.font = Some(bytes),
+                    None => preview.note = Some("This font file could not be read.".to_string()),
+                }
             } else if is_document_file(&path) {
                 // PDF / docx / odt: the text layer, extracted in-process (the same
-                // reader content search uses — no external tool).
+                // reader content search uses — no external tool), plus a first-page
+                // thumbnail for a PDF when poppler is installed.
+                preview.image = document_thumbnail(ctx, &path);
                 match easysearch_core::content_index::extract_text(&path, 8 * 1024 * 1024) {
                     Some(text) if !text.trim().is_empty() => {
                         let (head, truncated) = head_of(&text, TEXT_PREVIEW_BYTES);
@@ -2531,6 +2564,17 @@ impl App {
             }
         }
         self.preview = Some(preview);
+        // The previewed font is installed as a font family, so re-apply the
+        // style whenever a different font (or none) is being shown.
+        let want = self
+            .preview
+            .as_ref()
+            .filter(|p| p.font.is_some())
+            .map(|p| p.path.clone());
+        if want != self.font_preview {
+            self.font_preview = want;
+            self.apply_style(ctx);
+        }
     }
 
     fn select(&mut self, idx: usize, ctx: &egui::Context) {
@@ -3259,6 +3303,81 @@ fn primary_button(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Option<Icon>)
 /// Small uppercase label used before a filter control.
 fn bar_label(t: &Theme, text: &str) -> egui::RichText {
     egui::RichText::new(text).size(11.0).color(t.faint)
+}
+
+/// The scrollable text body of a preview: Markdown, highlighted code or plain
+/// text, plus the “truncated” note. Shared by the plain-text and thumbnail cases.
+fn preview_text(ui: &mut egui::Ui, t: &Theme, pv: &Preview) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 120.0)
+        .show(ui, |ui| {
+            if pv.markdown {
+                markdown_preview(ui, t, &pv.text);
+            } else if let Some(lang) = pv.lang {
+                code_preview(ui, t, lang, &pv.text);
+            } else {
+                ui.label(
+                    egui::RichText::new(&pv.text)
+                        .monospace()
+                        .size(11.5)
+                        .color(t.dim),
+                );
+            }
+            if pv.truncated {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("… preview truncated")
+                        .size(11.0)
+                        .color(t.faint),
+                );
+            }
+        });
+}
+
+/// A live specimen of the font installed under [`FONT_PREVIEW_FAMILY`]: the same
+/// line at several sizes, then the printable ASCII at a reading size.
+fn font_specimen(ui: &mut egui::Ui, t: &Theme, path: &Path) {
+    let family = egui::FontFamily::Name(FONT_PREVIEW_FAMILY.into());
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(name).size(12.0).color(t.dim));
+            ui.add_space(6.0);
+            for (text, size) in [
+                ("Hamburgefonstiv", 30.0_f32),
+                ("Hamburgefonstiv", 22.0),
+                ("Hamburgefonstiv", 16.0),
+                ("0123456789", 22.0),
+            ] {
+                ui.label(
+                    egui::RichText::new(text)
+                        .font(egui::FontId::new(size, family.clone()))
+                        .color(t.text),
+                );
+            }
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("The quick brown fox jumps over the lazy dog.")
+                    .font(egui::FontId::new(16.0, family.clone()))
+                    .color(t.text),
+            );
+            ui.label(
+                egui::RichText::new("ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz")
+                    .font(egui::FontId::new(14.0, family.clone()))
+                    .color(t.text),
+            );
+            ui.label(
+                egui::RichText::new("!\"#%&'()*+,-./:;<=>?@[]^_{|}~")
+                    .font(egui::FontId::new(14.0, family.clone()))
+                    .color(t.dim),
+            );
+        });
 }
 
 /// A colour from a packed `0xRRGGBB` literal.
@@ -9807,33 +9926,18 @@ impl App {
                                 .corner_radius(10),
                         );
                     });
+                    // A document thumbnail (first page) sits above its text.
+                    if let Some(pv) = self.preview.as_ref()
+                        && !pv.text.is_empty()
+                    {
+                        ui.add_space(6.0);
+                        preview_text(ui, &t, pv);
+                    }
                 } else if let Some(pv) = self.preview.as_ref() {
-                    if !pv.text.is_empty() {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .max_height(ui.available_height() - 120.0)
-                            .show(ui, |ui| {
-                                if pv.markdown {
-                                    markdown_preview(ui, &t, &pv.text);
-                                } else if let Some(lang) = pv.lang {
-                                    code_preview(ui, &t, lang, &pv.text);
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new(&pv.text)
-                                            .monospace()
-                                            .size(11.5)
-                                            .color(t.dim),
-                                    );
-                                }
-                                if pv.truncated {
-                                    ui.add_space(6.0);
-                                    ui.label(
-                                        egui::RichText::new("… preview truncated")
-                                            .size(11.0)
-                                            .color(t.faint),
-                                    );
-                                }
-                            });
+                    if pv.font.is_some() {
+                        font_specimen(ui, &t, &pv.path);
+                    } else if !pv.text.is_empty() {
+                        preview_text(ui, &t, pv);
                     } else if let Some(note) = &pv.note {
                         ui.label(egui::RichText::new(note).size(12.0).color(t.faint));
                     } else if pv.binary {
@@ -11669,6 +11773,20 @@ fn is_image_file(path: &Path) -> bool {
     )
 }
 
+/// A font `ab_glyph` (via egui) can load: TrueType and OpenType.
+fn is_font_file(path: &Path) -> bool {
+    matches!(ext_lower(path).as_deref(), Some("ttf" | "otf"))
+}
+
+/// The first `cap` bytes of `path`, or `None` if it cannot be read.
+fn read_bytes_head(path: &Path, cap: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::with_capacity(cap.min(64 * 1024));
+    file.take(cap as u64).read_to_end(&mut buf).ok()?;
+    (!buf.is_empty()).then_some(buf)
+}
+
 /// Best-effort "is this text?" test for the preview pane: no NUL bytes and only
 /// a trace of other control characters. A byte near the 64 KiB cut that splits a
 /// multi-byte character is fine — UTF-8 continuation bytes are >= 0x80, not
@@ -11827,6 +11945,32 @@ fn video_thumbnail(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHand
     }
     let decoded = image::load_from_memory(&out.stdout).ok()?;
     texture_from_image(ctx, decoded, &format!("vthumb:{}", path.display()))
+}
+
+/// The first page of a PDF rendered to an image, via `pdftoppm` (poppler-utils)
+/// when it is installed. Best effort, like the video thumbnail; other document
+/// types have no rasteriser available offline.
+fn document_thumbnail(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+    if ext_lower(path).as_deref() != Some("pdf") {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("easysearch-thumb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let prefix = dir.join("page");
+    let out = Command::new("pdftoppm")
+        .args(["-png", "-f", "1", "-l", "1", "-r", "70", "-singlefile"])
+        .arg(path)
+        .arg(&prefix)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let page = prefix.with_extension("png");
+    let bytes = std::fs::read(&page).ok()?;
+    let _ = std::fs::remove_file(&page);
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    texture_from_image(ctx, decoded, &format!("dthumb:{}", path.display()))
 }
 
 /// Audio/video metadata via `ffprobe` (JSON), when it is installed. Best effort.
@@ -14110,6 +14254,28 @@ mod tests {
         assert!(!ColumnKind::Size.needs_stat());
         assert!(ColumnKind::Owner.needs_stat());
         assert!(ColumnKind::Inode.needs_stat());
+    }
+
+    #[test]
+    fn fonts_are_recognised_and_read() {
+        assert!(is_font_file(Path::new("/a/Inter.ttf")));
+        assert!(is_font_file(Path::new("/a/Inter.OTF")));
+        assert!(!is_font_file(Path::new("/a/Inter.woff2")));
+        assert!(!is_font_file(Path::new("/a/notes.txt")));
+
+        let dir = std::env::temp_dir().join(format!("easysearch-font-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.ttf");
+        std::fs::write(&f, b"0123456789").unwrap();
+        assert_eq!(read_bytes_head(&f, 4), Some(b"0123".to_vec()));
+        assert_eq!(read_bytes_head(&f, 100), Some(b"0123456789".to_vec()));
+        assert_eq!(read_bytes_head(&dir.join("nope.ttf"), 8), None);
+        // An empty file reads as nothing at all.
+        let empty = dir.join("empty.ttf");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(read_bytes_head(&empty, 8), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
