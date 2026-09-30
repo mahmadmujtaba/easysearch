@@ -1366,6 +1366,8 @@ struct Preview {
     xml: Option<XmlNode>,
     /// The head of a binary file, rendered as a hex dump.
     hex: Option<Vec<u8>>,
+    /// The members of a zip/tar archive, listed for browsing.
+    archive: Option<Vec<easysearch_core::archive::ArchiveEntry>>,
     /// Metadata rows for audio/video (key, value).
     media: Vec<(String, String)>,
     /// A short note shown instead of a body (why there is no preview).
@@ -1481,6 +1483,8 @@ struct App {
     /// The font currently installed for the specimen preview, if any
     /// (the path it came from, so a change re-applies the style).
     font_preview: Option<PathBuf>,
+    /// Filter text for the archive-member list in the preview.
+    archive_filter: String,
     /// Live results: the last-seen index fingerprint and when it changed, plus
     /// the cursor path to restore after a background refresh.
     live_key: Option<(usize, usize)>,
@@ -1828,6 +1832,7 @@ impl App {
             ui_font,
             mono_font,
             font_preview: None,
+            archive_filter: String::new(),
             live_key: Some(live_key0),
             live_at: Instant::now(),
             live_keep: None,
@@ -2564,6 +2569,7 @@ impl App {
             json: None,
             xml: None,
             hex: None,
+            archive: None,
             media: Vec::new(),
             note: None,
         };
@@ -2628,6 +2634,17 @@ impl App {
                         }
                     }
                 }
+            } else if easysearch_core::archive::is_archive_name(&path) {
+                // An archive: list its members (zip/tar), or say why not.
+                if easysearch_core::archive::is_readable_archive(&path) {
+                    preview.archive = Some(easysearch_core::archive::list(&path));
+                } else {
+                    preview.note = Some(
+                        "This archive cannot be read in-app — only zip and tar are supported
+                         (a compressed tar needs its decompressor)."
+                            .to_string(),
+                    );
+                }
             } else if is_document_file(&path) {
                 // PDF / docx / odt: the text layer, extracted in-process (the same
                 // reader content search uses — no external tool), plus a first-page
@@ -2678,6 +2695,8 @@ impl App {
             }
         }
         self.preview = Some(preview);
+        // A fresh file: the archive member filter starts empty.
+        self.archive_filter.clear();
         // The previewed font is installed as a font family, so re-apply the
         // style whenever a different font (or none) is being shown.
         let want = self
@@ -3614,6 +3633,55 @@ fn xml_node(ui: &mut egui::Ui, t: &Theme, node: &XmlNode, depth: usize, id: &mut
             xml_node(ui, t, child, depth + 1, id);
         }
     });
+}
+
+/// An archive listing: a member filter box over the entries (name and size).
+fn archive_view(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    filter: &mut String,
+    entries: &[easysearch_core::archive::ArchiveEntry],
+) {
+    ui.label(
+        egui::RichText::new(format!("{} member(s)", entries.len()))
+            .size(11.0)
+            .color(t.faint),
+    );
+    ui.add(
+        egui::TextEdit::singleline(filter)
+            .desired_width(f32::INFINITY)
+            .hint_text("Filter members…"),
+    );
+    let needle = filter.to_lowercase();
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            for entry in entries
+                .iter()
+                .filter(|e| needle.is_empty() || e.name.to_lowercase().contains(&needle))
+            {
+                ui.horizontal(|ui| {
+                    let color = if entry.is_dir { t.accent } else { t.text };
+                    ui.label(
+                        egui::RichText::new(&entry.name)
+                            .monospace()
+                            .size(11.0)
+                            .color(color),
+                    );
+                    if !entry.is_dir {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(human_size(entry.size))
+                                    .size(10.5)
+                                    .color(t.faint),
+                            );
+                        });
+                    }
+                });
+            }
+        });
 }
 
 /// A hex dump of a binary file's head, offset · bytes · ASCII.
@@ -10301,6 +10369,10 @@ impl App {
                         json_tree(ui, &t, value);
                     } else if let Some(node) = &pv.xml {
                         xml_tree(ui, &t, node);
+                    } else if let Some(entries) = &pv.archive {
+                        let mut filter = std::mem::take(&mut self.archive_filter);
+                        archive_view(ui, &t, &mut filter, entries);
+                        self.archive_filter = filter;
                     } else if !pv.text.is_empty() {
                         preview_text(ui, &t, pv);
                     } else if let Some(bytes) = &pv.hex {

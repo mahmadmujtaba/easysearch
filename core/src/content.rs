@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 /// Maximum size of extracted document text we are willing to hold in memory.
 const MAX_EXTRACTED_TEXT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Total bytes read from one archive during a content search, and the cap on a
+/// single member (larger members are skipped rather than held in memory).
+const ARCHIVE_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+const ARCHIVE_MEMBER_BYTES: u64 = 16 * 1024 * 1024;
+
 /// A compiled content query: the ripgrep matcher (live search) plus a plain
 /// regex (cheap check over cached text).
 pub struct ContentPattern {
@@ -122,6 +127,19 @@ fn search_one(
         Err(_) => return false,
     }
 
+    // An archive is searched *inside*: each member is matched without unpacking.
+    if crate::archive::is_readable_archive(path) {
+        for (_name, bytes) in
+            crate::archive::read_members(path, ARCHIVE_SCAN_BYTES, ARCHIVE_MEMBER_BYTES)
+        {
+            let mut cur = Cursor::new(bytes);
+            if search_reader(searcher, pattern, &mut cur) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     if crate::content_index::needs_extraction(path) {
         let text = match crate::content_index::extract_text(path, MAX_EXTRACTED_TEXT_BYTES) {
             Some(t) => t,
@@ -223,6 +241,35 @@ mod tests {
             search_contents(&paths, &plain, 10, &cache, None),
             vec![path]
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_content_search_looks_inside_a_zip_member() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("evfl-archive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("notes.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("inner.txt", opts).unwrap();
+        zip.write_all(b"the needle is here").unwrap();
+        zip.finish().unwrap();
+
+        let cache = ContentIndex::new(
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            1024 * 1024,
+            1024 * 1024,
+            crate::content_index::ContentStore::Memory,
+            std::path::PathBuf::new(),
+        );
+        let paths = vec![path.clone()];
+        let hit = ContentPattern::new("needle", false, false).unwrap();
+        assert_eq!(search_contents(&paths, &hit, 10, &cache, None), vec![path]);
+        let miss = ContentPattern::new("haystack", false, false).unwrap();
+        assert!(search_contents(&paths, &miss, 10, &cache, None).is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

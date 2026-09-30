@@ -141,7 +141,10 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   tree, `.xml`/`.svg`/… as an element tree, and a binary as a hex dump of its
   head; each is capped so a large file stays responsive).
 - **Removable-media indexing** — detect mounts, index on mount, drop on unmount.
-- **Browse and search inside archives** (zip/tar/7z) without extracting.
+- **Browse and search inside archives** (zip/tar/7z) without extracting. **Done**
+  for **zip and plain tar** (a preview member list, and content search matching
+  inside members); **`.7z`, `.rar` and compressed tars are not read** — that needs
+  a decompressor this build does not carry — and the preview says so.
 - **Font preview** and first-page thumbnails for documents. **Done**: a live font
   specimen for `.ttf`/`.otf` (installed under its own family), and a first-page
   thumbnail above the text for a PDF when `pdftoppm` (poppler-utils) is present.

@@ -10,6 +10,7 @@
 //!   `--content-in-memory`) for repeated queries.
 
 pub mod api;
+pub mod archive;
 pub mod backend;
 pub mod child;
 pub mod config;
