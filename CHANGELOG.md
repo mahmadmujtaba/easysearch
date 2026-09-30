@@ -4,6 +4,36 @@ All notable changes to **EasySearch** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.52.0] - 2026-09-30
+
+### Added
+
+- **Structured viewers** in the preview — `.csv`/`.tsv` as a table, `.json` as a
+  collapsible tree, `.xml`/`.svg` as an element tree, and a binary file as a hex
+  dump of its head.
+- **Archives** — the preview lists a zip/tar's members (filterable), and a content
+  search now matches **inside** zip and tar members without extracting them.
+  `.7z`, `.rar` and compressed tars are recognised but reported as unreadable.
+- **Font specimen** — a `.ttf`/`.otf` previews in its own face, plus a first-page
+  thumbnail above the text for a PDF when `pdftoppm` is installed.
+- **Live-updating results** — an open query re-runs when the index changes
+  underneath it (debounced, restoring the cursor).
+- **Accessibility** — a **High contrast** theme and **Reduce motion**, and
+  accesskit labels on the custom-drawn toolbar and quick-action buttons.
+- **Removable media** — with **Index removable media** on, an ejectable volume
+  the *user* mounted is indexed, and dropped when it goes.
+- **Global shortcut** — Settings ▸ Startup can install a GNOME custom keybinding
+  for `easysearch --toggle`.
+- **Check for updates** — Settings ▸ Updates reads the newest GitHub release,
+  picks the package for this distribution and architecture, downloads it, and
+  installs it after stopping the app. This is the app's only network access, and
+  only when the button is pressed.
+
+### Fixed
+
+- **The location bar's autocomplete takes the keyboard** — `↑`/`↓` move the
+  highlight, `Enter` takes it, `Esc` dismisses it (it used to be mouse-only).
+
 ## [0.51.0] - 2026-09-30
 
 ### Added

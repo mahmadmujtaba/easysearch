@@ -42,7 +42,7 @@ back to its default while keeping the theme and zoom you picked. Both act
 immediately and report through a desktop notification that dismisses itself after
 five seconds (via `notify-send`), not a dialog; the index, tags and files are
 never touched. The window title carries the version and build stamp —
-`EasySearch v0.51.0-20260930` — as does the logo's tooltip.
+`EasySearch v0.52.0-20260930` — as does the logo's tooltip.
 
 ## Searching
 
