@@ -116,6 +116,63 @@ impl RootSet {
     }
 }
 
+/// Mount points that look like **user-mounted removable media**: an ejectable
+/// `/dev/` device the user's own session mounted under `/media/<user>` or
+/// `/run/media/<user>`, or inside the user's home. A system or root mount is
+/// skipped, so indexing never follows a volume the user did not bring up.
+pub fn removable_mounts() -> Vec<PathBuf> {
+    let markers = user_markers();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    read_mounts()
+        .into_iter()
+        .filter(|m| {
+            m.device.starts_with("/dev/")
+                && !is_network_fstype(&m.fstype)
+                && is_removable(&m.device)
+                && is_user_mount(&m.point, &markers, home.as_deref())
+        })
+        .map(|m| m.point)
+        .collect()
+}
+
+/// Names that identify the current user in a mount path: `$USER`, `$LOGNAME`,
+/// the home directory's last component, and the numeric uid.
+fn user_markers() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for var in ["USER", "LOGNAME"] {
+        if let Some(v) = std::env::var_os(var) {
+            let name = v.to_string_lossy().trim().to_string();
+            if !name.is_empty() {
+                out.push(name);
+            }
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        && let Some(name) = Path::new(&home).file_name()
+    {
+        out.push(name.to_string_lossy().into_owned());
+    }
+    // SAFETY: `getuid` takes no arguments, has no preconditions and cannot fail.
+    out.push(unsafe { libc::getuid() }.to_string());
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether `point` is a mount the *user's* session made: under `/media/<user>`
+/// or `/run/media/<user>`, or inside the user's home.
+fn is_user_mount(point: &Path, markers: &[String], home: Option<&Path>) -> bool {
+    for marker in markers {
+        for base in ["/media", "/run/media"] {
+            let dir = Path::new(base).join(marker);
+            if point == dir || point.starts_with(&dir) {
+                return true;
+            }
+        }
+    }
+    home.is_some_and(|h| !h.as_os_str().is_empty() && point.starts_with(h))
+}
+
 fn is_network_fstype(fstype: &str) -> bool {
     matches!(
         fstype,
@@ -268,5 +325,40 @@ mod tests {
         set.set_roots(vec![PathBuf::from("/srv/data")]);
         assert!(set.is_in_roots(Path::new("/srv/data/x")));
         assert_eq!(set.roots(), [PathBuf::from("/srv/data")]);
+    }
+
+    #[test]
+    fn only_user_mounts_count_as_removable_media() {
+        let markers = ["u".to_string(), "1000".to_string()];
+        let home = Path::new("/home/u");
+        // The user's own session mounts.
+        assert!(is_user_mount(
+            Path::new("/media/u/USB"),
+            &markers,
+            Some(home)
+        ));
+        assert!(is_user_mount(
+            Path::new("/run/media/1000/SD Card/data"),
+            &markers,
+            Some(home)
+        ));
+        assert!(is_user_mount(
+            Path::new("/home/u/usb"),
+            &markers,
+            Some(home)
+        ));
+        // System mounts, another user's mounts, and a bare /media are skipped.
+        assert!(!is_user_mount(
+            Path::new("/mnt/backup"),
+            &markers,
+            Some(home)
+        ));
+        assert!(!is_user_mount(Path::new("/media"), &markers, Some(home)));
+        assert!(!is_user_mount(
+            Path::new("/media/other/USB"),
+            &markers,
+            Some(home)
+        ));
+        assert!(!is_user_mount(Path::new("/srv/data"), &markers, Some(home)));
     }
 }

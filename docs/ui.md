@@ -79,7 +79,8 @@ in the search box.
 
 The **location bar** below the filters is an editable path field: type a directory (a leading
 `~` means home) and press Enter, or pick from the autocomplete that lists its sub-directories as
-you type; `/ (everywhere)` clears the filter. The field mirrors the current location when it is
+you type — **↑/↓** move the highlight and **Enter** takes it (**Esc** dismisses the list);
+`/ (everywhere)` clears the filter. The field mirrors the current location when it is
 not focused. Back/Forward in the toolbar walk the location history, and the sidebar's *Path* menu
 and Indexed Locations set the same thing.
 
@@ -253,7 +254,9 @@ live switches: **Honor `.gitignore` / `.ignore` files** and **Follow symbolic li
 default; cycles are skipped), both pushed to the running engine and followed by a rebuild.
 **Settings ▸ Indexing** has the same switches and **Background content index** — an optional
 cache of text extracted from Office/PDF files, off at boot and spooled to disk by default
-(`--content-in-memory` keeps it in RAM).
+(`--content-in-memory` keeps it in RAM). **Index removable media** adds a USB stick or disc to the
+roots when *you* mount it (under `/media/<user>` or `/run/media/<user>`, or in your home) and
+drops it when it goes; a system-mounted volume is left alone.
 
 **Excluded folders** are a *path* exclusion, separate from ignore patterns. **Tools ▸ Excluded
 folders…** edits `config.exclude_dirs` — exact directory trees to skip, one path per line (`~` =
@@ -294,6 +297,16 @@ fallbacks. Sidebar and result icons are painted in the theme's colours.
 stronger borders, keeping the accents) and **Reduce motion** (stops the pulsing index dots);
 the custom-drawn toolbar and quick-action buttons carry an accesskit label taken from their
 hover tip, so a screen reader can name them.
+
+## Updating
+
+**Settings ▸ Updates ▸ Check for updates** reads the newest GitHub release, compares its tag with
+the running version, and — when it is newer — picks the `.deb` or `.rpm` for this machine's
+architecture (whichever package manager is present). **Download** fetches it (via `curl`, into the
+temp directory) and **Install and restart** then runs a small detached script that quits
+EasySearch, installs the package with `pkexec`/`sudo`, and sends a notification; start the app
+again afterwards. This is the **only** network access in EasySearch, and it happens only when you
+press the button — there is no background check and no telemetry.
 
 ## Tray, closing and the global hotkey
 

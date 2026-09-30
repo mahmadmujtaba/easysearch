@@ -795,6 +795,10 @@ struct GuiPrefs {
     /// Re-run the open query when the index changes underneath it.
     #[serde(default = "default_true")]
     live_results: bool,
+    /// Index removable media: add an ejectable mount to the roots when it
+    /// appears, drop it when it goes.
+    #[serde(default)]
+    index_removable_media: bool,
 }
 
 impl Default for GuiPrefs {
@@ -821,6 +825,7 @@ impl Default for GuiPrefs {
             high_contrast: false,
             reduce_motion: false,
             live_results: true,
+            index_removable_media: false,
         }
     }
 }
@@ -1440,6 +1445,8 @@ struct App {
     /// The editable location bar: its input buffer and the suggested directories.
     loc_edit: String,
     loc_suggest: Vec<PathBuf>,
+    /// The highlighted suggestion (arrow keys move it; Enter accepts it).
+    loc_suggest_index: usize,
     // --- live system stats for the status bar -----------------------------
     sys_at: Instant,
     sys_cpu: f32,
@@ -1485,6 +1492,14 @@ struct App {
     font_preview: Option<PathBuf>,
     /// Filter text for the archive-member list in the preview.
     archive_filter: String,
+    /// The configured roots (from `config.json`), and when the removable mounts
+    /// were last checked. The live root list is `config roots + mounts`.
+    base_roots: Vec<String>,
+    mount_at: Instant,
+    /// The update check: its worker channel and what the panel is showing.
+    update_tx: mpsc::Sender<UpdateMsg>,
+    update_rx: mpsc::Receiver<UpdateMsg>,
+    update_state: UpdateState,
     /// Live results: the last-seen index fingerprint and when it changed, plus
     /// the cursor path to restore after a background refresh.
     live_key: Option<(usize, usize)>,
@@ -1641,6 +1656,8 @@ impl App {
         let (query_tx, query_rx) = mpsc::channel::<UiMsg>();
         let (result_tx, result_rx) = mpsc::channel::<OutMsg>();
         let backend_worker = Arc::clone(&backend);
+        // The update check runs on its own worker threads (see `start_update_check`).
+        let (update_tx, update_rx) = mpsc::channel::<UpdateMsg>();
 
         std::thread::Builder::new()
             .name("search".into())
@@ -1801,6 +1818,7 @@ impl App {
             loc_idx: 0,
             loc_edit: String::new(),
             loc_suggest: Vec::new(),
+            loc_suggest_index: 0,
             sys_at: Instant::now(),
             sys_cpu: 0.0,
             sys_ram_used_kb: 0,
@@ -1833,6 +1851,11 @@ impl App {
             mono_font,
             font_preview: None,
             archive_filter: String::new(),
+            base_roots: easysearch_core::Config::load().roots,
+            mount_at: Instant::now(),
+            update_tx,
+            update_rx,
+            update_state: UpdateState::Idle,
             live_key: Some(live_key0),
             live_at: Instant::now(),
             live_keep: None,
@@ -2101,6 +2124,83 @@ impl App {
         if detected != self.sys_theme {
             self.sys_theme = detected;
             self.apply_style(ctx);
+        }
+    }
+
+    /// Keep the roots in step with removable media when that option is on: a
+    /// newly mounted volume is added to the roots (and indexed), an unmounted one
+    /// is dropped. Re-checked on a timer.
+    fn apply_removable_roots(&mut self) {
+        if !self.prefs.index_removable_media || self.mount_at.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        self.mount_at = Instant::now();
+        let mounts = easysearch_core::roots::removable_mounts();
+        if mounts.is_empty() && self.base_roots.is_empty() {
+            return; // nothing to add and nothing to drop
+        }
+        // An empty configured list means "home"; make that explicit so adding a
+        // mount does not silently drop the default root.
+        let base: Vec<String> = if self.base_roots.is_empty() {
+            vec![self.home_path().display().to_string()]
+        } else {
+            self.base_roots.clone()
+        };
+        let desired = desired_roots(&base, &mounts);
+        if desired != self.status.roots {
+            self.engine.set_roots(desired);
+        }
+    }
+
+    // --- updates ----------------------------------------------------------
+
+    /// Drain the update worker's messages into [`UpdateState`].
+    fn poll_update(&mut self) {
+        while let Ok(msg) = self.update_rx.try_recv() {
+            self.update_state = match msg {
+                UpdateMsg::Checked(Ok(None)) => {
+                    UpdateState::UpToDate(env!("CARGO_PKG_VERSION").to_string())
+                }
+                UpdateMsg::Checked(Ok(Some(info))) => UpdateState::Available(info),
+                UpdateMsg::Checked(Err(e)) => UpdateState::Error(e),
+                UpdateMsg::Downloaded(Ok((info, path))) => UpdateState::Ready(info, path),
+                UpdateMsg::Downloaded(Err(e)) => UpdateState::Error(e),
+            };
+        }
+    }
+
+    /// Start the (network) update check on a worker thread.
+    fn start_update_check(&mut self) {
+        if self.update_state == UpdateState::Checking {
+            return;
+        }
+        self.update_state = UpdateState::Checking;
+        spawn_update_check(self.update_tx.clone(), package_kind());
+    }
+
+    fn start_update_download(&mut self, info: ReleaseInfo) {
+        self.update_state = UpdateState::Downloading;
+        spawn_update_download(self.update_tx.clone(), info);
+    }
+
+    /// Stop the app and install the downloaded package, from a detached script.
+    fn install_downloaded(&mut self) {
+        let UpdateState::Ready(_info, path) = self.update_state.clone() else {
+            return;
+        };
+        let Some(kind) = package_kind() else {
+            self.update_state = UpdateState::Error("No dpkg or rpm here.".to_string());
+            return;
+        };
+        match spawn_update_installer(&path, kind) {
+            Ok(()) => {
+                self.update_state = UpdateState::Installing(
+                    "Installing — EasySearch is stopping now; start it again when the
+                     installer finishes."
+                        .to_string(),
+                );
+            }
+            Err(e) => self.update_state = UpdateState::Error(e),
         }
     }
 
@@ -3784,6 +3884,26 @@ fn font_specimen(ui: &mut egui::Ui, t: &Theme, path: &Path) {
         });
 }
 
+/// The root list with removable mounts merged in: a mount already covered by a
+/// configured root is left out, and the configured order is kept.
+fn desired_roots(base: &[String], mounts: &[PathBuf]) -> Vec<String> {
+    let mut out: Vec<String> = base
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for mount in mounts {
+        let m = mount.display().to_string();
+        let covered = out
+            .iter()
+            .any(|r| m == *r || m.starts_with(&format!("{}/", r.trim_end_matches('/'))));
+        if !covered {
+            out.push(m);
+        }
+    }
+    out
+}
+
 /// A colour from a packed `0xRRGGBB` literal.
 fn rgb(hex: u32) -> egui::Color32 {
     egui::Color32::from_rgb(
@@ -3791,6 +3911,317 @@ fn rgb(hex: u32) -> egui::Color32 {
         ((hex >> 8) & 0xff) as u8,
         (hex & 0xff) as u8,
     )
+}
+
+// --- update check ---------------------------------------------------------
+
+/// The API endpoint for the newest published release of this project.
+const UPDATE_API_LATEST: &str =
+    "https://api.github.com/repos/mahmadmujtaba/easysearch/releases/latest";
+/// Sent with every request, as GitHub's API asks callers to identify themselves.
+const UPDATE_USER_AGENT: &str = concat!("easysearch/", env!("CARGO_PKG_VERSION"));
+
+/// Which package format this system installs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PackageKind {
+    Deb,
+    Rpm,
+}
+
+impl PackageKind {
+    fn suffix(self) -> &'static str {
+        match self {
+            PackageKind::Deb => ".deb",
+            PackageKind::Rpm => ".rpm",
+        }
+    }
+
+    fn installer(self) -> &'static str {
+        match self {
+            PackageKind::Deb => "dpkg -i",
+            PackageKind::Rpm => "rpm -U",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            PackageKind::Deb => ".deb",
+            PackageKind::Rpm => ".rpm",
+        }
+    }
+}
+
+/// A newer release, with the asset to install on this machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReleaseInfo {
+    /// The release tag, e.g. `v0.52.0`.
+    tag: String,
+    /// The asset file name.
+    asset: String,
+    /// Its download URL.
+    url: String,
+}
+
+/// What the Settings ▸ Updates panel is showing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UpdateState {
+    Idle,
+    Checking,
+    /// Checked, nothing newer.
+    UpToDate(String),
+    /// A newer release exists; not downloaded yet.
+    Available(ReleaseInfo),
+    Downloading,
+    /// Downloaded and ready; installing stops the app first.
+    Ready(ReleaseInfo, PathBuf),
+    /// The detached installer has been started.
+    Installing(String),
+    Error(String),
+}
+
+/// Messages from the update worker threads.
+enum UpdateMsg {
+    Checked(Result<Option<ReleaseInfo>, String>),
+    Downloaded(Result<(ReleaseInfo, PathBuf), String>),
+}
+
+/// `v1.2.3` / `1.2.3` / `1.2` → `(1, 2, 3)`; anything unparseable is `None`.
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let t = text.trim().trim_start_matches('v');
+    let core = t.split(['-', '+']).next().unwrap_or("");
+    let mut parts = core.split('.');
+    let major = parts.next()?.trim().parse().ok()?;
+    let minor = parts.next().unwrap_or("0").trim().parse().ok()?;
+    let patch = parts.next().unwrap_or("0").trim().parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// Whether `candidate` is a strictly newer version than `current`.
+fn version_is_newer(current: &str, candidate: &str) -> bool {
+    match (parse_version(current), parse_version(candidate)) {
+        (Some(cur), Some(new)) => new > cur,
+        _ => false,
+    }
+}
+
+/// The package format here: `.deb` when `dpkg` is on PATH, else `.rpm` when
+/// `rpm` is, else `None` (a source or Flatpak install updates another way).
+fn package_kind() -> Option<PackageKind> {
+    if find_in_path("dpkg").is_some() {
+        Some(PackageKind::Deb)
+    } else if find_in_path("rpm").is_some() {
+        Some(PackageKind::Rpm)
+    } else {
+        None
+    }
+}
+
+/// Architecture substrings an asset name may carry for this machine.
+fn arch_tags() -> &'static [&'static str] {
+    match std::env::consts::ARCH {
+        "x86_64" => &["amd64", "x86_64", "x64"],
+        "aarch64" => &["arm64", "aarch64"],
+        _ => &[],
+    }
+}
+
+/// Every architecture tag we know of, so an asset for *another* architecture is
+/// not mistaken for an un-suffixed one.
+const OTHER_ARCH_TAGS: &[&str] = &[
+    "amd64", "x86_64", "x64", "arm64", "aarch64", "i386", "i686", "armv7", "ppc64", "s390x",
+];
+
+/// Choose the release asset for `kind` on this architecture: a file ending with
+/// the package suffix whose name carries our arch tag, else one that carries no
+/// arch tag at all (a single-architecture release).
+fn pick_asset(assets: &[(String, String)], kind: PackageKind) -> Option<(String, String)> {
+    let suffix = kind.suffix();
+    let candidates: Vec<&(String, String)> = assets
+        .iter()
+        .filter(|(name, _)| name.to_ascii_lowercase().ends_with(suffix))
+        .collect();
+    let tags = arch_tags();
+    for (name, url) in &candidates {
+        let lower = name.to_ascii_lowercase();
+        if tags.iter().any(|t| lower.contains(t)) {
+            return Some((name.clone(), url.clone()));
+        }
+    }
+    for (name, url) in &candidates {
+        let lower = name.to_ascii_lowercase();
+        if !OTHER_ARCH_TAGS.iter().any(|t| lower.contains(t)) {
+            return Some((name.clone(), url.clone()));
+        }
+    }
+    None
+}
+
+/// The `tag_name` out of a GitHub release JSON.
+fn release_tag(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    value.get("tag_name")?.as_str().map(str::to_string)
+}
+
+/// Every `(name, browser_download_url)` in a release JSON.
+fn release_assets(json: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    value
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| {
+                    let name = a.get("name")?.as_str()?.to_string();
+                    let url = a.get("browser_download_url")?.as_str()?.to_string();
+                    Some((name, url))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Fetch a URL's body with `curl` (the same shell-out pattern the rest of the
+/// app uses for external tools, so no HTTP dependency is added).
+fn http_get(url: &str) -> Result<String, String> {
+    let out = Command::new("curl")
+        .args(["-fsSL", "--max-time", "20", "-A", UPDATE_USER_AGENT, url])
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("the update request failed ({})", out.status));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Download `url` to `dest` with `curl`.
+fn http_download(url: &str, dest: &Path) -> Result<(), String> {
+    let out = Command::new("curl")
+        .args(["-fsSL", "--max-time", "600", "-A", UPDATE_USER_AGENT, "-o"])
+        .arg(dest)
+        .arg(url)
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("the download failed ({})", out.status));
+    }
+    Ok(())
+}
+
+/// Run the update check on a worker thread (the network call must not block the
+/// UI). Reports `Ok(None)` when the running version is current.
+fn spawn_update_check(tx: mpsc::Sender<UpdateMsg>, kind: Option<PackageKind>) {
+    std::thread::Builder::new()
+        .name("update-check".into())
+        .spawn(move || {
+            let result = (|| -> Result<Option<ReleaseInfo>, String> {
+                let json = http_get(UPDATE_API_LATEST)?;
+                let Some(tag) = release_tag(&json) else {
+                    return Err("the latest release has no tag".to_string());
+                };
+                if !version_is_newer(env!("CARGO_PKG_VERSION"), &tag) {
+                    return Ok(None);
+                }
+                let kind = kind.ok_or_else(|| {
+                    "No dpkg or rpm here — download it from the release page.".to_string()
+                })?;
+                match pick_asset(&release_assets(&json), kind) {
+                    Some((asset, url)) => Ok(Some(ReleaseInfo { tag, asset, url })),
+                    None => Err(format!(
+                        "{tag} has no {} asset for this machine",
+                        kind.label()
+                    )),
+                }
+            })();
+            let _ = tx.send(UpdateMsg::Checked(result));
+        })
+        .ok();
+}
+
+/// Download the release asset on a worker thread.
+fn spawn_update_download(tx: mpsc::Sender<UpdateMsg>, info: ReleaseInfo) {
+    std::thread::Builder::new()
+        .name("update-download".into())
+        .spawn(move || {
+            let result = (|| -> Result<(ReleaseInfo, PathBuf), String> {
+                // Use only the file name, so a crafted asset name cannot escape
+                // the temp directory.
+                let name = Path::new(&info.asset)
+                    .file_name()
+                    .map(|n| n.to_owned())
+                    .unwrap_or_else(|| "easysearch.pkg".into());
+                let dest = std::env::temp_dir().join(name);
+                http_download(&info.url, &dest)?;
+                Ok((info, dest))
+            })();
+            let _ = tx.send(UpdateMsg::Downloaded(result));
+        })
+        .ok();
+}
+
+/// A path quoted for a POSIX shell (single quotes, embedded quotes escaped).
+fn shell_single_quote(path: &Path) -> String {
+    let text = path.display().to_string();
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// Stop the running app and install `package`, from a **detached** script: the
+/// upgrade has to outlive this window, which the script stops as part of the
+/// install.
+fn spawn_update_installer(package: &Path, kind: PackageKind) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let elevate = if find_in_path("pkexec").is_some() {
+        "pkexec"
+    } else if find_in_path("sudo").is_some() {
+        "sudo -n"
+    } else {
+        return Err(format!(
+            "Neither pkexec nor sudo is available — run `sudo {} {}` yourself.",
+            kind.installer(),
+            package.display()
+        ));
+    };
+    // Quit via the control socket, then make sure, then install. The sleeps let
+    // the app release the binary before the package manager replaces it.
+    let mut script = [
+        "#!/bin/sh",
+        "# Written by the EasySearch in-app updater.",
+        "sleep 1",
+        "easysearch --quit >/dev/null 2>&1 || true",
+        "sleep 1",
+        "pkill -TERM -x easysearch >/dev/null 2>&1 || true",
+        "sleep 1",
+    ]
+    .join("\n");
+    script.push('\n');
+    script.push_str(&format!("{} {}", elevate, kind.installer()));
+    script.push(' ');
+    script.push_str(&shell_single_quote(package));
+    script.push('\n');
+    script.push_str("status=$?\n");
+    script.push_str(&format!(
+        "if [ \"$status\" -eq 0 ]; then notify-send -a {APP_ID} 'EasySearch updated' \
+         'Restart it to use the new version.' || true; \
+         else notify-send -a {APP_ID} 'EasySearch update failed' \
+         \"The package manager exited with $status.\" || true; fi\n"
+    ));
+    let path = std::env::temp_dir().join(format!("easysearch-update-{}.sh", std::process::id()));
+    std::fs::write(&path, script).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut perms = std::fs::metadata(&path)
+        .map_err(|e| e.to_string())?
+        .permissions();
+    perms.set_mode(0o755);
+    let _ = std::fs::set_permissions(&path, perms);
+    Command::new("setsid")
+        .arg("sh")
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("setsid: {e}"))?;
+    Ok(())
 }
 
 /// A cell in the Details grid: muted key on the left, value on the right.
@@ -5618,6 +6049,8 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.refresh_system_theme(ctx);
         self.apply_throttle();
+        self.apply_removable_roots();
+        self.poll_update();
         // Load the application list once at startup, but only if a remembered
         // “Open with” choice needs its name for a menu label.
         if !self.open_apps_loaded && !self.prefs.open_with.is_empty() {
@@ -6334,6 +6767,16 @@ impl App {
                 {
                     self.prefs.save();
                 }
+                if ui
+                    .checkbox(&mut self.prefs.index_removable_media, "Index removable media")
+                    .on_hover_text(
+                        "Add a USB stick or disc *you mount* to the index when it appears, and \
+                         drop it when it is unmounted. System-mounted volumes are left alone.",
+                    )
+                    .changed()
+                {
+                    self.prefs.save();
+                }
                 ui.label(
                     egui::RichText::new(
                         "Closing the window leaves EasySearch running in the \
@@ -6466,6 +6909,100 @@ impl App {
                     && let Err(e) = Self::set_autostart(autostart)
                 {
                     notify_desktop("Autostart", &format!("Could not update autostart: {e}"));
+                }
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Updates").strong());
+                ui.label(
+                    egui::RichText::new(format!("Installed: v{}", env!("CARGO_PKG_VERSION")))
+                        .small()
+                        .color(self.fg_dim()),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Nothing is sent anywhere unless you press Check: the app is offline by
+                         default.",
+                    )
+                    .size(11.0)
+                    .color(self.fg_dim()),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Check for updates")
+                        .on_hover_text("Read the newest GitHub release and compare versions.")
+                        .clicked()
+                    {
+                        self.start_update_check();
+                    }
+                    match self.update_state.clone() {
+                        UpdateState::Idle => {}
+                        UpdateState::Checking => {
+                            ui.spinner();
+                            ui.label(egui::RichText::new("Checking…").small().color(self.fg_dim()));
+                        }
+                        UpdateState::UpToDate(v) => {
+                            ui.label(
+                                egui::RichText::new(format!("Up to date (v{v})."))
+                                    .small()
+                                    .color(self.theme().good),
+                            );
+                        }
+                        UpdateState::Available(info) => {
+                            ui.label(
+                                egui::RichText::new(format!("{} is available.", info.tag))
+                                    .small()
+                                    .color(self.theme().warn),
+                            );
+                            if ui.button("Download").clicked() {
+                                self.start_update_download(info);
+                            }
+                        }
+                        UpdateState::Downloading => {
+                            ui.spinner();
+                            ui.label("Downloading…".to_string());
+                        }
+                        UpdateState::Ready(info, _path) => {
+                            ui.label(
+                                egui::RichText::new(format!("{} downloaded.", info.tag))
+                                    .small()
+                                    .color(self.theme().good),
+                            );
+                            if ui
+                                .button("Install and restart")
+                                .on_hover_text(
+                                    "Stops EasySearch, installs the package and leaves you to
+                                     start it again.",
+                                )
+                                .clicked()
+                            {
+                                self.install_downloaded();
+                            }
+                        }
+                        UpdateState::Installing(msg) => {
+                            ui.label(egui::RichText::new(msg).small().color(self.theme().warn));
+                        }
+                        UpdateState::Error(e) => {
+                            ui.label(egui::RichText::new(e).small().color(self.theme().bad));
+                        }
+                    }
+                });
+                if package_kind().is_none() {
+                    ui.label(
+                        egui::RichText::new(
+                            "No dpkg or rpm found: update with whatever installed EasySearch, or
+                             from the release page.",
+                        )
+                        .size(11.0)
+                        .color(self.fg_dim()),
+                    );
+                } else if let Some(kind) = package_kind() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "This machine installs {} packages.",
+                            kind.label()
+                        ))
+                        .size(11.0)
+                        .color(self.fg_dim()),
+                    );
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("Configuration").strong());
@@ -9015,6 +9552,7 @@ impl App {
         if !focused {
             self.loc_edit = self.under.clone().unwrap_or_default();
             self.loc_suggest.clear();
+            self.loc_suggest_index = 0;
         }
         let mut field_rect: Option<egui::Rect> = None;
         let mut apply = false;
@@ -9027,6 +9565,26 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Location").size(11.0).color(t.faint));
+                    // While the suggestion list is open it owns the arrows, Enter
+                    // and Escape, so the field must not also see them.
+                    let open = focused && !self.loc_suggest.is_empty();
+                    let (mut nav, mut accept, mut dismiss) = (0i32, false, false);
+                    if open {
+                        ui.input_mut(|i| {
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                                nav += 1;
+                            }
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                                nav -= 1;
+                            }
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                                dismiss = true;
+                            }
+                            if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                                accept = true;
+                            }
+                        });
+                    }
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.loc_edit)
                             .id(id)
@@ -9037,8 +9595,24 @@ impl App {
                     if resp.changed() {
                         let home = self.home_path();
                         self.loc_suggest = suggest_dirs(&self.loc_edit, &home, 8);
+                        self.loc_suggest_index = 0;
                     }
-                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if dismiss {
+                        self.loc_suggest.clear();
+                    }
+                    if nav != 0 && !self.loc_suggest.is_empty() {
+                        let last = self.loc_suggest.len() as i32 - 1;
+                        self.loc_suggest_index =
+                            (self.loc_suggest_index as i32 + nav).clamp(0, last) as usize;
+                    }
+                    if accept {
+                        // Enter takes the highlighted suggestion, or the typed
+                        // text when there is nothing highlighted.
+                        if let Some(p) = self.loc_suggest.get(self.loc_suggest_index) {
+                            self.loc_edit = p.display().to_string();
+                        }
+                        apply = true;
+                    } else if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         apply = true;
                     }
                     if ui.button("Go").clicked() {
@@ -9061,6 +9635,8 @@ impl App {
             && !self.loc_suggest.is_empty()
             && let Some(rect) = field_rect
         {
+            let last = self.loc_suggest.len() - 1;
+            self.loc_suggest_index = self.loc_suggest_index.min(last);
             let mut pick: Option<PathBuf> = None;
             egui::Area::new(egui::Id::new("loc_suggest"))
                 .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 2.0))
@@ -9068,11 +9644,13 @@ impl App {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(rect.width());
-                        for p in &self.loc_suggest {
-                            if ui
-                                .selectable_label(false, p.display().to_string())
-                                .clicked()
-                            {
+                        for (i, p) in self.loc_suggest.iter().enumerate() {
+                            let selected = i == self.loc_suggest_index;
+                            let lbl = ui.selectable_label(selected, p.display().to_string());
+                            if selected {
+                                lbl.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if lbl.clicked() {
                                 pick = Some(p.clone());
                             }
                         }
@@ -10953,6 +11531,8 @@ impl App {
             match cfg.save() {
                 Ok(()) => {
                     self.engine.set_roots(cfg.roots.clone());
+                    // The removable-media poller works from this list.
+                    self.base_roots = cfg.roots.clone();
                     self.roots_msg =
                         Some(format!("Saved {} root(s) — reindexing…", cfg.roots.len()));
                     self.roots_counts = cfg.roots.iter().map(|r| self.count_under(r)).collect();
@@ -11064,7 +11644,7 @@ impl App {
                 // long) hints string can never push it out of the window.
                 let app_version = crate::version_stamp();
                 ui.label(egui::RichText::new(app_version).size(10.5).color(t.faint))
-                    .on_hover_text("Running version — fully offline, no network access");
+                    .on_hover_text("Running version — offline unless you check for updates");
                 ui.separator();
                 // UI zoom, as a compact dropdown on the right.
                 egui::ComboBox::from_id_salt("status-zoom")
@@ -15095,6 +15675,101 @@ mod tests {
         assert!(p.live_results);
         let p: GuiPrefs = serde_json::from_str(r#"{"live_results":false}"#).unwrap();
         assert!(!p.live_results);
+    }
+
+    #[test]
+    fn versions_compare_by_number_not_text() {
+        assert_eq!(parse_version("v1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_version("0.51.0"), Some((0, 51, 0)));
+        assert_eq!(parse_version("1.2"), Some((1, 2, 0)));
+        assert_eq!(parse_version("v1.2.3-beta.1"), Some((1, 2, 3)));
+        assert_eq!(parse_version("not a version"), None);
+
+        // 0.52.0 beats 0.51.9 numerically (a text compare would say otherwise).
+        assert!(version_is_newer("0.51.9", "0.52.0"));
+        assert!(!version_is_newer("0.51.0", "0.51.0"));
+        assert!(!version_is_newer("0.52.0", "0.51.9"));
+        assert!(!version_is_newer("0.51.0", "garbage"));
+    }
+
+    #[test]
+    fn the_right_package_asset_is_chosen() {
+        let assets = vec![
+            (
+                "easysearch_0.52.0_amd64.deb".to_string(),
+                "u-deb".to_string(),
+            ),
+            (
+                "easysearch-0.52.0-1.x86_64.rpm".to_string(),
+                "u-rpm".to_string(),
+            ),
+            (
+                "easysearch-0.52.0-1.aarch64.rpm".to_string(),
+                "u-arm".to_string(),
+            ),
+            (
+                "easysearch_0.52.0_arm64.deb".to_string(),
+                "u-armdeb".to_string(),
+            ),
+            ("source.tar.gz".to_string(), "u-src".to_string()),
+        ];
+        let deb = pick_asset(&assets, PackageKind::Deb).unwrap();
+        let rpm = pick_asset(&assets, PackageKind::Rpm).unwrap();
+        // The deb chosen matches this machine's architecture.
+        if std::env::consts::ARCH == "x86_64" {
+            assert_eq!(deb.0, "easysearch_0.52.0_amd64.deb");
+            assert_eq!(rpm.0, "easysearch-0.52.0-1.x86_64.rpm");
+        }
+        assert!(deb.0.ends_with(".deb"));
+        assert!(rpm.0.ends_with(".rpm"));
+        // No asset of a package kind is not an error, just nothing to pick.
+        assert!(pick_asset(&assets, PackageKind::Deb).is_some());
+        assert!(pick_asset(&[], PackageKind::Deb).is_none());
+    }
+
+    #[test]
+    fn release_json_yields_the_tag_and_assets() {
+        let json = r#"{
+            "tag_name": "v0.53.0",
+            "assets": [
+                {"name": "a.deb", "browser_download_url": "https://x/a.deb"},
+                {"name": "b.rpm", "browser_download_url": "https://x/b.rpm"}
+            ]
+        }"#;
+        assert_eq!(release_tag(json).as_deref(), Some("v0.53.0"));
+        let assets = release_assets(json);
+        assert_eq!(assets.len(), 2);
+        assert_eq!(assets[0], ("a.deb".into(), "https://x/a.deb".into()));
+        // Malformed JSON is not a panic.
+        assert_eq!(release_tag("{"), None);
+        assert!(release_assets("nope").is_empty());
+    }
+
+    #[test]
+    fn installer_paths_are_shell_quoted() {
+        assert_eq!(
+            shell_single_quote(Path::new("/tmp/a b.deb")),
+            "'/tmp/a b.deb'"
+        );
+        assert_eq!(
+            shell_single_quote(Path::new("/tmp/it's.deb")),
+            "'/tmp/it'\\''s.deb'"
+        );
+    }
+
+    #[test]
+    fn removable_mounts_merge_into_the_roots() {
+        let base = vec!["/home/u".to_string(), "~/projects".to_string()];
+        // A mount is appended; one already covered by a root is not.
+        let mounts = vec![PathBuf::from("/media/u/USB"), PathBuf::from("/home/u/usb")];
+        assert_eq!(
+            desired_roots(&base, &mounts),
+            ["/home/u", "~/projects", "/media/u/USB"]
+        );
+        // With no mounts the list is unchanged; a gone mount is dropped.
+        assert_eq!(desired_roots(&base, &[]), base);
+        // Empty/blank entries are dropped.
+        assert_eq!(desired_roots(&["".into(), "  ".into()], &[]).len(), 0);
     }
 
     #[test]

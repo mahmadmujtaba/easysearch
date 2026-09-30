@@ -141,6 +141,10 @@ tests and docs: **S** ≈ ½ day, **M** ≈ 1–3 days, **L** ≈ 3–6 days.
   tree, `.xml`/`.svg`/… as an element tree, and a binary as a hex dump of its
   head; each is capped so a large file stays responsive).
 - **Removable-media indexing** — detect mounts, index on mount, drop on unmount.
+  **Done**: when **Index removable media** is on, an ejectable volume the *user*
+  mounted (under `/media/<user>`, `/run/media/<user>` or the home directory) is
+  added to the roots and indexed, and dropped again when it goes; a
+  system/root-mounted volume is skipped. Not exercised with real hardware here.
 - **Browse and search inside archives** (zip/tar/7z) without extracting. **Done**
   for **zip and plain tar** (a preview member list, and content search matching
   inside members); **`.7z`, `.rar` and compressed tars are not read** — that needs

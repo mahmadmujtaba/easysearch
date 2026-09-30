@@ -20,7 +20,9 @@ equivalent of VoidTools' *Everything*. Written in **Rust** with a **native GUI**
   indexing in the background, and the tray icon reopens it (left-click opens ready
   to search; the right-click menu adds clear-results, rebuild, recent searches,
   settings and more).
-- **Fully offline** — nothing on the network, no telemetry, no updater.
+- **Offline by default** — no telemetry and nothing on the network unless you
+  press **Settings ▸ Updates ▸ Check for updates**, which reads the GitHub releases
+  and can install the newest package for your distribution.
 
 ## Install
 
