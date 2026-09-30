@@ -288,6 +288,17 @@ const TEXT_PREVIEW_BYTES: usize = 256 * 1024;
 /// The font family name a previewed font is installed under.
 const FONT_PREVIEW_FAMILY: &str = "preview";
 
+/// How much of a CSV/TSV file the table preview parses.
+const TABLE_MAX_BYTES: usize = 512 * 1024;
+/// Table preview caps, so a huge sheet cannot stall the UI.
+const TABLE_MAX_ROWS: usize = 500;
+const TABLE_MAX_COLS: usize = 40;
+/// How much of a binary file the hex preview shows.
+const HEX_PREVIEW_BYTES: usize = 4096;
+/// JSON tree caps.
+const JSON_MAX_DEPTH: usize = 6;
+const JSON_MAX_ITEMS: usize = 200;
+
 const CATEGORIES: &[(&str, Category)] = &[
     ("All files", Category::All),
     (
@@ -1337,6 +1348,14 @@ struct Preview {
     truncated: bool,
     /// The bytes of a font file, rendered as a live specimen (`None` otherwise).
     font: Option<Vec<u8>>,
+    /// CSV/TSV rows (the first is the header), rendered as a table.
+    table: Option<Vec<Vec<String>>>,
+    /// Parsed JSON, rendered as a collapsible tree.
+    json: Option<serde_json::Value>,
+    /// Parsed XML, rendered as a collapsible element tree.
+    xml: Option<XmlNode>,
+    /// The head of a binary file, rendered as a hex dump.
+    hex: Option<Vec<u8>>,
     /// Metadata rows for audio/video (key, value).
     media: Vec<(String, String)>,
     /// A short note shown instead of a body (why there is no preview).
@@ -2492,6 +2511,10 @@ impl App {
             lang: None,
             truncated: false,
             font: None,
+            table: None,
+            json: None,
+            xml: None,
+            hex: None,
             media: Vec::new(),
             note: None,
         };
@@ -2519,6 +2542,42 @@ impl App {
                 match read_bytes_head(&path, 16 * 1024 * 1024) {
                     Some(bytes) => preview.font = Some(bytes),
                     None => preview.note = Some("This font file could not be read.".to_string()),
+                }
+            } else if is_table_file(&path) {
+                // CSV/TSV: parsed into a table rather than shown as raw text.
+                if let TextHead::Text { text, truncated } = read_text_head(&path, TABLE_MAX_BYTES) {
+                    preview.table = Some(parse_delimited(&text, table_delimiter(&path)));
+                    preview.truncated = truncated;
+                } else {
+                    preview.note = Some("This file could not be read as a table.".to_string());
+                }
+            } else if is_json_file(&path) {
+                // JSON: parsed into a tree; a malformed file falls back to the
+                // plain-text preview.
+                if let TextHead::Text { text, truncated } =
+                    read_text_head(&path, TEXT_PREVIEW_BYTES)
+                {
+                    match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(value) => preview.json = Some(value),
+                        Err(_) => {
+                            preview.text = text;
+                            preview.truncated = truncated;
+                        }
+                    }
+                }
+            } else if is_xml_file(&path) {
+                // XML/SVG: a tolerant element tree; anything unparsable falls back
+                // to the text preview.
+                if let TextHead::Text { text, truncated } =
+                    read_text_head(&path, TEXT_PREVIEW_BYTES)
+                {
+                    match parse_xml(&text) {
+                        Some(node) => preview.xml = Some(node),
+                        None => {
+                            preview.text = text;
+                            preview.truncated = truncated;
+                        }
+                    }
                 }
             } else if is_document_file(&path) {
                 // PDF / docx / odt: the text layer, extracted in-process (the same
@@ -2555,7 +2614,13 @@ impl App {
                             lang_for_path(&path)
                         };
                     }
-                    TextHead::Binary => preview.binary = true,
+                    TextHead::Binary => {
+                        // A binary file still gets a preview: a hex dump of its head.
+                        preview.hex = read_bytes_head(&path, HEX_PREVIEW_BYTES);
+                        if preview.hex.is_none() {
+                            preview.binary = true;
+                        }
+                    }
                     TextHead::Empty => {}
                     TextHead::Unreadable => {
                         preview.note = Some("This file could not be read.".to_string());
@@ -3303,6 +3368,227 @@ fn primary_button(ui: &mut egui::Ui, t: &Theme, label: &str, icon: Option<Icon>)
 /// Small uppercase label used before a filter control.
 fn bar_label(t: &Theme, text: &str) -> egui::RichText {
     egui::RichText::new(text).size(11.0).color(t.faint)
+}
+
+/// A CSV/TSV table: the first row is the header.
+fn table_view(ui: &mut egui::Ui, t: &Theme, rows: &[Vec<String>]) {
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            egui::Grid::new("table-preview")
+                .striped(true)
+                .spacing([12.0, 3.0])
+                .show(ui, |ui| {
+                    for (i, row) in rows.iter().enumerate() {
+                        for cell in row {
+                            let text = egui::RichText::new(cell).size(11.0);
+                            ui.label(if i == 0 {
+                                text.strong().color(t.text)
+                            } else {
+                                text.color(t.dim)
+                            });
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+/// A JSON tree: collapsible objects and arrays, scalars on one line. Depth and
+/// item count are capped so a large document stays responsive.
+fn json_tree(ui: &mut egui::Ui, t: &Theme, value: &serde_json::Value) {
+    let mut id = 0usize;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            json_node(ui, t, None, value, 0, &mut id);
+        });
+}
+
+fn json_node(
+    ui: &mut egui::Ui,
+    t: &Theme,
+    key: Option<&str>,
+    value: &serde_json::Value,
+    depth: usize,
+    id: &mut usize,
+) {
+    let (open, close) = match value {
+        serde_json::Value::Object(_) => ("{", "}"),
+        serde_json::Value::Array(_) => ("[", "]"),
+        _ => ("", ""),
+    };
+    if open.is_empty() {
+        let text = match key {
+            Some(k) => format!("{k}: {}", short_json(value)),
+            None => short_json(value),
+        };
+        ui.label(
+            egui::RichText::new(text)
+                .monospace()
+                .size(11.0)
+                .color(t.dim),
+        );
+        return;
+    }
+    let len = match value {
+        serde_json::Value::Object(m) => m.len(),
+        serde_json::Value::Array(a) => a.len(),
+        _ => 0,
+    };
+    let title = match key {
+        Some(k) => format!("{k}  {open}{len}{close}"),
+        None => format!("{open}{len}{close}"),
+    };
+    if depth >= JSON_MAX_DEPTH {
+        ui.label(
+            egui::RichText::new(title)
+                .monospace()
+                .size(11.0)
+                .color(t.faint),
+        );
+        return;
+    }
+    *id += 1;
+    let salt = *id;
+    egui::CollapsingHeader::new(
+        egui::RichText::new(title)
+            .monospace()
+            .size(11.0)
+            .color(t.accent),
+    )
+    .id_salt(salt)
+    .default_open(depth < 2)
+    .show(ui, |ui| {
+        let truncated = egui::RichText::new("… (truncated)")
+            .size(10.5)
+            .color(t.faint);
+        match value {
+            serde_json::Value::Object(map) => {
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i >= JSON_MAX_ITEMS {
+                        break;
+                    }
+                    json_node(ui, t, Some(k), v, depth + 1, id);
+                }
+                if map.len() > JSON_MAX_ITEMS {
+                    ui.label(truncated);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for (i, v) in arr.iter().enumerate() {
+                    if i >= JSON_MAX_ITEMS {
+                        break;
+                    }
+                    json_node(ui, t, Some(&i.to_string()), v, depth + 1, id);
+                }
+                if arr.len() > JSON_MAX_ITEMS {
+                    ui.label(truncated);
+                }
+            }
+            _ => {}
+        }
+    });
+}
+
+/// A scalar JSON value on one line (`strings` keep their quotes).
+fn short_json(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => format!("\"{s}\""),
+        other => other.to_string(),
+    }
+}
+
+/// An XML element tree, capped in depth like the JSON tree.
+fn xml_tree(ui: &mut egui::Ui, t: &Theme, node: &XmlNode) {
+    let mut id = 0usize;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            xml_node(ui, t, node, 0, &mut id);
+        });
+}
+
+fn xml_node(ui: &mut egui::Ui, t: &Theme, node: &XmlNode, depth: usize, id: &mut usize) {
+    let mut title = format!("<{}", node.name);
+    for (k, v) in node.attrs.iter().take(4) {
+        title.push_str(&format!(" {k}=\"{v}\""));
+    }
+    if node.attrs.len() > 4 {
+        title.push_str(" …");
+    }
+    title.push('>');
+    // A leaf with no children reads as one line.
+    if node.children.is_empty() {
+        let text = node.text.as_deref().unwrap_or("");
+        let line = if text.is_empty() {
+            title
+        } else {
+            format!("{title} {text}")
+        };
+        ui.label(
+            egui::RichText::new(line)
+                .monospace()
+                .size(11.0)
+                .color(t.dim),
+        );
+        return;
+    }
+    if depth >= JSON_MAX_DEPTH {
+        ui.label(
+            egui::RichText::new(format!("{title} …"))
+                .monospace()
+                .size(11.0)
+                .color(t.faint),
+        );
+        return;
+    }
+    *id += 1;
+    let salt = *id;
+    egui::CollapsingHeader::new(
+        egui::RichText::new(title)
+            .monospace()
+            .size(11.0)
+            .color(t.accent),
+    )
+    .id_salt(salt)
+    .default_open(depth < 2)
+    .show(ui, |ui| {
+        if let Some(text) = &node.text {
+            ui.label(egui::RichText::new(text).size(11.0).color(t.dim));
+        }
+        for child in node.children.iter().take(JSON_MAX_ITEMS) {
+            xml_node(ui, t, child, depth + 1, id);
+        }
+    });
+}
+
+/// A hex dump of a binary file's head, offset · bytes · ASCII.
+fn hex_view(ui: &mut egui::Ui, t: &Theme, bytes: &[u8]) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(ui.available_height() - 60.0)
+        .show(ui, |ui| {
+            for (offset, hex, ascii) in hex_dump(bytes) {
+                ui.label(
+                    egui::RichText::new(format!("{offset:08x}  {hex:<48}  {ascii}"))
+                        .monospace()
+                        .size(10.5)
+                        .color(t.dim),
+                );
+            }
+            if bytes.len() >= HEX_PREVIEW_BYTES {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("… showing the first 4 KiB")
+                        .size(10.5)
+                        .color(t.faint),
+                );
+            }
+        });
 }
 
 /// The scrollable text body of a preview: Markdown, highlighted code or plain
@@ -9936,8 +10222,16 @@ impl App {
                 } else if let Some(pv) = self.preview.as_ref() {
                     if pv.font.is_some() {
                         font_specimen(ui, &t, &pv.path);
+                    } else if let Some(rows) = &pv.table {
+                        table_view(ui, &t, rows);
+                    } else if let Some(value) = &pv.json {
+                        json_tree(ui, &t, value);
+                    } else if let Some(node) = &pv.xml {
+                        xml_tree(ui, &t, node);
                     } else if !pv.text.is_empty() {
                         preview_text(ui, &t, pv);
+                    } else if let Some(bytes) = &pv.hex {
+                        hex_view(ui, &t, bytes);
                     } else if let Some(note) = &pv.note {
                         ui.label(egui::RichText::new(note).size(12.0).color(t.faint));
                     } else if pv.binary {
@@ -11776,6 +12070,259 @@ fn is_image_file(path: &Path) -> bool {
 /// A font `ab_glyph` (via egui) can load: TrueType and OpenType.
 fn is_font_file(path: &Path) -> bool {
     matches!(ext_lower(path).as_deref(), Some("ttf" | "otf"))
+}
+
+/// A delimited text table (CSV or TSV).
+fn is_table_file(path: &Path) -> bool {
+    matches!(ext_lower(path).as_deref(), Some("csv" | "tsv"))
+}
+
+fn table_delimiter(path: &Path) -> char {
+    if ext_lower(path).as_deref() == Some("tsv") {
+        '\t'
+    } else {
+        ','
+    }
+}
+
+/// A JSON document (rendered as a tree).
+fn is_json_file(path: &Path) -> bool {
+    matches!(ext_lower(path).as_deref(), Some("json"))
+}
+
+/// An XML-family document (rendered as an element tree).
+fn is_xml_file(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("xml" | "svg" | "xhtml" | "xsl" | "xslt" | "rss" | "atom" | "plist")
+    )
+}
+
+/// A parsed XML element: its name, attributes, child elements and folded text.
+#[derive(Debug, PartialEq)]
+struct XmlNode {
+    name: String,
+    attrs: Vec<(String, String)>,
+    children: Vec<XmlNode>,
+    text: Option<String>,
+}
+
+/// A small, tolerant XML parser for the preview: it ignores comments,
+/// declarations and DOCTYPE, keeps attributes, folds text into the enclosing
+/// element, and tolerates a mismatched close tag. Returns `None` when there is
+/// no element at all (e.g. plain text with angle brackets).
+fn parse_xml(text: &str) -> Option<XmlNode> {
+    let mut root: Option<XmlNode> = None;
+    let mut stack: Vec<XmlNode> = Vec::new();
+    let mut i = 0usize;
+    'scan: while i < text.len() {
+        if text.as_bytes()[i] != b'<' {
+            let start = i;
+            while i < text.len() && text.as_bytes()[i] != b'<' {
+                i += 1;
+            }
+            let chunk = text[start..i].trim();
+            if !chunk.is_empty()
+                && let Some(top) = stack.last_mut()
+            {
+                let slot = top.text.get_or_insert_with(String::new);
+                if !slot.is_empty() {
+                    slot.push(' ');
+                }
+                slot.push_str(chunk);
+            }
+            continue;
+        }
+        // Comments, declarations and DOCTYPE are skipped whole.
+        for (open, close) in [("<!--", "-->"), ("<?", "?>"), ("<!", ">")] {
+            if text[i..].starts_with(open) {
+                match text[i..].find(close) {
+                    Some(j) => i += j + close.len(),
+                    None => return finish_xml(root, stack),
+                }
+                continue 'scan;
+            }
+        }
+        let Some(end) = text[i..].find('>') else {
+            break;
+        };
+        let inner = text[i + 1..i + end].trim();
+        i += end + 1;
+        if let Some(name) = inner.strip_prefix('/') {
+            if let Some(node) = stack.pop() {
+                attach_xml(&mut root, &mut stack, node);
+            }
+            let _ = name;
+        } else {
+            let self_closing = inner.ends_with('/');
+            let inner = inner.trim_end_matches('/').trim();
+            let (name, rest) = match inner.split_once(char::is_whitespace) {
+                Some((n, r)) => (n, r),
+                None => (inner, ""),
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let node = XmlNode {
+                name: name.to_string(),
+                attrs: parse_attrs(rest),
+                children: Vec::new(),
+                text: None,
+            };
+            if self_closing {
+                attach_xml(&mut root, &mut stack, node);
+            } else {
+                stack.push(node);
+            }
+        }
+    }
+    finish_xml(root, stack)
+}
+
+fn finish_xml(mut root: Option<XmlNode>, mut stack: Vec<XmlNode>) -> Option<XmlNode> {
+    while let Some(node) = stack.pop() {
+        attach_xml(&mut root, &mut stack, node);
+    }
+    root
+}
+
+/// Attach a finished element to its parent, or make it the root.
+fn attach_xml(root: &mut Option<XmlNode>, stack: &mut [XmlNode], node: XmlNode) {
+    if let Some(parent) = stack.last_mut() {
+        parent.children.push(node);
+    } else if root.is_none() {
+        *root = Some(node);
+    }
+}
+
+/// Attributes out of an element's tail: `key="value"`, `key='value'` or a bare
+/// `key`.
+fn parse_attrs(s: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut chars = s.trim().chars().peekable();
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        let mut key = String::new();
+        while let Some(&c) = chars.peek() {
+            if c == '=' || c.is_whitespace() {
+                break;
+            }
+            key.push(c);
+            chars.next();
+        }
+        if key.is_empty() {
+            break;
+        }
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        let mut value = String::new();
+        if chars.peek() == Some(&'=') {
+            chars.next();
+            while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                chars.next();
+            }
+            match chars.next() {
+                Some(q @ ('"' | '\'')) => {
+                    for c in chars.by_ref() {
+                        if c == q {
+                            break;
+                        }
+                        value.push(c);
+                    }
+                }
+                Some(first) => {
+                    value.push(first);
+                    while let Some(&c) = chars.peek() {
+                        if c.is_whitespace() {
+                            break;
+                        }
+                        value.push(c);
+                        chars.next();
+                    }
+                }
+                None => {}
+            }
+        }
+        out.push((key, value));
+    }
+    out
+}
+
+/// Parse delimited text (CSV/TSV) into rows, honouring RFC-4180 double quotes: a
+/// quoted field may contain the delimiter and newlines, and `""` is a literal
+/// quote. Capped in rows and columns so a large sheet stays cheap to draw.
+fn parse_delimited(text: &str, delimiter: char) -> Vec<Vec<String>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' => in_quotes = true,
+            '\r' => {}
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+            }
+            c if c == delimiter => row.push(std::mem::take(&mut field)),
+            c => field.push(c),
+        }
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    rows.truncate(TABLE_MAX_ROWS);
+    for r in &mut rows {
+        r.truncate(TABLE_MAX_COLS);
+    }
+    rows
+}
+
+/// A hex dump of `bytes`: (offset, hex pairs split at the half-byte, printable
+/// ASCII with non-printing bytes as `.`) per 16-byte row.
+fn hex_dump(bytes: &[u8]) -> Vec<(usize, String, String)> {
+    bytes
+        .chunks(16)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let mut hex = String::with_capacity(16 * 3);
+            for (j, b) in chunk.iter().enumerate() {
+                if j == 8 {
+                    hex.push(' ');
+                }
+                hex.push_str(&format!("{b:02x} "));
+            }
+            let ascii: String = chunk
+                .iter()
+                .map(|&b| {
+                    if (0x20..0x7f).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+            (i * 16, hex.trim_end().to_string(), ascii)
+        })
+        .collect()
 }
 
 /// The first `cap` bytes of `path`, or `None` if it cannot be read.
@@ -14254,6 +14801,83 @@ mod tests {
         assert!(!ColumnKind::Size.needs_stat());
         assert!(ColumnKind::Owner.needs_stat());
         assert!(ColumnKind::Inode.needs_stat());
+    }
+
+    #[test]
+    fn delimited_text_parses_quotes_and_delimiters() {
+        let rows = parse_delimited("a,b,c\n1,2,3\n", ',');
+        assert_eq!(rows, vec![vec!["a", "b", "c"], vec!["1", "2", "3"]]);
+        // A quoted field may hold the delimiter, a newline and a literal quote.
+        let rows = parse_delimited("x,\"a,b\"\n\"line\n1\",\"he said \"\"hi\"\"\"\n", ',');
+        assert_eq!(
+            rows,
+            vec![vec!["x", "a,b"], vec!["line\n1", "he said \"hi\""]]
+        );
+        // Tabs for TSV, and CRLF is tolerated.
+        let rows = parse_delimited("a\tb\r\n1\t2\r\n", '\t');
+        assert_eq!(rows, vec![vec!["a", "b"], vec!["1", "2"]]);
+        // A trailing newline does not invent an empty row.
+        assert_eq!(parse_delimited("a,b\n", ',').len(), 1);
+    }
+
+    #[test]
+    fn table_and_json_files_are_recognised() {
+        assert!(is_table_file(Path::new("/a/data.csv")));
+        assert!(is_table_file(Path::new("/a/data.TSV")));
+        assert!(!is_table_file(Path::new("/a/data.txt")));
+        assert_eq!(table_delimiter(Path::new("/a/x.tsv")), '\t');
+        assert_eq!(table_delimiter(Path::new("/a/x.csv")), ',');
+        assert!(is_json_file(Path::new("/a/p.json")));
+        assert!(!is_json_file(Path::new("/a/p.js")));
+    }
+
+    #[test]
+    fn hex_dumps_split_at_the_half_byte() {
+        let rows = hex_dump(b"hello world, this is 20+ bytes!!");
+        assert_eq!(rows.len(), 2, "one 16-byte row plus a tail");
+        assert_eq!(rows[0].0, 0);
+        assert_eq!(rows[1].0, 16);
+        assert!(rows[0].1.starts_with("68 65 6c 6c 6f"), "{}", rows[0].1);
+        assert_eq!(rows[0].2, "hello world, thi");
+        // Non-printing bytes become dots.
+        assert_eq!(hex_dump(&[0x00, 0x41])[0].2, ".A");
+        assert!(hex_dump(&[]).is_empty());
+    }
+
+    #[test]
+    fn short_json_quotes_strings_only() {
+        assert_eq!(short_json(&serde_json::json!("hi")), "\"hi\"");
+        assert_eq!(short_json(&serde_json::json!(42)), "42");
+        assert_eq!(short_json(&serde_json::json!(true)), "true");
+    }
+
+    #[test]
+    fn xml_parses_elements_attributes_and_text() {
+        let node = parse_xml(
+            "<?xml version=\"1.0\"?>\n<!-- a comment -->\n<root a=\"1\" b='two'>\n  <child>hi</child>\n  <empty/>\n</root>\n",
+        )
+        .unwrap();
+        assert_eq!(node.name, "root");
+        assert_eq!(
+            node.attrs,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "two".to_string())
+            ]
+        );
+        assert_eq!(node.children.len(), 2);
+        assert_eq!(node.children[0].name, "child");
+        assert_eq!(node.children[0].text.as_deref(), Some("hi"));
+        assert!(node.children[1].children.is_empty());
+        assert_eq!(node.children[1].name, "empty");
+
+        // Nested elements build a tree; whitespace-only text is dropped.
+        let node = parse_xml("<a><b><c>x</c></b></a>").unwrap();
+        assert_eq!(node.children[0].children[0].name, "c");
+        // No element at all → no tree.
+        assert!(parse_xml("just text").is_none());
+        assert!(is_xml_file(Path::new("/a/d.svg")));
+        assert!(!is_xml_file(Path::new("/a/d.txt")));
     }
 
     #[test]

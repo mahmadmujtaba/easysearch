@@ -182,10 +182,12 @@ Preview pane) and ⧉ opens the file. **Preview** renders by kind: image thumbna
 layer** of PDF, `.docx` and OpenDocument files (`.odt`/`.ods`/`.odp`/`.odg`) extracted in-process;
 a **first-page thumbnail** above that text for a PDF when `pdftoppm` (poppler-utils) is installed;
 **rendered Markdown**; and **syntax-highlighted source code** (~31 languages, and fenced code in
-Markdown). Larger files fall back to plain monospace; `.xls`/`.xlsx`/`.ppt`/`.pptx` have no
-preview. **Details:** Name · Path · Size (exact bytes) · Modified · Created · MIME type ·
-Permissions · **Tags** · **SHA-256** (on demand, up to 512 MB). **Quick actions:** Open · Reveal ·
-Copy path · Terminal · **Tag**.
+Markdown). **Structured viewers** take over by extension: `.csv`/`.tsv` as a table, `.json` as a
+collapsible tree, `.xml`/`.svg` and friends as an element tree, and a **binary** file as a hex dump
+(the first 4 KiB, offset · bytes · ASCII). Larger files fall back to plain monospace;
+`.xls`/`.xlsx`/`.ppt`/`.pptx` have no preview. **Details:** Name · Path · Size (exact bytes) ·
+Modified · Created · MIME type · Permissions · **Tags** · **SHA-256** (on demand, up to 512 MB).
+**Quick actions:** Open · Reveal · Copy path · Terminal · **Tag**.
 
 ## Status bar and tabs
 
